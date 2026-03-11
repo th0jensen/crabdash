@@ -1,0 +1,9 @@
+[package]
+name = "crabdash"
+version = "0.1.0"
+edition = "2024"
+description = "Crabdash desktop app built with GPUI"
+
+[dependencies]
+gpui = { version = "*" }
+serde = { version = "1.0.228", features = ["derive"] }
