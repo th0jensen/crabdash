@@ -1,8 +1,14 @@
-use crate::models::{ServiceItem, ServiceKind};
-use serde::Serialize;
-use std::process::Command;
+use crate::{
+    helpers::remote_connection::RemoteConnection,
+    models::{
+        machine::Machine,
+        services::{ServiceItem, ServiceKind},
+    },
+};
+use serde::{Deserialize, Serialize};
+use std::{error::Error, process::Command};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub machine_name: String,
     pub os_version: String,
@@ -15,6 +21,19 @@ impl SystemInfo {
             machine_name: Self::run_uname(&["-n"])?,
             os_version: Self::run_uname(&["-sr"])?,
             arch: Self::run_uname(&["-m"])?,
+        })
+    }
+
+    pub fn remote(rc: &mut RemoteConnection) -> Result<Self, Box<dyn Error>> {
+        let cmd = "uname";
+        let (machine_name, _) = rc.run_ssh_command(cmd, Some(&["-n"]))?;
+        let (os_version, _) = rc.run_ssh_command(cmd, Some(&["-sr"]))?;
+        let (arch, _) = rc.run_ssh_command(cmd, Some(&["-m"]))?;
+
+        Ok(Self {
+            machine_name: machine_name.trim().to_string(),
+            os_version: os_version.trim().to_string(),
+            arch: arch.trim().to_string(),
         })
     }
 
@@ -40,46 +59,23 @@ impl SystemInfo {
     }
 }
 
-pub fn list_local_docker() -> Result<Vec<ServiceItem>, String> {
-    let result = Command::new("docker")
-        .arg("ps")
-        .arg("-a")
-        .arg("--format")
-        .arg("{{.ID}}\t{{.Names}}\t{{.State}}")
-        .output()
-        .map_err(|e| format!("Docker not installed: {e}").to_string())?;
+pub fn list_docker(mc: &mut Machine) -> Result<Vec<ServiceItem>, Box<dyn Error>> {
+    let args = ["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
+    let stdout = match &mut mc.remote {
+        Some(rc) => {
+            let (stdout, _) = rc.run_ssh_command("docker", Some(&args))?;
+            stdout
+        }
+        None => {
+            let result = Command::new("docker")
+                .args(args)
+                .output()
+                .map_err(|e| format!("Failed to run docker: {e}"))?;
+            String::from_utf8_lossy(&result.stdout).to_string()
+        }
+    };
 
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        let message = stderr.trim();
-
-        return Err(if message.is_empty() {
-            "Docker returned a non-zero exit status.".to_string()
-        } else {
-            format!("Docker command failed: {message}")
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&result.stdout);
-
-    let containers = stdout
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-
-            let id = parts.next()?.to_string();
-            let name = parts.next()?.to_string();
-            let state = parts.next()?.to_string();
-
-            Some(ServiceItem {
-                id,
-                name,
-                kind: ServiceKind::Docker,
-                status: state,
-            })
-        })
-        .collect();
-
+    let containers = ServiceItem::convert_docker(stdout)?;
     return Ok(containers);
 }
 
