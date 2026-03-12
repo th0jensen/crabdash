@@ -1,10 +1,10 @@
-use std::{fs, path::PathBuf};
-
 use crate::{
     helpers::{commands::SystemInfo, remote_connection::RemoteConnection},
     models::services::MachineServices,
 };
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Machine {
@@ -17,7 +17,7 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(id: String, kind: MachineKind) -> Result<Self, String> {
+    pub fn new(id: String, kind: MachineKind) -> Result<Self> {
         Ok(Self {
             id,
             system_info: SystemInfo::local()?,
@@ -27,11 +27,10 @@ impl Machine {
         })
     }
 
-    pub fn new_remote(user: String, host: String, password: String) -> Result<Self, String> {
-        let mut remote = RemoteConnection::new_connection(user.clone(), host.clone(), password)
-            .map_err(|e| e.to_string())?;
-        let system_info = SystemInfo::remote(&mut remote).map_err(|e| e.to_string())?;
-        remote.store_password().map_err(|e| e.to_string())?;
+    pub fn new_remote(user: String, host: String, password: String) -> Result<Self> {
+        let mut remote = RemoteConnection::new_connection(user.clone(), host.clone(), password)?;
+        let system_info = SystemInfo::remote(&mut remote)?;
+        remote.store_password()?;
 
         Ok(Self {
             id: format!("{user}@{host}"),
@@ -49,32 +48,33 @@ pub struct MachineStore {
 }
 
 impl MachineStore {
-    pub fn load() -> Result<Self, String> {
+    pub fn load() -> Result<Self> {
         let path = machines_file_path()?;
 
         if !path.exists() {
             let store = MachineStore::default();
-            Self::save(&store)
-                .map_err(|e| format!("Failed to save MachineStore: {e}").to_string())?;
+            store.save()?;
             return Ok(store);
         };
 
-        let contents = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).map_err(|e| e.to_string())
+        let contents = fs::read_to_string(&path)?;
+        let store = serde_json::from_str(&contents)?;
+        Ok(store)
     }
 
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&self) -> Result<()> {
         let path = machines_file_path()?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            fs::create_dir_all(parent)?;
         }
 
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| e.to_string())
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(path, json)?;
+        Ok(())
     }
 
-    pub fn add_machine(&mut self, machine: Machine) -> Result<usize, String> {
+    pub fn add_machine(&mut self, machine: Machine) -> Result<usize> {
         self.machines.push(machine);
         let index = self.machines.len() - 1;
 
@@ -91,7 +91,7 @@ impl MachineStore {
         user: String,
         host: String,
         password: String,
-    ) -> Result<usize, String> {
+    ) -> Result<usize> {
         let machine = Machine::new_remote(user, host, password)?;
         self.add_machine(machine)
     }
@@ -113,9 +113,8 @@ impl Default for MachineStore {
     }
 }
 
-fn machines_file_path() -> Result<PathBuf, String> {
-    let mut path = dirs::data_local_dir()
-        .ok_or_else(|| format!("Could not determine local data directory").to_string())?;
+fn machines_file_path() -> Result<PathBuf> {
+    let mut path = dirs::data_local_dir().context("Could not determine local data directory")?;
 
     path.push("com.thojensen.crabdash");
     path.push("machines.json");

@@ -1,5 +1,4 @@
-use std::error::Error;
-
+use anyhow::Result;
 use serde::Serialize;
 
 #[derive(Debug, Default)]
@@ -7,7 +6,7 @@ pub struct MachineServices {
     pub docker: Vec<ServiceItem>,
     pub disks: Vec<ServiceItem>,
     pub systemd: Vec<ServiceItem>,
-    pub docker_error: Option<Box<dyn Error>>,
+    pub docker_error: Option<anyhow::Error>,
     pub disks_error: Option<String>,
     pub systemd_error: Option<String>,
 }
@@ -38,7 +37,7 @@ pub struct ServiceItem {
 }
 
 impl ServiceItem {
-    pub fn convert_docker(stdout: String) -> Result<Vec<ServiceItem>, Box<dyn Error>> {
+    pub fn convert_docker(stdout: String) -> Result<Vec<ServiceItem>> {
         let containers = stdout
             .lines()
             .filter_map(|line| {

@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 
@@ -44,7 +45,7 @@ pub struct Crabdash {
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) remote_password_field: Entity<TextField>,
-    pub(crate) add_machine_error: Option<String>,
+    pub(crate) add_machine_error: Option<anyhow::Error>,
 }
 
 impl Crabdash {
@@ -142,7 +143,7 @@ impl Crabdash {
         let password = self.remote_password_field.read(cx).text();
 
         if host.is_empty() || user.is_empty() || password.trim().is_empty() {
-            self.add_machine_error = Some("Host, user, and password are required.".to_string());
+            self.add_machine_error = Some(anyhow!("Host, user, and password are required."));
             cx.notify();
             return;
         }

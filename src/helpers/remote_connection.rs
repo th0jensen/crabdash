@@ -1,7 +1,8 @@
+use anyhow::{Result, bail};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use ssh2::Session;
-use std::{error::Error, io::Read, net::TcpStream};
+use std::{io::Read, net::TcpStream};
 
 const KEYRING_SERVICE: &str = "com.thojensen.crabdash.remote";
 
@@ -20,7 +21,7 @@ impl RemoteConnection {
         user: impl Into<String>,
         host: impl Into<String>,
         password: impl Into<String>,
-    ) -> Result<RemoteConnection, Box<dyn Error>> {
+    ) -> Result<RemoteConnection> {
         let user = user.into();
         let host = host.into();
         let password = password.into();
@@ -33,13 +34,13 @@ impl RemoteConnection {
         })
     }
 
-    pub fn store_password(&self) -> Result<(), Box<dyn Error>> {
+    pub fn store_password(&self) -> Result<()> {
         let entry = self.keyring_entry()?;
         entry.set_password(&self.password)?;
         Ok(())
     }
 
-    pub fn connect(user: &str, host: &str, password: &str) -> Result<Session, Box<dyn Error>> {
+    pub fn connect(user: &str, host: &str, password: &str) -> Result<Session> {
         let tcp = TcpStream::connect(format!("{host}:22"))?;
         let mut sess = Session::new()?;
         sess.set_tcp_stream(tcp);
@@ -47,13 +48,13 @@ impl RemoteConnection {
         sess.userauth_password(user, password)?;
 
         if !sess.authenticated() {
-            return Err("Authentication failed!".into());
+            bail!("Authentication failed!");
         }
 
         Ok(sess)
     }
 
-    pub fn ensure_connected(&mut self) -> Result<&Session, Box<dyn Error>> {
+    pub fn ensure_connected(&mut self) -> Result<&Session> {
         if self.password.is_empty() {
             self.password = self.keyring_entry()?.get_password()?;
         }
@@ -64,11 +65,7 @@ impl RemoteConnection {
         Ok(self.session.as_ref().unwrap())
     }
 
-    pub fn run_ssh_command(
-        &mut self,
-        cmd: &str,
-        args: Option<&[&str]>,
-    ) -> Result<(String, i32), Box<dyn Error>> {
+    pub fn run_ssh_command(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<(String, i32)> {
         let session = self.ensure_connected()?;
         let mut channel = session.channel_session()?;
 
@@ -138,14 +135,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_connect() -> Result<(), Box<dyn Error>> {
+    fn test_connect() -> Result<()> {
         let sess = RemoteConnection::connect("thomas", "prestige", "")?;
         assert!(sess.authenticated());
         Ok(())
     }
 
     #[test]
-    fn test_command() -> Result<(), Box<dyn Error>> {
+    fn test_command() -> Result<()> {
         let mut rc = RemoteConnection::new_connection("thomas", "prestige", "")?;
         let (output, exit_status) = rc.run_ssh_command("ls", Some(&[&"-a"]))?;
         assert_eq!(exit_status, 0);

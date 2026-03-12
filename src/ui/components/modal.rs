@@ -99,7 +99,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                                     .border_color(rgb(0x5A2D35))
                                                     .text_xs()
                                                     .text_color(rgb(0xFF9F99))
-                                                    .child(error.clone()),
+                                                    .child(error.to_string()),
                                             )
                                         }),
                                 )
