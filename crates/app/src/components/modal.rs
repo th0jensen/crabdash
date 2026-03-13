@@ -1,8 +1,9 @@
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
 
 use crate::app::Crabdash;
-use crate::components::common::button;
+use crate::components::common::{button, lucide_icon};
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()
@@ -54,6 +55,12 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .gap(px(12.0))
                                         .child(
                                             div()
+                                                .mt(px(2.0))
+                                                .text_color(rgb(0x8AB4FF))
+                                                .child(lucide_icon(Icon::Server, 16.0)),
+                                        )
+                                        .child(
+                                            div()
                                                 .flex_1()
                                                 .flex()
                                                 .flex_wrap()
@@ -74,7 +81,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                                 ),
                                         )
                                         // .child(
-                                        //     button("close-add-machine-modal", "Close", false)
+                                        //     button("close-add-machine-modal", Icon::X, "Close", false)
                                         //         .on_click(cx.listener(
                                         //             |this, _, _, cx| this.close_add_machine_modal(cx),
                                         //         )),
@@ -89,6 +96,12 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .child(app.remote_host_field.clone())
                                         .child(app.remote_user_field.clone())
                                         .child(app.remote_password_field.clone())
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(rgba(0x505050))
+                                                .child("Your passwords will be stored in your local encrypted keychain and not uploaded anywhere."),
+                                        )
                                         .when_some(app.add_machine_error.as_ref(), |this, error| {
                                             this.child(
                                                 div()
@@ -112,14 +125,14 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .justify_end()
                                         .gap(px(10.0))
                                         .child(
-                                            button("cancel-add-machine", "Cancel", false).on_click(
+                                            button("cancel-add-machine", Icon::X, "Cancel", false).on_click(
                                                 cx.listener(|this, _, _, cx| {
                                                     this.close_add_machine_modal(cx);
                                                 }),
                                             ),
                                         )
                                         .child(
-                                            button("submit-add-machine", "Add Machine", true)
+                                            button("submit-add-machine", Icon::Plus, "Add Machine", true)
                                                 .on_click(cx.listener(
                                                     |this, _, window, cx| {
                                                         this.submit_add_machine(window, cx);
