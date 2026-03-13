@@ -5,7 +5,7 @@
 
 ![Screenshot of the app (v0.1.0)](assets/screenshot.png)
 
-Crabdash is a native desktop dashboard for managing machines and services.
+Crabdash is a native desktop dashboard for managing machines and services (like homelabs).
 
 It provides a single interface for inspecting and controlling:
 
