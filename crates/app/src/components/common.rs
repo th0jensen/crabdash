@@ -1,8 +1,31 @@
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
+use machines::machine::MachineKind;
+
+pub type LucideIcon = Icon;
+
+pub const LUCIDE_FONT_FAMILY: &str = "lucide";
+
+pub fn machine_icon(kind: MachineKind) -> LucideIcon {
+    match kind {
+        MachineKind::MacOS => Icon::Laptop,
+        MachineKind::Linux => Icon::Server,
+        MachineKind::Unknown => Icon::Monitor,
+    }
+}
+
+pub fn lucide_icon(icon: LucideIcon, size: f32) -> Div {
+    div()
+        .flex_none()
+        .font_family(LUCIDE_FONT_FAMILY)
+        .text_size(px(size))
+        .child(char::from(icon).to_string())
+}
 
 pub fn button(
     id: impl Into<ElementId>,
+    icon: LucideIcon,
     label: impl Into<SharedString>,
     primary: bool,
 ) -> Stateful<Div> {
@@ -39,5 +62,6 @@ pub fn button(
         .text_color(white())
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(label)
+        .child(lucide_icon(icon, 14.0))
+        .child(div().child(label))
 }
