@@ -1,8 +1,8 @@
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::ui::app::Crabdash;
-use crate::ui::components::common::button;
+use crate::app::Crabdash;
+use crate::components::common::button;
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()

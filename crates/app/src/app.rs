@@ -2,14 +2,14 @@ use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::helpers::commands::list_docker;
-use crate::models::machine::{Machine, MachineStore};
-use crate::ui::components::text_field::{
+use crate::components::text_field::{
     FieldBackspace, FieldCopy, FieldCut, FieldDelete, FieldEnd, FieldHome, FieldLeft, FieldPaste,
     FieldRight, FieldSelectAll, FieldSelectLeft, FieldSelectRight, FieldTab, FieldTabPrev,
     TextField,
 };
-use crate::ui::components::{content, modal, sidebar};
+use crate::components::{content, modal, sidebar};
+use machines::machine::{Machine, MachineStore};
+use services::Docker;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum MainTab {
@@ -96,7 +96,7 @@ impl Crabdash {
 
     pub(crate) fn refresh_services(&mut self) {
         match self.active_tab {
-            MainTab::Docker => match list_docker(self.selected_machine_mut()) {
+            MainTab::Docker => match self.selected_machine_mut().list_docker() {
                 Ok(services) => {
                     let machine = self.selected_machine_mut();
                     machine.services.docker = services;

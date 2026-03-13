@@ -1,9 +1,7 @@
-use crate::{
-    helpers::remote_connection::RemoteConnection,
-    models::{machine::Machine, services::ServiceItem},
-};
+use crate::remote_connection::RemoteConnection;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+use services::ServiceItem;
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,23 +50,6 @@ impl SystemInfo {
 
         Ok(output)
     }
-}
-
-pub fn list_docker(mc: &mut Machine) -> Result<Vec<ServiceItem>> {
-    let args = ["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
-    let stdout = match &mut mc.remote {
-        Some(rc) => {
-            let (stdout, _) = rc.run_ssh_command("docker", Some(&args))?;
-            stdout
-        }
-        None => {
-            let result = Command::new("docker").args(args).output()?;
-            String::from_utf8_lossy(&result.stdout).to_string()
-        }
-    };
-
-    let containers = ServiceItem::convert_docker(stdout)?;
-    return Ok(containers);
 }
 
 pub async fn docker_action(_container: String, _action: String) -> Result<String> {

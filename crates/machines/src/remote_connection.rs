@@ -25,13 +25,16 @@ impl RemoteConnection {
         let user = user.into();
         let host = host.into();
         let password = password.into();
-        let sess = Self::connect(&user, &host, &password)?;
-        Ok(RemoteConnection {
+        let mut rc = RemoteConnection {
             user,
             host,
             password,
-            session: Some(sess),
-        })
+            session: None,
+        };
+
+        let sess = rc.connect()?;
+        rc.session = Some(sess);
+        Ok(rc)
     }
 
     pub fn store_password(&self) -> Result<()> {
@@ -40,12 +43,13 @@ impl RemoteConnection {
         Ok(())
     }
 
-    pub fn connect(user: &str, host: &str, password: &str) -> Result<Session> {
+    pub fn connect(&self) -> Result<Session> {
+        let host = &self.host;
         let tcp = TcpStream::connect(format!("{host}:22"))?;
         let mut sess = Session::new()?;
         sess.set_tcp_stream(tcp);
         sess.handshake()?;
-        sess.userauth_password(user, password)?;
+        sess.userauth_password(&self.user, &self.password)?;
 
         if !sess.authenticated() {
             bail!("Authentication failed!");
@@ -60,7 +64,7 @@ impl RemoteConnection {
         }
 
         if self.session.is_none() {
-            self.session = Some(Self::connect(&self.user, &self.host, &self.password)?);
+            self.session = Some(self.connect()?);
         }
         Ok(self.session.as_ref().unwrap())
     }
@@ -82,13 +86,9 @@ impl RemoteConnection {
             _ => cmd.to_string(),
         };
 
-        eprintln!("Command: {}", full_cmd);
         channel.exec(&full_cmd)?;
-
         let mut s = String::new();
         channel.read_to_string(&mut s)?;
-        eprintln!("Output: {}", s);
-
         channel.wait_close()?;
         let exit_status = channel.exit_status()?;
 
@@ -136,14 +136,20 @@ mod tests {
 
     #[test]
     fn test_connect() -> Result<()> {
-        let sess = RemoteConnection::connect("thomas", "prestige", "")?;
+        let rc = RemoteConnection {
+            user: "thomas".to_string(),
+            host: "prestige".to_string(),
+            password: "tailscale".to_string(),
+            session: None,
+        };
+        let sess = rc.connect()?;
         assert!(sess.authenticated());
         Ok(())
     }
 
     #[test]
     fn test_command() -> Result<()> {
-        let mut rc = RemoteConnection::new_connection("thomas", "prestige", "")?;
+        let mut rc = RemoteConnection::new_connection("thomas", "prestige", "tailscale")?;
         let (output, exit_status) = rc.run_ssh_command("ls", Some(&[&"-a"]))?;
         assert_eq!(exit_status, 0);
         assert!(!output.is_empty());

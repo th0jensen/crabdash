@@ -1,10 +1,10 @@
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::models::machine::Machine;
-use crate::models::services::ServiceItem;
-use crate::ui::app::{Crabdash, MainTab};
-use crate::ui::components::common::button;
+use crate::app::{Crabdash, MainTab};
+use crate::components::common::button;
+use machines::machine::Machine;
+use services::ServiceItem;
 
 fn tab_button(tab: MainTab, active: bool, cx: &mut Context<Crabdash>) -> impl IntoElement {
     let bg = if active { rgb(0x2C2C2E) } else { rgb(0x1C1C1E) };

@@ -1,15 +1,24 @@
-[package]
-name = "crabdash"
-version = "0.1.0"
-edition = "2024"
-description = "Crabdash desktop app built with GPUI"
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/crabdash",
+    "crates/machines",
+    "crates/services",
+]
+default-members = ["crates/crabdash"]
 
-[dependencies]
-anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
-dirs = "6.0.0"
-gpui = { version = "*" }
-keyring = { version = "3.6.3", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-ssh2 = "0.9.5"
-unicode-segmentation = "1.12.0"
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+authors = ["Thomas Jensen"]
+description = "Crabdash desktop app built with Rust and GPUI"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"

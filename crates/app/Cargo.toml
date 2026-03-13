@@ -1,0 +1,16 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
+gpui = { version = "*" }
+machines = { path = "../machines" }
+services = { path = "../services" }
+unicode-segmentation = "1.12.0"
+
+[lints]
+workspace = true

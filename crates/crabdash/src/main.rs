@@ -1,11 +1,7 @@
-mod helpers;
-mod models;
-mod ui;
-
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::ui::app::Crabdash;
+use app::Crabdash;
 
 fn main() {
     Application::new().run(|cx: &mut App| {

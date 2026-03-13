@@ -1,9 +1,9 @@
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::models::machine::{Machine, MachineKind};
-use crate::ui::app::Crabdash;
-use crate::ui::components::common::button;
+use crate::app::Crabdash;
+use crate::components::common::button;
+use machines::machine::{Machine, MachineKind};
 
 fn machine_item(
     machine: &Machine,

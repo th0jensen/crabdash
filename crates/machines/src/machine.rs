@@ -1,10 +1,8 @@
-use crate::{
-    helpers::{commands::SystemInfo, remote_connection::RemoteConnection},
-    models::services::MachineServices,
-};
+use crate::{commands::SystemInfo, remote_connection::RemoteConnection};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use services::{Docker, MachineServices, ServiceItem};
+use std::{fs, path::PathBuf, process::Command};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Machine {
@@ -17,18 +15,8 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(id: String, kind: MachineKind) -> Result<Self> {
-        Ok(Self {
-            id,
-            system_info: SystemInfo::local()?,
-            kind,
-            remote: None,
-            services: MachineServices::default(),
-        })
-    }
-
-    pub fn new_remote(user: String, host: String, password: String) -> Result<Self> {
-        let mut remote = RemoteConnection::new_connection(user.clone(), host.clone(), password)?;
+    pub fn new_remote(user: &str, host: &str, password: &str) -> Result<Self> {
+        let mut remote = RemoteConnection::new_connection(user, host, password)?;
         let system_info = SystemInfo::remote(&mut remote)?;
         remote.store_password()?;
 
@@ -39,6 +27,42 @@ impl Machine {
             remote: Some(remote),
             services: MachineServices::default(),
         })
+    }
+
+    pub fn run(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<String> {
+        match &mut self.remote {
+            Some(rc) => {
+                let (stdout, _) = rc.run_ssh_command(cmd, args)?;
+                Ok(stdout)
+            }
+            None => {
+                let result = Command::new(cmd).args(args.unwrap_or(&[])).output()?;
+                Ok(String::from_utf8_lossy(&result.stdout).to_string())
+            }
+        }
+    }
+}
+
+impl Docker for Machine {
+    const DOCKER_CMD: &str = "docker";
+
+    fn list_docker(&mut self) -> Result<Vec<ServiceItem>> {
+        let args = ["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
+        let stdout = self.run(Self::DOCKER_CMD, Some(&args))?;
+        Ok(ServiceItem::convert_docker(stdout))
+    }
+
+    fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
+        let args = [action, id];
+        let stdout = self.run(Self::DOCKER_CMD, Some(&args))?;
+        if stdout.trim() != id {
+            bail!(stdout)
+        }
+        Ok(stdout)
+    }
+
+    fn container_logs(&mut self, id: &str) -> Result<String> {
+        todo!()
     }
 }
 
@@ -92,7 +116,7 @@ impl MachineStore {
         host: String,
         password: String,
     ) -> Result<usize> {
-        let machine = Machine::new_remote(user, host, password)?;
+        let machine = Machine::new_remote(&user, &host, &password)?;
         self.add_machine(machine)
     }
 }
