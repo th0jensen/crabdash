@@ -37,10 +37,6 @@ The project is organised as a Rust workspace separating UI, machine management, 
 cargo run
 ```
 
-## Dependencies
-Facing the user, there are no dependencies required to run the app, and I intend for it to stay that way.
-You will of course need docker and other programs to inspect those, but the app will (in the future) prompt the user to install these if not found.
-
 ## Motivation
 
 Crabdash started as a tool for managing my own homelab machines and containers without constantly jumping between SSH sessions, terminal commands, and the Desktop Environment on-device.
