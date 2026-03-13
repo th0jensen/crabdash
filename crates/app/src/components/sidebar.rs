@@ -1,14 +1,16 @@
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
 
 use crate::app::Crabdash;
-use crate::components::common::button;
+use crate::components::common::{LucideIcon, button, lucide_icon, machine_icon};
 use machines::machine::{Machine, MachineKind};
 
 fn machine_item(
     machine: &Machine,
     index: usize,
     selected: bool,
+    icon: LucideIcon,
     cx: &mut Context<Crabdash>,
 ) -> impl IntoElement {
     let name_color = if selected {
@@ -25,6 +27,11 @@ fn machine_item(
         rgb(0x2C2C2E)
     } else {
         rgb(0x1C1C1E)
+    };
+    let icon_bg = if selected {
+        rgb(0x1F3656)
+    } else {
+        rgb(0x232326)
     };
     let border = rgb(0x3A3A3C);
     let dot = match machine.kind {
@@ -51,19 +58,37 @@ fn machine_item(
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .gap(px(4.0))
+                        .items_center()
+                        .gap(px(10.0))
                         .child(
                             div()
-                                .text_sm()
-                                .text_color(name_color)
-                                .child(machine.system_info.machine_name.clone()),
+                                .w(px(32.0))
+                                .h(px(32.0))
+                                .rounded(px(10.0))
+                                .bg(icon_bg)
+                                .text_color(meta_color)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(lucide_icon(icon, 16.0)),
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(meta_color)
-                                .child(machine.system_info.os_version.clone()),
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(name_color)
+                                        .child(machine.system_info.machine_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(meta_color)
+                                        .child(machine.system_info.os_version.clone()),
+                                ),
                         ),
                 )
                 .child(div().w(px(8.0)).h(px(8.0)).rounded(px(999.0)).bg(dot)),
@@ -82,7 +107,14 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .iter()
         .enumerate()
         .map(|(index, machine)| {
-            machine_item(machine, index, app.selected_machine == index, cx).into_any_element()
+            machine_item(
+                machine,
+                index,
+                app.selected_machine == index,
+                machine_icon(machine.kind),
+                cx,
+            )
+            .into_any_element()
         })
         .collect();
 
@@ -102,20 +134,34 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .border_color(rgb(0x3A3A3C))
                 .flex()
                 .items_center()
-                .child(div().text_xs().text_color(rgb(0x8E8E93)).child("MACHINES")),
+                .gap(px(6.0))
+                .text_color(rgb(0x8E8E93))
+                .child(lucide_icon(Icon::Server, 11.0))
+                .child(div().text_xs().child("MACHINES")),
         )
-        .child(div().flex_1().children(machine_entries))
+        .child(
+            div()
+                .id("machine-list-scroll")
+                .flex_1()
+                .overflow_y_scroll()
+                .child(div().flex().flex_col().children(machine_entries)),
+        )
         .child(
             div()
                 .p(px(12.0))
                 .border_t_1()
                 .border_color(rgb(0x3A3A3C))
                 .child(
-                    button("open-add-machine-modal", "Add New Machine", false)
-                        .w_full()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_add_machine_modal(window, cx);
-                        })),
+                    button(
+                        "open-add-machine-modal",
+                        Icon::Plus,
+                        "Add New Machine",
+                        false,
+                    )
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_add_machine_modal(window, cx);
+                    })),
                 ),
         )
 }

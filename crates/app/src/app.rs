@@ -1,15 +1,17 @@
 use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
 
+use crate::components::common::LucideIcon;
 use crate::components::text_field::{
     FieldBackspace, FieldCopy, FieldCut, FieldDelete, FieldEnd, FieldHome, FieldLeft, FieldPaste,
     FieldRight, FieldSelectAll, FieldSelectLeft, FieldSelectRight, FieldTab, FieldTabPrev,
     TextField,
 };
 use crate::components::{content, modal, sidebar};
-use machines::machine::{Machine, MachineStore};
-use services::Docker;
+use machines::{machine::Machine, store::MachineStore};
+use services::docker::Docker;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum MainTab {
@@ -35,12 +37,22 @@ impl MainTab {
             Self::Services => "Units and background processes",
         }
     }
+
+    pub(crate) fn icon(self) -> LucideIcon {
+        match self {
+            Self::Docker => Icon::Boxes,
+            Self::Disks => Icon::HardDrive,
+            Self::Services => Icon::SquareTerminal,
+        }
+    }
 }
 
 pub struct Crabdash {
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
+    pub(crate) sidebar_collapsed: bool,
+    pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
@@ -50,13 +62,23 @@ pub struct Crabdash {
 
 impl Crabdash {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let (machine_store, status_message) = match MachineStore::load() {
+            Ok(store) => (store, None),
+            Err(error) => {
+                eprintln!("Failed to load MachineStore {error}");
+                (
+                    MachineStore::default(),
+                    Some(format!("Failed to load saved machines: {error}")),
+                )
+            }
+        };
+
         let mut app = Self {
-            machine_store: MachineStore::load().unwrap_or_else(|e| {
-                eprintln!("Failed to load MachineStore {e}");
-                MachineStore::default()
-            }),
+            machine_store,
             selected_machine: 0,
             active_tab: MainTab::default(),
+            sidebar_collapsed: false,
+            status_message,
             add_machine_modal_open: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "thomas", 2, cx)),
@@ -101,11 +123,14 @@ impl Crabdash {
                     let machine = self.selected_machine_mut();
                     machine.services.docker = services;
                     machine.services.docker_error = None;
+                    self.clear_status_message();
                 }
                 Err(error) => {
+                    let message = format!("Unable to load Docker: {error}");
                     let machine = self.selected_machine_mut();
                     machine.services.docker.clear();
                     machine.services.docker_error = Some(error);
+                    self.set_status_error(message);
                 }
             },
             MainTab::Disks => {}
@@ -126,6 +151,24 @@ impl Crabdash {
         cx.notify();
     }
 
+    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    pub(crate) fn set_status_error(&mut self, message: impl Into<String>) {
+        let normalized = message
+            .into()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.status_message = Some(normalized);
+    }
+
+    pub(crate) fn clear_status_message(&mut self) {
+        self.status_message = None;
+    }
+
     fn clear_remote_machine_form(&mut self, cx: &mut Context<Self>) {
         self.remote_host_field
             .update(cx, |field, cx| field.clear(cx));
@@ -143,7 +186,9 @@ impl Crabdash {
         let password = self.remote_password_field.read(cx).text();
 
         if host.is_empty() || user.is_empty() || password.trim().is_empty() {
-            self.add_machine_error = Some(anyhow!("Host, user, and password are required."));
+            let error = anyhow!("Host, user, and password are required.");
+            self.set_status_error(error.to_string());
+            self.add_machine_error = Some(error);
             cx.notify();
             return;
         }
@@ -154,8 +199,10 @@ impl Crabdash {
                 self.add_machine_modal_open = false;
                 self.clear_remote_machine_form(cx);
                 self.refresh_services();
+                self.clear_status_message();
             }
             Err(error) => {
+                self.set_status_error(error.to_string());
                 self.add_machine_error = Some(error);
             }
         }
@@ -200,7 +247,7 @@ impl Render for Crabdash {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(content::render_title_bar(self).on_mouse_down(
+                    .child(content::render_title_bar(self, cx).on_mouse_down(
                         MouseButton::Left,
                         |_, window, _| {
                             window.start_window_move();
@@ -210,18 +257,29 @@ impl Render for Crabdash {
                         div()
                             .flex_1()
                             .flex()
-                            .child(sidebar::render(self, cx))
+                            .when(!self.sidebar_collapsed, |this| {
+                                this.child(sidebar::render(self, cx))
+                            })
                             .child(content::render(self, cx)),
                     )
                     .child(
                         div()
+                            .h(px(36.0))
                             .px(px(20.0))
-                            .py(px(10.0))
                             .border_t_1()
                             .border_color(rgb(0x3A3A3C))
-                            .child(div().text_xs().text_color(rgb(0x8E8E93)).child(
-                                "Machine sidebar on the left, resource tabs across the top",
-                            )),
+                            .flex()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_xs()
+                                    .text_color(rgb(0xFF9F99))
+                                    .child(self.status_message.clone().unwrap_or_default()),
+                            ),
                     ),
             )
             .when(self.add_machine_modal_open, |this| {
