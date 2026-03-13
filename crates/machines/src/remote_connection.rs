@@ -120,6 +120,17 @@ impl RemoteConnection {
     }
 }
 
+impl Clone for RemoteConnection {
+    fn clone(&self) -> Self {
+        Self {
+            user: self.user.clone(),
+            host: self.host.clone(),
+            password: self.password.clone(),
+            session: None,
+        }
+    }
+}
+
 impl std::fmt::Debug for RemoteConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

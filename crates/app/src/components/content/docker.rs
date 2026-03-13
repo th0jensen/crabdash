@@ -18,40 +18,79 @@ fn action_button(
     let cont_id = cont.id.clone();
     let cont_name = cont.name.clone();
     let button_id = SharedString::from(format!("{action}-container-{cont_id}"));
-    let label = SharedString::from(format!("{action}").capitalize());
-    let icon = match action.clone() {
-        s if s == "start" => LucideIcon::Play,
-        s if s == "stop" => LucideIcon::X,
-        s if s == "restart" => LucideIcon::RefreshCw,
+    let label = SharedString::from(action.capitalize());
+
+    let icon = match action.as_str() {
+        "start" => LucideIcon::Play,
+        "stop" => LucideIcon::X,
+        "restart" => LucideIcon::RefreshCw,
         _ => LucideIcon::Circle,
     };
+
     button(button_id, icon, label, false).on_click(cx.listener(move |this, _, _, cx| {
-        eprintln!("{action}ing Docker container {cont_name} ({cont_id})");
-        match this
-            .selected_machine_mut()
-            .container_action(&cont_id, &format!("{action}"))
-        {
-            Ok(_) => {
-                eprintln!("{action}ed Docker container {cont_name} ({cont_id})");
-                this.clear_status_message();
-                this.refresh_services();
+        let machine_index = this.selected_machine;
+        let mut machine = this.selected_machine().background_clone();
+
+        let action = action.clone();
+        let cont_id = cont_id.clone();
+        let cont_name = cont_name.clone();
+
+        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+
+            let bg_action = action.clone();
+            let bg_cont_id = cont_id.clone();
+            let bg_cont_name = cont_name.clone();
+
+            async move {
+                let result = cx
+                    .background_spawn(async move {
+                        eprintln!("{bg_action}ing Docker container {bg_cont_name} ({bg_cont_id})");
+                        machine.container_action(&bg_cont_id, &bg_action)?;
+                        machine.list_docker()
+                    })
+                    .await;
+
+                this.update(&mut cx, move |this, cx| {
+                    match result {
+                        Ok(services) => {
+                            eprintln!("{action}ed Docker container {cont_name} ({cont_id})");
+
+                            if let Some(machine) =
+                                this.machine_store.machines.get_mut(machine_index)
+                            {
+                                machine.services.docker = services;
+                                machine.services.docker_error = None;
+                            }
+
+                            this.clear_status_message();
+                        }
+                        Err(err) => {
+                            let message = format!("Failed to {action} {cont_name}: {err}");
+                            eprintln!("{message}");
+                            this.set_status_error(message.clone());
+
+                            if let Some(machine) =
+                                this.machine_store.machines.get_mut(machine_index)
+                            {
+                                if let Some(container) = machine
+                                    .services
+                                    .docker
+                                    .iter_mut()
+                                    .find(|c| c.id.as_str() == cont_id.as_str())
+                                {
+                                    container.error = Some(message);
+                                }
+                            }
+                        }
+                    }
+
+                    cx.notify();
+                })
+                .ok();
             }
-            Err(s) => {
-                let message = format!("Failed to {action} {cont_name}: {s}");
-                eprintln!("{message}");
-                this.set_status_error(message.clone());
-                if let Some(container) = this
-                    .selected_machine_mut()
-                    .services
-                    .docker
-                    .iter_mut()
-                    .find(|c| c.id == cont_id)
-                {
-                    container.error = Some(message);
-                }
-            }
-        }
-        cx.notify();
+        })
+        .detach();
     }))
 }
 

@@ -72,6 +72,16 @@ impl Machine {
             }
         }
     }
+
+    pub fn background_clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            system_info: self.system_info.clone(),
+            kind: self.kind,
+            remote: self.remote.clone(),
+            services: MachineServices::default(),
+        }
+    }
 }
 
 impl Docker for Machine {
