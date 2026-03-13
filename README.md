@@ -37,6 +37,12 @@ The project is organised as a Rust workspace separating UI, machine management, 
 cargo run
 ```
 
+## Build Dependencies
+
+The project is based on GPUI and therefore largely depends on the same build dependencies as Zed. 
+
+Check out their documentation to get started: [Building Zed](https://zed.dev/docs/development/)
+
 ## Motivation
 
 Crabdash started as a tool for managing my own homelab machines and containers without constantly jumping between SSH sessions, terminal commands, and the Desktop Environment on-device.
