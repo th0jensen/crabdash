@@ -29,6 +29,7 @@ fn main() {
     let app = Application::new();
     app.on_reopen(|cx| open_window(cx));
     app.run(|cx: &mut App| {
+        set_app_icon();
         cx.activate(true);
         app::register_fonts(cx);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -41,3 +42,25 @@ fn main() {
         open_window(cx);
     });
 }
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn set_app_icon() {
+    use objc2::AnyThread;
+    use objc2_app_kit::NSImage;
+    use objc2_foundation::{MainThreadMarker, NSData};
+
+    let icon_bytes = include_bytes!("../../../assets/icon.png");
+
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let data = NSData::with_bytes(icon_bytes);
+        if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+            objc2_app_kit::NSApplication::sharedApplication(mtm)
+                .setApplicationIconImage(Some(&image));
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_app_icon() {}
