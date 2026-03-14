@@ -21,6 +21,8 @@ pub(crate) enum MainTab {
     Services,
 }
 
+actions!(crabdash, [CloseWindow]);
+
 impl MainTab {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -91,6 +93,7 @@ impl Crabdash {
 
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
+            KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("backspace", FieldBackspace, None),
             KeyBinding::new("delete", FieldDelete, None),
             KeyBinding::new("left", FieldLeft, None),
@@ -238,6 +241,10 @@ impl Render for Crabdash {
         window.set_window_title("Crabdash");
 
         div()
+            .track_focus(&self.focus_handle)
+            .on_action(|_: &CloseWindow, window, _| {
+                window.remove_window();
+            })
             .relative()
             .size_full()
             .bg(rgb(0x18181A))

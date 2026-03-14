@@ -15,6 +15,9 @@ license = "MIT"
 authors = ["Thomas Jensen"]
 description = "Crabdash desktop app built with Rust and GPUI"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"

@@ -3,10 +3,10 @@ use gpui::*;
 
 use app::Crabdash;
 
-actions!(crabdash, [Quit]);
+actions!(crabdash, [Quit, NewWindow]);
 
-const MIN_WINDOW_WIDTH: f32 = 980.0;
-const MIN_WINDOW_HEIGHT: f32 = 680.0;
+const MIN_WINDOW_WIDTH: f32 = 680.0;
+const MIN_WINDOW_HEIGHT: f32 = 540.0;
 
 fn open_window(cx: &mut App) {
     cx.open_window(
@@ -20,7 +20,12 @@ fn open_window(cx: &mut App) {
             }),
             ..WindowOptions::default()
         },
-        |_window, cx| cx.new(|cx| Crabdash::new(cx)),
+        |window, cx| {
+            let view = cx.new(|cx| Crabdash::new(cx));
+            let focus = view.read(cx).focus_handle.clone();
+            window.focus(&focus);
+            view
+        },
     )
     .expect("failed to open Crabdash window");
 }
@@ -29,11 +34,12 @@ fn main() {
     let app = Application::new();
     app.on_reopen(|cx| open_window(cx));
     app.run(|cx: &mut App| {
-        set_app_icon();
         cx.activate(true);
         app::register_fonts(cx);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &NewWindow, cx| open_window(cx));
         cx.set_menus(vec![Menu {
             name: "Crabdash".into(),
             items: vec![MenuItem::action("Quit", Quit)],
@@ -42,25 +48,3 @@ fn main() {
         open_window(cx);
     });
 }
-
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-fn set_app_icon() {
-    use objc2::AnyThread;
-    use objc2_app_kit::NSImage;
-    use objc2_foundation::{MainThreadMarker, NSData};
-
-    let icon_bytes = include_bytes!("../../../assets/icon.png");
-
-    unsafe {
-        let mtm = MainThreadMarker::new_unchecked();
-        let data = NSData::with_bytes(icon_bytes);
-        if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
-            objc2_app_kit::NSApplication::sharedApplication(mtm)
-                .setApplicationIconImage(Some(&image));
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn set_app_icon() {}
