@@ -24,11 +24,11 @@ The project is organised as a Rust workspace separating UI, machine management, 
 
 - [x] System overview (hostname, OS version, architecture)
 - [x] Docker container control
+- [x] Remote machine support via SSH
 - [ ] System health and stats
 - [ ] Disk and mount inspection
 - [ ] System service management (`systemd`)
 - [ ] Docker inspect and logs
-- [ ] Remote machine support via SSH
 - [ ] Quick command execution and logs
 
 ## Run
