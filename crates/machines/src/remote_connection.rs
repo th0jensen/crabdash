@@ -1,17 +1,18 @@
 use anyhow::{Result, bail};
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use ssh2::Session;
-use std::{io::Read, net::TcpStream};
-
-const KEYRING_SERVICE: &str = "com.thojensen.crabdash.remote";
+use std::{
+    fmt::{Debug, Formatter},
+    io::Read,
+    net::TcpStream,
+};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct RemoteConnection {
-    user: String,
-    host: String,
+    pub user: String,
+    pub host: String,
     #[serde(skip_serializing, skip_deserializing, default)]
-    password: String,
+    pub password: String,
     #[serde(skip)]
     session: Option<Session>,
 }
@@ -37,32 +38,30 @@ impl RemoteConnection {
         Ok(rc)
     }
 
-    pub fn store_password(&self) -> Result<()> {
-        let entry = self.keyring_entry()?;
-        entry.set_password(&self.password)?;
-        Ok(())
-    }
-
     pub fn connect(&self) -> Result<Session> {
         let host = &self.host;
         let tcp = TcpStream::connect(format!("{host}:22"))?;
         let mut sess = Session::new()?;
         sess.set_tcp_stream(tcp);
         sess.handshake()?;
+        
+        let mut known_hosts = sess.known_hosts()?;
+        known_hosts.read_file(
+            &std::path::Path::new(&format!("{}/.ssh/known_hosts", std::env::var("HOME")?)),
+            ssh2::KnownHostFileKind::OpenSSH,
+        )?;
+        
         sess.userauth_password(&self.user, &self.password)?;
-
         if !sess.authenticated() {
             bail!("Authentication failed!");
         }
-
         Ok(sess)
     }
 
     pub fn ensure_connected(&mut self) -> Result<&Session> {
         if self.password.is_empty() {
-            self.password = self.keyring_entry()?.get_password()?;
+            bail!("No password available");
         }
-
         if self.session.is_none() {
             self.session = Some(self.connect()?);
         }
@@ -114,10 +113,6 @@ impl RemoteConnection {
 
         format!("'{}'", arg.replace('\'', r"'\''"))
     }
-
-    fn keyring_entry(&self) -> Result<Entry, keyring::Error> {
-        Entry::new(KEYRING_SERVICE, &format!("{}@{}", self.user, self.host))
-    }
 }
 
 impl Clone for RemoteConnection {
@@ -131,8 +126,8 @@ impl Clone for RemoteConnection {
     }
 }
 
-impl std::fmt::Debug for RemoteConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for RemoteConnection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "RemoteConnection {{ connected: {} }}",

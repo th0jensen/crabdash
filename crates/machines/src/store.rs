@@ -41,6 +41,14 @@ impl MachineStore {
         Ok(())
     }
 
+    pub fn save_machine(mc: Machine) -> Result<()> {
+        let mut store = Self::load()?;
+        if let Some(existing) = store.machines.iter_mut().find(|m| m.id == mc.id) {
+            *existing = mc.clone();
+        }
+        store.save()
+    }
+
     pub fn add_machine(&mut self, machine: Machine) -> Result<usize> {
         self.machines.push(machine);
         let index = self.machines.len() - 1;

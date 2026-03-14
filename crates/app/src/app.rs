@@ -202,6 +202,21 @@ impl Crabdash {
                 self.clear_remote_machine_form(cx);
                 self.refresh_services();
                 self.clear_status_message();
+
+                if let Some(rc) = self.selected_machine().remote.as_ref() {
+                    let key = format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host);
+                    let user = rc.user.clone();
+                    let password = rc.password.clone();
+                    cx.spawn(async move |_, cx| {
+                        let future = cx
+                            .update(|app| app.write_credentials(&key, &user, password.as_bytes()))
+                            .ok();
+                        if let Some(future) = future {
+                            future.await.ok();
+                        }
+                    })
+                    .detach();
+                }
             }
             Err(error) => {
                 self.set_status_error(error.to_string());

@@ -1,4 +1,4 @@
-use crate::{commands::SystemInfo, remote_connection::RemoteConnection};
+use crate::{commands::SystemInfo, remote_connection::RemoteConnection, store::MachineStore};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use services::{MachineServices, ServiceItem, docker::Docker};
@@ -17,9 +17,8 @@ pub struct Machine {
 
 impl Machine {
     pub fn new_remote(user: &str, host: &str, password: &str) -> Result<Self> {
-        let mut remote = RemoteConnection::new_connection(user, host, password)?;
-        let system_info = SystemInfo::remote(&mut remote)?;
-        remote.store_password()?;
+        let mut rc = RemoteConnection::new_connection(user, host, password)?;
+        let system_info = SystemInfo::remote(&mut rc)?;
 
         Ok(Self {
             id: format!("{user}@{host}"),

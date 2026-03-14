@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
 dirs = "6.0.0"
-keyring = { version = "3.6.3", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 services = { path = "../services" }

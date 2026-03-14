@@ -93,10 +93,39 @@ fn machine_item(
                 )
                 .child(div().w(px(8.0)).h(px(8.0)).rounded(px(999.0)).bg(dot)),
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.selected_machine = index;
-            this.refresh_services();
-            cx.notify();
+        .on_click(cx.listener(move |_, _, _, cx| {
+            cx.spawn(async move |this: WeakEntity<Crabdash>, cx| {
+                let creds_key = this
+                    .update(cx, |this, _| {
+                        this.selected_machine = index;
+                        this.selected_machine_mut()
+                            .remote
+                            .as_ref()
+                            .filter(|rc| rc.password.is_empty())
+                            .map(|rc| format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host))
+                    })
+                    .ok()
+                    .flatten();
+                if let Some(key) = creds_key {
+                    let creds = cx.update(|app| app.read_credentials(&key)).ok();
+                    if let Some(creds_future) = creds {
+                        if let Ok(Some((_, bytes))) = creds_future.await {
+                            this.update(cx, |this, _| {
+                                if let Some(rc) = this.selected_machine_mut().remote.as_mut() {
+                                    rc.password = String::from_utf8_lossy(&bytes).to_string();
+                                }
+                            })
+                            .ok();
+                        }
+                    }
+                }
+                this.update(cx, |this, cx| {
+                    this.refresh_services();
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }))
 }
 
