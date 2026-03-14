@@ -128,19 +128,6 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .flex_col()
         .child(
             div()
-                .h(px(34.0))
-                .px(px(10.0))
-                .border_b_1()
-                .border_color(rgb(0x3A3A3C))
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .text_color(rgb(0x8E8E93))
-                .child(lucide_icon(Icon::Server, 11.0))
-                .child(div().text_xs().child("MACHINES")),
-        )
-        .child(
-            div()
                 .id("machine-list-scroll")
                 .flex_1()
                 .overflow_y_scroll()
@@ -155,7 +142,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                     button(
                         "open-add-machine-modal",
                         Icon::Plus,
-                        "Add New Machine",
+                        Some("Add New Machine"),
                         false,
                     )
                     .w_full()

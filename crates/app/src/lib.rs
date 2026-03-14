@@ -4,6 +4,7 @@ use gpui::App;
 
 pub mod app;
 pub mod components;
+pub mod content;
 pub use app::Crabdash;
 
 pub fn register_fonts(cx: &mut App) {

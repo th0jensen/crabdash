@@ -276,19 +276,18 @@ impl Render for Crabdash {
                             .border_t_1()
                             .border_color(rgb(0x3A3A3C))
                             .flex()
-                            .items_center()
-                            .justify_start()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .text_xs()
-                                    .text_color(rgb(0xFF9F99))
-                                    .child(self.status_message.clone().unwrap_or_default()),
-                            ),
+                            .items_center(),
                     ),
             )
+            .when_some(self.status_message.as_ref(), |this, message| {
+                this.child(
+                    div()
+                        .absolute()
+                        .right(px(20.0))
+                        .bottom(px(56.0))
+                        .child(toast::render(message.clone(), cx)),
+                )
+            })
             .when(self.add_machine_modal_open, |this| {
                 this.child(modal::render(self, cx))
             })

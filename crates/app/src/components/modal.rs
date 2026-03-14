@@ -98,8 +98,8 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .child(app.remote_password_field.clone())
                                         .child(
                                             div()
-                                                .text_sm()
-                                                .text_color(rgba(0x505050))
+                                                .text_xs()
+                                                .text_color(rgb(0xAEAEB2))
                                                 .child("Your passwords will be stored in your local encrypted keychain and not uploaded anywhere."),
                                         )
                                         .when_some(app.add_machine_error.as_ref(), |this, error| {
@@ -125,14 +125,14 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .justify_end()
                                         .gap(px(10.0))
                                         .child(
-                                            button("cancel-add-machine", Icon::X, "Cancel", false).on_click(
+                                            button("cancel-add-machine", Icon::X, Some("Cancel"), false).on_click(
                                                 cx.listener(|this, _, _, cx| {
                                                     this.close_add_machine_modal(cx);
                                                 }),
                                             ),
                                         )
                                         .child(
-                                            button("submit-add-machine", Icon::Plus, "Add Machine", true)
+                                            button("submit-add-machine", Icon::Plus, Some("Add Machine"), true)
                                                 .on_click(cx.listener(
                                                     |this, _, window, cx| {
                                                         this.submit_add_machine(window, cx);

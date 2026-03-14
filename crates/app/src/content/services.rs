@@ -3,8 +3,53 @@ use gpui::*;
 
 use crate::app::Crabdash;
 
-use super::{error_panel, placeholder_card, stats_chip, status_badge};
+use super::shared::{error_panel, placeholder_card};
 use services::ServiceItem;
+
+fn status_badge(status: &str) -> Div {
+    let normalized = status.to_ascii_lowercase();
+    let is_running = normalized.contains("running") || normalized.contains("active");
+    let status_bg = if is_running {
+        rgb(0x193D2A)
+    } else {
+        rgb(0x47232B)
+    };
+    let status_fg = if is_running {
+        rgb(0x30D158)
+    } else {
+        rgb(0xFF453A)
+    };
+
+    div()
+        .px(px(10.0))
+        .py(px(5.0))
+        .rounded(px(999.0))
+        .bg(status_bg)
+        .text_xs()
+        .text_color(status_fg)
+        .child(status.to_string())
+}
+
+fn stats_chip(label: &str, value: String) -> Div {
+    div()
+        .h(px(34.0))
+        .px(px(12.0))
+        .py(px(7.0))
+        .bg(rgb(0x2C2C2E))
+        .border_1()
+        .border_color(rgb(0x3A3A3C))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .rounded(px(8.0))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0x8E8E93))
+                .child(label.to_string()),
+        )
+        .child(div().text_sm().text_color(white()).child(value))
+}
 
 fn system_service_row(service: &ServiceItem) -> Div {
     div()
