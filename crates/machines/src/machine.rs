@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 use services::{MachineServices, ServiceItem, docker::Docker};
 use std::process::Command;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Machine {
     pub id: String,
     pub system_info: SystemInfo,
     pub kind: MachineKind,
     pub remote: Option<RemoteConnection>,
+    pub docker_path: Option<String>,
     #[serde(skip)]
     pub services: MachineServices,
 }
@@ -24,7 +25,8 @@ impl Machine {
             id: format!("{user}@{host}"),
             kind: MachineKind::get_kind(&system_info),
             system_info,
-            remote: Some(remote),
+            remote: Some(rc),
+            docker_path: None,
             services: MachineServices::default(),
         })
     }
@@ -79,30 +81,53 @@ impl Machine {
             system_info: self.system_info.clone(),
             kind: self.kind,
             remote: self.remote.clone(),
+            docker_path: self.docker_path.clone(),
             services: MachineServices::default(),
         }
     }
 }
 
 impl Docker for Machine {
-    const DOCKER_CMD: &str = "docker";
+    fn find_docker(&mut self) -> String {
+        if let Some(path) = &self.docker_path {
+            return path.clone();
+        }
+
+        const CANDIDATES: &[&str] = &[
+            "/opt/homebrew/bin/docker",
+            "/usr/local/bin/docker",
+            "/usr/bin/docker",
+        ];
+
+        let path = CANDIDATES
+            .iter()
+            .copied()
+            .find(|p| self.run("test", Some(&["-f", p])).is_ok())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| String::from("docker"));
+        self.docker_path = Some(path.clone());
+        MachineStore::save_machine(self.clone()).ok();
+        path
+    }
 
     fn list_docker(&mut self) -> Result<Vec<ServiceItem>> {
         let args = ["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
-        let stdout = self.run(Self::DOCKER_CMD, Some(&args))?;
+        let docker = self.find_docker();
+        let stdout = self.run(&docker, Some(&args))?;
         Ok(ServiceItem::convert_docker(stdout))
     }
 
     fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
         let args = [action, id];
-        let stdout = self.run(Self::DOCKER_CMD, Some(&args))?;
+        let docker = self.find_docker();
+        let stdout = self.run(&docker, Some(&args))?;
         if stdout.trim() != id {
             bail!(stdout)
         }
         Ok(stdout)
     }
 
-    fn container_logs(&mut self, id: &str) -> Result<String> {
+    fn container_logs(&mut self, _id: &str) -> Result<String> {
         todo!()
     }
 }

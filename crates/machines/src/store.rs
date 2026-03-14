@@ -74,6 +74,7 @@ impl Default for MachineStore {
                 system_info: sys,
                 kind,
                 remote: None,
+                docker_path: None,
                 services: MachineServices::default(),
             }],
         }

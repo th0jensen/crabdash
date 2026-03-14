@@ -3,7 +3,11 @@ use anyhow::Result;
 use crate::ServiceItem;
 
 pub trait Docker {
-    const DOCKER_CMD: &str;
+    /// Finds the Docker executable
+    ///
+    /// # Returns
+    /// * `String`: The Docker binary path
+    fn find_docker(&mut self) -> String;
     /// Lists all Docker containers on the machine
     ///
     /// # Returns

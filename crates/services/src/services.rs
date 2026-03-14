@@ -1,11 +1,11 @@
 use serde::Serialize;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MachineServices {
     pub docker: Vec<ServiceItem>,
     pub disks: Vec<ServiceItem>,
     pub systemd: Vec<ServiceItem>,
-    pub docker_error: Option<anyhow::Error>,
+    pub docker_error: Option<String>,
     pub disks_error: Option<String>,
     pub systemd_error: Option<String>,
 }
