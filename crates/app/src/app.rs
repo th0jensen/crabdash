@@ -9,7 +9,8 @@ use crate::components::text_field::{
     FieldRight, FieldSelectAll, FieldSelectLeft, FieldSelectRight, FieldTab, FieldTabPrev,
     TextField,
 };
-use crate::components::{content, modal, sidebar};
+use crate::components::{modal, sidebar, toast};
+use crate::content;
 use machines::{machine::Machine, store::MachineStore};
 use services::docker::Docker;
 
@@ -32,14 +33,6 @@ impl MainTab {
         }
     }
 
-    pub(crate) fn subtitle(self) -> &'static str {
-        match self {
-            Self::Docker => "Containers and workloads",
-            Self::Disks => "Volumes and storage health",
-            Self::Services => "Units and background processes",
-        }
-    }
-
     pub(crate) fn icon(self) -> LucideIcon {
         match self {
             Self::Docker => Icon::Boxes,
@@ -49,10 +42,18 @@ impl MainTab {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DockerFilter {
+    #[default]
+    Total,
+    Running,
+}
+
 pub struct Crabdash {
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
+    pub(crate) docker_filter: DockerFilter,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
@@ -60,6 +61,7 @@ pub struct Crabdash {
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) remote_password_field: Entity<TextField>,
     pub(crate) add_machine_error: Option<anyhow::Error>,
+    pub focus_handle: FocusHandle,
 }
 
 impl Crabdash {
@@ -79,6 +81,7 @@ impl Crabdash {
             machine_store,
             selected_machine: 0,
             active_tab: MainTab::default(),
+            docker_filter: DockerFilter::default(),
             sidebar_collapsed: false,
             status_message,
             add_machine_modal_open: false,
@@ -86,6 +89,7 @@ impl Crabdash {
             remote_user_field: cx.new(|cx| TextField::new("User", "thomas", 2, cx)),
             remote_password_field: cx.new(|cx| TextField::new("Password", "password", 3, cx)),
             add_machine_error: None,
+            focus_handle: cx.focus_handle(),
         };
         app.refresh_services();
         app
@@ -132,7 +136,7 @@ impl Crabdash {
                     let message = format!("Unable to load Docker: {error}");
                     let machine = self.selected_machine_mut();
                     machine.services.docker.clear();
-                    machine.services.docker_error = Some(error);
+                    machine.services.docker_error = Some(error.to_string());
                     self.set_status_error(message);
                 }
             },
@@ -160,12 +164,7 @@ impl Crabdash {
     }
 
     pub(crate) fn set_status_error(&mut self, message: impl Into<String>) {
-        let normalized = message
-            .into()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        self.status_message = Some(normalized);
+        self.status_message = Some(message.into().trim().to_string());
     }
 
     pub(crate) fn clear_status_message(&mut self) {
