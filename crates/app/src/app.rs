@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
@@ -49,11 +51,37 @@ pub(crate) enum DockerFilter {
     Running,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DockerAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl DockerAction {
+    pub(crate) fn command(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+
+    pub(crate) fn pending_label(self) -> &'static str {
+        match self {
+            Self::Start => "Starting",
+            Self::Stop => "Stopping",
+            Self::Restart => "Restarting",
+        }
+    }
+}
+
 pub struct Crabdash {
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
     pub(crate) docker_filter: DockerFilter,
+    pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
@@ -83,6 +111,7 @@ impl Crabdash {
             selected_machine: 0,
             active_tab: MainTab::default(),
             docker_filter: DockerFilter::default(),
+            pending_docker_actions: HashMap::default(),
             sidebar_collapsed: false,
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
             status_message,
