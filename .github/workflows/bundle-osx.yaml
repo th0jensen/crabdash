@@ -27,13 +27,19 @@ jobs:
       - name: Build app bundle
         run: cargo bundle --release --format osx -p crabdash
 
+      - name: Codesign app
+        run: |
+          APP="target/release/bundle/osx/Crabdash.app"
+          codesign --deep --force --sign - "$APP"
+                                  
+
       - name: Patch Tahoe icon assets
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
           cp assets/icons/Assets.car "$APP/Contents/Resources/Assets.car"
           /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$APP/Contents/Info.plist" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$APP/Contents/Info.plist"
-          STAGE="zip-root"
+          STAGE="crabdash-macOS-arm"
           mkdir -p "$STAGE"
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
