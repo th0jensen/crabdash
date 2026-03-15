@@ -1,9 +1,9 @@
 # Crabdash
 
 > [!NOTE]
-> This project is under active development and features may change as the project evolves toward v0.1.1.
+> This project is under active development and features may change as the project evolves toward v0.2.0
 
-![Screenshot of the app (v0.1.0)](assets/screenshot.png)
+![Screenshot of the app (v0.1.0)](assets/screenshot_v0.1.0.png)
 
 Crabdash is a native desktop dashboard for managing machines and services (such as homelabs).
 
@@ -20,14 +20,14 @@ Crabdash is built as a native desktop application using **Rust** and **[GPUI](ht
 
 The project is organised as a Rust workspace separating UI, machine management, and service integrations.
 
-## Features (Milestone v0.1.1)
+## Features (Milestone v0.2.0)
 
 - [x] System overview (hostname, OS version, architecture)
 - [x] Docker container control
-- [x] Remote machine support via SSH
 - [ ] System health and stats
 - [ ] Disk and mount inspection
 - [ ] System service management (`systemd`)
+- [ ] Remote machine support via SSH
 - [ ] Docker inspect and logs
 - [ ] Quick command execution and logs
 
