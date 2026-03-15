@@ -633,7 +633,7 @@ impl Render for TextField {
                     .border_color(if focused {
                         rgb(0x0A84FF)
                     } else {
-                        rgb(0x3A3A3C)
+                        rgb(0x2F2F31)
                     })
                     .rounded(px(8.0))
                     .line_height(px(18.0))

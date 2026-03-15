@@ -3,8 +3,20 @@ use gpui::*;
 use lucide_icons::Icon;
 
 use crate::app::Crabdash;
-use crate::components::common::{LucideIcon, button, lucide_icon, machine_icon};
-use machines::machine::{Machine, MachineKind};
+use crate::components::common::{button, lucide_icon, machine_icon};
+use machines::machine::Machine;
+
+pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 250.0;
+const MIN_SIDEBAR_WIDTH: f32 = 180.0;
+const MAX_SIDEBAR_WIDTH: f32 = 420.0;
+const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 8.0;
+
+#[derive(Clone)]
+pub(crate) struct DraggedSidebarResize;
+
+pub(crate) fn clamp_width(width: Pixels) -> Pixels {
+    width.max(px(MIN_SIDEBAR_WIDTH)).min(px(MAX_SIDEBAR_WIDTH))
+}
 
 fn machine_item(
     machine: &Machine,
@@ -148,11 +160,13 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .collect();
 
     div()
-        .w(px(250.0))
+        .relative()
+        .w(app.sidebar_width)
         .h_full()
+        .flex_shrink_0()
         .bg(rgb(0x1C1C1E))
         .border_r_1()
-        .border_color(rgb(0x3A3A3C))
+        .border_color(rgb(0x2F2F31))
         .flex()
         .flex_col()
         .child(
@@ -166,7 +180,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
             div()
                 .p(px(12.0))
                 .border_t_1()
-                .border_color(rgb(0x3A3A3C))
+                .border_color(rgb(0x2F2F31))
                 .child(
                     button(
                         "open-add-machine-modal",
@@ -179,5 +193,33 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                         this.open_add_machine_modal(window, cx);
                     })),
                 ),
+        )
+        .child(
+            div()
+                .id("sidebar-resize-handle")
+                .absolute()
+                .right(-px(SIDEBAR_RESIZE_HANDLE_WIDTH / 2.0))
+                .top(px(0.0))
+                .h_full()
+                .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                .cursor_col_resize()
+                .on_drag(DraggedSidebarResize, |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| gpui::Empty)
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|app, event: &MouseUpEvent, _, cx| {
+                        if event.click_count == 2 {
+                            app.sidebar_width = px(DEFAULT_SIDEBAR_WIDTH);
+                            cx.notify();
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
+                .occlude(),
         )
 }

@@ -12,7 +12,7 @@ pub(super) fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         .h(px(38.0))
         .px(px(14.0))
         .border_b_1()
-        .border_color(rgb(0x2A2A2C))
+        .border_color(rgb(0x242426))
         .bg(rgb(0x18181A))
         .flex()
         .items_center()

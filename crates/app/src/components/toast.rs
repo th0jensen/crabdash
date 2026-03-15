@@ -13,7 +13,7 @@ pub fn render(message: impl Into<SharedString>, cx: &mut Context<Crabdash>) -> D
         .p(px(14.0))
         .bg(rgb(0x18181A))
         .border_1()
-        .border_color(rgb(0x3A3A3C))
+        .border_color(rgb(0x2F2F31))
         .rounded(px(12.0))
         .flex()
         .flex_col()

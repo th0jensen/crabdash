@@ -55,6 +55,7 @@ pub struct Crabdash {
     pub(crate) active_tab: MainTab,
     pub(crate) docker_filter: DockerFilter,
     pub(crate) sidebar_collapsed: bool,
+    pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
     pub(crate) remote_host_field: Entity<TextField>,
@@ -83,6 +84,7 @@ impl Crabdash {
             active_tab: MainTab::default(),
             docker_filter: DockerFilter::default(),
             sidebar_collapsed: false,
+            sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
             status_message,
             add_machine_modal_open: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
@@ -160,6 +162,11 @@ impl Crabdash {
 
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    pub(crate) fn set_sidebar_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        self.sidebar_width = sidebar::clamp_width(width);
         cx.notify();
     }
 
@@ -279,6 +286,16 @@ impl Render for Crabdash {
                             .flex_1()
                             .flex()
                             .when(!self.sidebar_collapsed, |this| {
+                                this.on_drag_move(cx.listener(
+                                    |this,
+                                     event: &DragMoveEvent<sidebar::DraggedSidebarResize>,
+                                     _window,
+                                     cx| {
+                                        this.set_sidebar_width(event.event.position.x, cx);
+                                    },
+                                ))
+                            })
+                            .when(!self.sidebar_collapsed, |this| {
                                 this.child(sidebar::render(self, cx))
                             })
                             .child(content::render(self, cx)),
@@ -288,7 +305,7 @@ impl Render for Crabdash {
                             .h(px(36.0))
                             .px(px(20.0))
                             .border_t_1()
-                            .border_color(rgb(0x3A3A3C))
+                            .border_color(rgb(0x2F2F31))
                             .flex()
                             .items_center(),
                     ),

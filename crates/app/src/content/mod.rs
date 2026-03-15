@@ -27,12 +27,12 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .flex_1()
         .flex()
         .flex_col()
-        .bg(rgb(0x1E1E20))
+        .bg(rgb(0x1C1C1E))
         .child(header::render(app, cx))
         .child(
             div()
                 .flex_1()
-                .bg(rgb(0x1E1E20))
+                .bg(rgb(0x1C1C1E))
                 .flex()
                 .flex_col()
                 .child(div().flex_1().p(px(20.0)).child(active_panel(app, cx))),

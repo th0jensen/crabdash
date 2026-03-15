@@ -47,7 +47,7 @@ where
     let border = if primary {
         rgb(0x0A84FF)
     } else {
-        rgb(0x3A3A3C)
+        rgb(0x2F2F31)
     };
 
     div()
