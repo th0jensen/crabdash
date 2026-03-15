@@ -13,6 +13,10 @@ use crate::components::text_field::{
 };
 use crate::components::{modal, sidebar, toast};
 use crate::content;
+use crate::{
+    AboutCrabdash, CloseWindow, MinimizeWindow, OpenAddMachine, RefreshServices, ToggleFullScreen,
+    ToggleSidebar, ZoomWindow, show_about_dialog,
+};
 use machines::{machine::Machine, store::MachineStore};
 use services::docker::Docker;
 
@@ -23,8 +27,6 @@ pub(crate) enum MainTab {
     Disks,
     Services,
 }
-
-actions!(crabdash, [CloseWindow]);
 
 impl MainTab {
     pub(crate) fn label(self) -> &'static str {
@@ -128,7 +130,12 @@ impl Crabdash {
 
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
+            KeyBinding::new("cmd-s", ToggleSidebar, None),
+            KeyBinding::new("cmd-n", OpenAddMachine, None),
+            KeyBinding::new("cmd-r", RefreshServices, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-m", MinimizeWindow, None),
+            KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
             KeyBinding::new("backspace", FieldBackspace, None),
             KeyBinding::new("delete", FieldDelete, None),
             KeyBinding::new("left", FieldLeft, None),
@@ -292,8 +299,30 @@ impl Render for Crabdash {
 
         div()
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|_, _: &AboutCrabdash, _window, _cx| {
+                show_about_dialog();
+            }))
             .on_action(|_: &CloseWindow, window, _| {
                 window.remove_window();
+            })
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _window, cx| {
+                this.toggle_sidebar(cx);
+            }))
+            .on_action(cx.listener(|this, _: &RefreshServices, _window, cx| {
+                this.refresh_services();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
+                this.open_add_machine_modal(window, cx);
+            }))
+            .on_action(|_: &MinimizeWindow, window, _| {
+                window.minimize_window();
+            })
+            .on_action(|_: &ZoomWindow, window, _| {
+                window.zoom_window();
+            })
+            .on_action(|_: &ToggleFullScreen, window, _| {
+                window.toggle_fullscreen();
             })
             .relative()
             .size_full()
