@@ -22,9 +22,10 @@ fn machine_item(
     machine: &Machine,
     index: usize,
     selected: bool,
-    icon: LucideIcon,
     cx: &mut Context<Crabdash>,
 ) -> impl IntoElement {
+    let connection_active = machine.has_active_connection();
+    let icon = machine_icon(machine.kind);
     let name_color = if selected {
         rgb(0xFFFFFF)
     } else {
@@ -45,24 +46,28 @@ fn machine_item(
     } else {
         rgb(0x232326)
     };
-    let border = rgb(0x3A3A3C);
-    let dot = match machine.kind {
-        MachineKind::MacOS => rgb(0x64D2FF),
-        MachineKind::Linux => rgb(0x30D158),
-        MachineKind::Unknown => rgb(0x000000),
+    let border = rgb(0x2F2F31);
+    let dot = if connection_active {
+        rgb(0x30D158)
+    } else {
+        rgb(0xFF453A)
     };
 
     div()
         .id(SharedString::from(format!("machine-{}", machine.id)))
         .w_full()
-        .p(px(10.0))
+        .h(px(58.0))
+        .px(px(10.0))
         .bg(bg)
         .border_b_1()
         .border_color(border)
+        .flex()
+        .items_center()
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x2A2A2C)))
         .child(
             div()
+                .w_full()
                 .flex()
                 .justify_between()
                 .items_center()
@@ -148,14 +153,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .iter()
         .enumerate()
         .map(|(index, machine)| {
-            machine_item(
-                machine,
-                index,
-                app.selected_machine == index,
-                machine_icon(machine.kind),
-                cx,
-            )
-            .into_any_element()
+            machine_item(machine, index, app.selected_machine == index, cx).into_any_element()
         })
         .collect();
 

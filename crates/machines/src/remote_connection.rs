@@ -44,13 +44,13 @@ impl RemoteConnection {
         let mut sess = Session::new()?;
         sess.set_tcp_stream(tcp);
         sess.handshake()?;
-        
+
         let mut known_hosts = sess.known_hosts()?;
         known_hosts.read_file(
             &std::path::Path::new(&format!("{}/.ssh/known_hosts", std::env::var("HOME")?)),
             ssh2::KnownHostFileKind::OpenSSH,
         )?;
-        
+
         sess.userauth_password(&self.user, &self.password)?;
         if !sess.authenticated() {
             bail!("Authentication failed!");
@@ -92,6 +92,12 @@ impl RemoteConnection {
         let exit_status = channel.exit_status()?;
 
         Ok((s, exit_status))
+    }
+
+    pub fn has_active_session(&self) -> bool {
+        self.session
+            .as_ref()
+            .map_or(false, |session| session.authenticated())
     }
 
     fn shell_escape(arg: &str) -> String {

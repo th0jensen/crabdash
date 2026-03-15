@@ -84,6 +84,12 @@ impl Machine {
             services: MachineServices::default(),
         }
     }
+
+    pub fn has_active_connection(&self) -> bool {
+        self.remote
+            .as_ref()
+            .map_or(true, |remote| remote.has_active_session())
+    }
 }
 
 impl Docker for Machine {
