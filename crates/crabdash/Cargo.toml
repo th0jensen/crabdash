@@ -12,7 +12,10 @@ gpui = { version = "*" }
 [package.metadata.bundle]
 name = "Crabdash"
 identifier = "com.thojensen.crabdash"
-icon = ["assets/icons/icon.icns"]
+icon = ["assets/icons/AppIcon.icns"]
+short_description = "Native desktop dashboard for machines and services"
+category = "public.app-category.developer-tools"
+osx_info_plist_exts = ["assets/macos/info-extra.plist"]
 
 [lints]
 workspace = true
