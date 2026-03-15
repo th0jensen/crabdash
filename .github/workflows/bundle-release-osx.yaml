@@ -1,4 +1,4 @@
-name: Release
+name: Bundle and Release - macOS
 
 on:
   push:
@@ -31,7 +31,6 @@ jobs:
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
           codesign --deep --force --sign - "$APP"
-                                  
 
       - name: Patch Tahoe icon assets
         run: |
