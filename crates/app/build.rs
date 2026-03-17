@@ -40,7 +40,7 @@ fn main() {
         .filter(|stdout| !stdout.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let icon_path = workspace_root.join("assets/icons/icon.png");
+    let icon_path = workspace_root.join("assets/icons/AppIcon.png");
 
     println!("cargo:rustc-env=CRABDASH_GIT_COMMIT_HASH={commit_hash}");
     println!(

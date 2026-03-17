@@ -2,7 +2,9 @@
   {
     "label": "Run Crabdash",
     "command": "cargo run .",
-    // "env": { "ZED_DEVELOPMENT_USE_KEYCHAIN": "1" },
+    "env": {
+      // "ZED_DEVELOPMENT_USE_KEYCHAIN": "1"
+    },
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always",
@@ -15,7 +17,9 @@
   {
     "label": "Build Crabdash",
     "command": "cargo build",
-    "env": {},
+    "env": {
+      // "ZED_DEVELOPMENT_USE_KEYCHAIN": "1"
+    },
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always",
@@ -28,7 +32,9 @@
   {
     "label": "Build Crabdash Release",
     "command": "cargo build --release",
-    "env": {},
+    "env": {
+      // "ZED_DEVELOPMENT_USE_KEYCHAIN": "1"
+    },
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always",

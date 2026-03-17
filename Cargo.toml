@@ -10,7 +10,7 @@ default-members = ["crates/crabdash"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT"
 authors = ["Thomas Jensen"]
 description = "Crabdash desktop app built with Rust and GPUI"
