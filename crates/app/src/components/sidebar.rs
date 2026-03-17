@@ -3,7 +3,7 @@ use gpui::*;
 use lucide_icons::Icon;
 
 use crate::app::Crabdash;
-use crate::components::common::{button, lucide_icon, machine_icon};
+use crate::components::common::{lucide_icon, machine_icon};
 use machines::machine::Machine;
 
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 250.0;
@@ -146,6 +146,59 @@ fn machine_item(
         }))
 }
 
+fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
+    let bg = rgb(0x1C1C1E);
+    let border = rgb(0x2F2F31);
+    let meta_color = rgb(0x8E8E93);
+
+    div()
+        .id("open-add-machine-modal")
+        .w_full()
+        .h(px(58.0))
+        .px(px(10.0))
+        .bg(bg)
+        .border_t_1()
+        .border_color(border)
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(0x2A2A2C)))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .justify_between()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .w(px(32.0))
+                                .h(px(32.0))
+                                .rounded(px(10.0))
+                                .text_color(meta_color)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(lucide_icon(Icon::Plus, 16.0)),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(meta_color)
+                                .child("Add New Machine"),
+                        ),
+                ),
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.open_add_machine_modal(window, cx);
+        }))
+}
+
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     let machine_entries: Vec<_> = app
         .machine_store
@@ -172,24 +225,12 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .id("machine-list-scroll")
                 .flex_1()
                 .overflow_y_scroll()
-                .child(div().flex().flex_col().children(machine_entries)),
-        )
-        .child(
-            div()
-                .p(px(12.0))
-                .border_t_1()
-                .border_color(rgb(0x2F2F31))
                 .child(
-                    button(
-                        "open-add-machine-modal",
-                        Icon::Plus,
-                        Some("Add New Machine"),
-                        false,
-                    )
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_add_machine_modal(window, cx);
-                    })),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .children(machine_entries)
+                        .child(add_machine_item(cx)),
                 ),
         )
         .child(
