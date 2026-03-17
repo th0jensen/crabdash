@@ -1,55 +1,46 @@
 name: Bundle and Release - macOS
-
 on:
   push:
     tags:
       - "v*"
-
 permissions:
   contents: write
-
 jobs:
   build-macos:
     runs-on: macos-latest
-
     steps:
-      - uses: actions/checkout@v6
-
+      - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
-
       - name: Build app bundle
         run: cargo bundle --release --format osx -p crabdash
-
-      - name: Codesign app
-        run: |
-          APP="target/release/bundle/osx/Crabdash.app"
-          codesign --deep --force --sign - "$APP"
-
       - name: Patch Tahoe icon assets
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
           cp assets/icons/Assets.car "$APP/Contents/Resources/Assets.car"
           /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$APP/Contents/Info.plist" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$APP/Contents/Info.plist"
+      - name: Codesign app
+        run: |
+          APP="target/release/bundle/osx/Crabdash.app"
+          codesign --deep --force --sign - "$APP"
+      - name: Package ZIP
+        run: |
+          APP="target/release/bundle/osx/Crabdash.app"
           STAGE="crabdash-macOS-arm"
           mkdir -p "$STAGE"
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
           ditto -c -k --sequesterRsrc --keepParent "$STAGE" "Crabdash-macOS-arm.zip"
-
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: crabdash-macos
           path: Crabdash-macOS-arm.zip
-
       - name: Publish GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
