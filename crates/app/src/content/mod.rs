@@ -18,8 +18,8 @@ fn active_panel(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     }
 }
 
-pub fn render_title_bar(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
-    title_bar::render(app, cx)
+pub fn render_title_bar(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
+    title_bar::render(app, window, cx)
 }
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
@@ -32,9 +32,19 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .child(
             div()
                 .flex_1()
+                .w_full()
                 .bg(rgb(0x1C1C1E))
                 .flex()
                 .flex_col()
-                .child(div().flex_1().p(px(20.0)).child(active_panel(app, cx))),
+                .child(
+                    div()
+                        .flex_1()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .px(px(20.0))
+                        .pt(px(20.0))
+                        .child(div().flex_1().w_full().child(active_panel(app, cx))),
+                ),
         )
 }

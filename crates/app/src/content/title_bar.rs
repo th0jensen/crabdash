@@ -5,11 +5,16 @@ use lucide_icons::Icon;
 use crate::app::Crabdash;
 use crate::components::common::{lucide_icon, machine_icon};
 
-pub(super) fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+#[cfg(not(target_os = "windows"))]
+pub fn platform_title_bar_height(window: &Window) -> Pixels {
+    (1.75 * window.rem_size()).max(px(34.))
+}
+
+pub(super) fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
     let selected_machine = app.selected_machine();
 
     div()
-        .h(px(38.0))
+        .h(platform_title_bar_height(window))
         .px(px(14.0))
         .border_b_1()
         .border_color(rgb(0x242426))

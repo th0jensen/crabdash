@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use services::ServiceItem;
 use std::process::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub machine_name: String,
     pub os_version: String,

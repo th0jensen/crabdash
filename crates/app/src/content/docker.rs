@@ -4,10 +4,13 @@ use gpui::*;
 
 use crate::{
     app::{Crabdash, DockerAction, DockerFilter},
-    components::common::{LucideIcon, lucide_icon},
+    components::{
+        common::{LucideIcon, lucide_icon},
+        scroll_list,
+    },
 };
 
-use super::shared::{error_panel, placeholder_card};
+use super::shared::placeholder_card;
 use services::{ServiceItem, docker::Docker};
 
 fn is_running_status(status: &str) -> bool {
@@ -239,24 +242,15 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &ServiceIt
                 ))),
         )
         .child(
-            // Keep trailing controls grouped here so per-container actions can
-            // be added beside the live status badge without reshaping the row.
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                .child(action_button(
-                    cx,
-                    service,
-                    DockerAction::Start,
-                    actions_disabled,
-                ))
-                .child(action_button(
-                    cx,
-                    service,
-                    DockerAction::Stop,
-                    actions_disabled,
-                ))
+                .child(if !is_running_status(&service.status) {
+                    action_button(cx, service, DockerAction::Start, actions_disabled)
+                } else {
+                    action_button(cx, service, DockerAction::Stop, actions_disabled)
+                })
                 .child(action_button(
                     cx,
                     service,
@@ -275,13 +269,11 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     let machine = app.selected_machine();
     let services = machine.services.docker.clone();
 
-    if let Some(error) = machine
-        .services
-        .docker_error
-        .as_ref()
-        .map(|error| error.to_string())
-    {
-        return error_panel("Unable to load Docker", error);
+    if machine.services.docker_error.is_some() {
+        return placeholder_card(
+            "No Containers Found",
+            "No containers have been loaded for this machine yet.",
+        );
     }
 
     let total_count = services.len();
@@ -297,63 +289,54 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             .collect(),
     };
 
-    div()
-        .flex()
-        .flex_col()
-        .h_full()
-        .gap(px(12.0))
-        .when(total_count > 0, |this| {
-            this.child(
-                div()
-                    .flex()
-                    .gap(px(8.0))
-                    .child(stats_chip(
-                        "docker-filter-total",
-                        "Total",
-                        total_count.to_string(),
-                        app.docker_filter == DockerFilter::Total,
-                        DockerFilter::Total,
-                        cx,
-                    ))
-                    .child(stats_chip(
-                        "docker-filter-running",
-                        "Running",
-                        running_count.to_string(),
-                        app.docker_filter == DockerFilter::Running,
-                        DockerFilter::Running,
-                        cx,
-                    )),
-            )
-        })
-        .child(
+    scroll_list::render(
+        "docker-scroll",
+        &app.docker_scroll_handle,
+        (total_count > 0).then(|| {
             div()
-                .id("docker-scroll")
-                .flex_1()
-                .overflow_y_scroll()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .when(total_count == 0, |this| {
-                            this.child(placeholder_card(
-                                "No Containers Found",
-                                "No containers have been loaded for this machine yet.",
-                            ))
-                        })
-                        .when(total_count > 0 && visible_services.is_empty(), |this| {
-                            this.child(placeholder_card(
-                                "No Running Containers",
-                                "No running containers match the current filter.",
-                            ))
-                        })
-                        .when(!visible_services.is_empty(), |this| {
-                            this.children(
-                                visible_services
-                                    .iter()
-                                    .map(|service| container_row(app, cx, service)),
-                            )
-                        }),
-                ),
-        )
+                .flex()
+                .gap(px(8.0))
+                .child(stats_chip(
+                    "docker-filter-total",
+                    "Total",
+                    total_count.to_string(),
+                    app.docker_filter == DockerFilter::Total,
+                    DockerFilter::Total,
+                    cx,
+                ))
+                .child(stats_chip(
+                    "docker-filter-running",
+                    "Running",
+                    running_count.to_string(),
+                    app.docker_filter == DockerFilter::Running,
+                    DockerFilter::Running,
+                    cx,
+                ))
+                .into_any_element()
+        }),
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .when(total_count == 0, |this| {
+                this.child(placeholder_card(
+                    "No Containers Found",
+                    "No containers have been loaded for this machine yet.",
+                ))
+            })
+            .when(total_count > 0 && visible_services.is_empty(), |this| {
+                this.child(placeholder_card(
+                    "No Running Containers",
+                    "No running containers match the current filter.",
+                ))
+            })
+            .when(!visible_services.is_empty(), |this| {
+                this.children(
+                    visible_services
+                        .iter()
+                        .map(|service| container_row(app, cx, service)),
+                )
+            }),
+        cx,
+    )
 }

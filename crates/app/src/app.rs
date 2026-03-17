@@ -18,7 +18,7 @@ use crate::{
     ToggleSidebar, ZoomWindow, show_about_dialog,
 };
 use machines::{machine::Machine, store::MachineStore};
-use services::docker::Docker;
+use services::{disks::Disks, docker::Docker};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum MainTab {
@@ -88,6 +88,9 @@ pub struct Crabdash {
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
+    pub(crate) docker_scroll_handle: ScrollHandle,
+    pub(crate) disks_scroll_handle: ScrollHandle,
+    pub(crate) services_scroll_handle: ScrollHandle,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) remote_password_field: Entity<TextField>,
@@ -118,6 +121,9 @@ impl Crabdash {
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
             status_message,
             add_machine_modal_open: false,
+            docker_scroll_handle: ScrollHandle::new(),
+            disks_scroll_handle: ScrollHandle::new(),
+            services_scroll_handle: ScrollHandle::new(),
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "thomas", 2, cx)),
             remote_password_field: cx.new(|cx| TextField::new("Password", "password", 3, cx)),
@@ -162,6 +168,10 @@ impl Crabdash {
     }
 
     pub(crate) fn refresh_services(&mut self) {
+        if let Err(error) = self.selected_machine_mut().sync_system_info() {
+            eprintln!("Failed to sync machine system info: {error}");
+        }
+
         match self.active_tab {
             MainTab::Docker => match self.selected_machine_mut().list_docker() {
                 Ok(services) => {
@@ -178,7 +188,21 @@ impl Crabdash {
                     self.set_status_error(message);
                 }
             },
-            MainTab::Disks => {}
+            MainTab::Disks => match self.selected_machine_mut().list_disks() {
+                Ok(services) => {
+                    let machine = self.selected_machine_mut();
+                    machine.services.disks = services;
+                    machine.services.disks_error = None;
+                    self.clear_status_message();
+                }
+                Err(error) => {
+                    let message = format!("Unable to load Disks: {error}");
+                    let machine = self.selected_machine_mut();
+                    machine.services.disks.clear();
+                    machine.services.disks_error = Some(error.to_string());
+                    self.set_status_error(message);
+                }
+            },
             MainTab::Services => {}
         }
     }
@@ -333,7 +357,7 @@ impl Render for Crabdash {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(content::render_title_bar(self, cx).on_mouse_down(
+                    .child(content::render_title_bar(self, window, cx).on_mouse_down(
                         MouseButton::Left,
                         |_, window, _| {
                             window.start_window_move();
@@ -357,16 +381,15 @@ impl Render for Crabdash {
                                 this.child(sidebar::render(self, cx))
                             })
                             .child(content::render(self, cx)),
-                    )
-                    .child(
-                        div()
-                            .h(px(36.0))
-                            .px(px(20.0))
-                            .border_t_1()
-                            .border_color(rgb(0x2F2F31))
-                            .flex()
-                            .items_center(),
-                    ),
+                    ), // .child(
+                       //     div()
+                       //         .h(px(36.0))
+                       //         .px(px(20.0))
+                       //         .border_t_1()
+                       //         .border_color(rgb(0x2F2F31))
+                       //         .flex()
+                       //         .items_center(),
+                       // ),
             )
             .when_some(self.status_message.as_ref(), |this, message| {
                 this.child(

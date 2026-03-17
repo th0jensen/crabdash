@@ -1,7 +1,7 @@
 use crate::{commands::SystemInfo, remote_connection::RemoteConnection, store::MachineStore};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use services::{MachineServices, ServiceItem, docker::Docker};
+use services::{MachineServices, ServiceItem, disks::Disks, docker::Docker};
 use std::process::Command;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,6 +90,23 @@ impl Machine {
             .as_ref()
             .map_or(true, |remote| remote.has_active_session())
     }
+
+    pub fn sync_system_info(&mut self) -> Result<bool> {
+        let system_info = match &mut self.remote {
+            Some(rc) => SystemInfo::remote(rc)?,
+            None => SystemInfo::local()?,
+        };
+
+        if self.system_info == system_info {
+            return Ok(false);
+        }
+
+        self.kind = MachineKind::get_kind(&system_info);
+        self.system_info = system_info;
+        MachineStore::save_machine(self.clone()).ok();
+
+        Ok(true)
+    }
 }
 
 impl Docker for Machine {
@@ -116,9 +133,11 @@ impl Docker for Machine {
     }
 
     fn list_docker(&mut self) -> Result<Vec<ServiceItem>> {
-        let args = ["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
         let docker = self.find_docker();
-        let stdout = self.run(&docker, Some(&args))?;
+        let stdout = self.run(
+            &docker,
+            Some(&["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"]),
+        )?;
         Ok(ServiceItem::convert_docker(stdout))
     }
 
@@ -134,6 +153,25 @@ impl Docker for Machine {
 
     fn container_logs(&mut self, _id: &str) -> Result<String> {
         todo!()
+    }
+}
+
+impl Disks for Machine {
+    fn list_disks(&mut self) -> Result<Vec<ServiceItem>> {
+        match self.kind {
+            MachineKind::MacOS => {
+                let stdout = self.run("diskutil", Some(&["list"]))?;
+                Ok(ServiceItem::convert_diskutil(&stdout))
+            }
+            MachineKind::Linux => {
+                let stdout = self.run(
+                    "lsblk",
+                    Some(&["-P", "-o", "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL"]),
+                )?;
+                Ok(ServiceItem::convert_lsblk(&stdout))
+            }
+            MachineKind::Unknown => bail!("System does not yet support the disks feature"),
+        }
     }
 }
 

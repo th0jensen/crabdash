@@ -1,7 +1,8 @@
+use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
 
-use crate::app::Crabdash;
+use crate::{app::Crabdash, components::scroll_list};
 
 use super::shared::{error_panel, placeholder_card};
 use services::ServiceItem;
@@ -54,10 +55,12 @@ fn stats_chip(label: &str, value: String) -> Div {
 fn disk_row(service: &ServiceItem) -> Div {
     div()
         .w_full()
+        .bg(rgb(0x2C2C2E))
+        .border_1()
+        .border_color(rgb(0x2F2F31))
+        .rounded(px(8.0))
         .px(px(14.0))
         .py(px(12.0))
-        .border_b_1()
-        .border_color(rgb(0x2F2F31))
         .flex()
         .justify_between()
         .items_center()
@@ -73,28 +76,28 @@ fn disk_row(service: &ServiceItem) -> Div {
                         .text_color(white())
                         .child(service.name.clone()),
                 )
-                .child(div().text_xs().text_color(rgb(0x8E8E93)).child(format!(
-                    "{} • {}",
-                    service.kind.label(),
-                    service.id
-                ))),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8E8E93))
+                        .child(format!("ID: {}", service.id)),
+                ),
         )
-        .child(status_badge(&service.status))
+        .child(
+            div().flex().items_center().gap(px(10.0)).child(
+                status_badge(&service.status.capitalize())
+                    .w(px(80.0))
+                    .text_center(),
+            ),
+        )
 }
 
-pub fn render(app: &Crabdash, _cx: &mut Context<Crabdash>) -> Div {
+pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     let machine = app.selected_machine();
-    let services = &machine.services.disks;
+    let services = machine.services.disks.clone();
 
     if let Some(error) = machine.services.disks_error.clone() {
         return error_panel("Unable to load disks", error);
-    }
-
-    if services.is_empty() {
-        return placeholder_card(
-            "DISKS",
-            "No disk items have been loaded for this machine yet.",
-        );
     }
 
     let healthy_count = services
@@ -102,32 +105,30 @@ pub fn render(app: &Crabdash, _cx: &mut Context<Crabdash>) -> Div {
         .filter(|service| service.status.contains("mounted") || service.status.contains("healthy"))
         .count();
 
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .child(
+    scroll_list::render(
+        "disks-scroll",
+        &app.disks_scroll_handle,
+        (!services.is_empty()).then(|| {
             div()
                 .flex()
                 .gap(px(8.0))
                 .child(stats_chip("Total", services.len().to_string()))
-                .child(stats_chip("Healthy", healthy_count.to_string())),
-        )
-        .child(
-            div()
-                .id("disks-scroll")
-                .bg(rgb(0x2C2C2E))
-                .border_1()
-                .border_color(rgb(0x2F2F31))
-                .overflow_y_scroll()
-                .child(
-                    div()
-                        .px(px(14.0))
-                        .py(px(12.0))
-                        .border_b_1()
-                        .border_color(rgb(0x2F2F31))
-                        .child(div().text_xs().text_color(rgb(0x8E8E93)).child("DISKS")),
-                )
-                .children(services.iter().map(disk_row)),
-        )
+                .child(stats_chip("Healthy", healthy_count.to_string()))
+                .into_any_element()
+        }),
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .when(services.is_empty(), |this| {
+                this.child(placeholder_card(
+                    "No Disks Found",
+                    "No disks have been loaded for this machine yet.",
+                ))
+            })
+            .when(!services.is_empty(), |this| {
+                this.children(services.iter().map(disk_row))
+            }),
+        cx,
+    )
 }
