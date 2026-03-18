@@ -3,26 +3,18 @@ use gpui::prelude::*;
 use gpui::*;
 
 use crate::{
-    app::{Crabdash, DockerAction, DockerFilter},
-    components::{
-        common::{LucideIcon, lucide_icon},
-        scroll_list,
-    },
+    app::Crabdash,
+    components::{common::lucide_icon, scroll_list},
 };
 
 use super::shared::placeholder_card;
-use services::{ServiceItem, docker::Docker};
+use services::docker::{Container, Docker, DockerAction, DockerFilter};
 
-fn is_running_status(status: &str) -> bool {
-    let normalized = status.to_ascii_lowercase();
-    normalized.contains("running") || normalized.contains("healthy")
-}
-
-fn status_badge(status: &str, pending_action: Option<DockerAction>) -> Div {
+fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> Div {
     let label = pending_action
         .map(|action| action.pending_label())
-        .unwrap_or(status);
-    let is_running = pending_action.is_none() && is_running_status(status);
+        .unwrap_or(&container.status);
+    let is_running = pending_action.is_none() && container.is_running_status();
     let is_pending = pending_action.is_some();
     let status_bg = if is_running {
         rgb(0x193D2A)
@@ -46,7 +38,7 @@ fn status_badge(status: &str, pending_action: Option<DockerAction>) -> Div {
         .bg(status_bg)
         .text_xs()
         .text_color(status_fg)
-        .child(label.to_string())
+        .child(label.to_string().capitalize())
 }
 
 fn stats_chip(
@@ -90,7 +82,7 @@ fn stats_chip(
 
 fn action_button(
     cx: &mut Context<Crabdash>,
-    cont: &ServiceItem,
+    container: &Container,
     action: DockerAction,
     disabled: bool,
 ) -> impl IntoElement {
@@ -98,14 +90,10 @@ fn action_button(
     let disabled_bg = rgb(0x202022);
     let disabled_fg = rgb(0x6C6C70);
     let hover_bg = rgb(0x2F2F31);
-    let cont_id = cont.id.clone();
-    let cont_name = cont.name.clone();
-    let button_id = SharedString::from(format!("{}-container-{cont_id}", action.command()));
-    let icon = match action {
-        DockerAction::Start => LucideIcon::Play,
-        DockerAction::Stop => LucideIcon::X,
-        DockerAction::Restart => LucideIcon::RefreshCw,
-    };
+
+    let id = container.id.clone();
+    let name = container.name.clone();
+    let button_id = SharedString::from(format!("{}-container-{id}", action.command()));
 
     let button = div()
         .id(button_id)
@@ -119,7 +107,7 @@ fn action_button(
         .border_color(if disabled { disabled_bg } else { rgb(0x2F2F31) })
         .rounded(px(8.0))
         .text_color(if disabled { disabled_fg } else { rgb(0xFFFFFF) })
-        .child(lucide_icon(icon, 14.0));
+        .child(lucide_icon(action.icon(), 14.0));
 
     if disabled {
         button.cursor_default()
@@ -131,73 +119,60 @@ fn action_button(
                 let machine_index = this.selected_machine;
                 let mut machine = this.selected_machine().background_clone();
 
-                let cont_id = cont_id.clone();
-                let cont_name = cont_name.clone();
-
-                if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
-                    this.pending_docker_actions.insert(cont_id.clone(), action);
-
-                    if let Some(container) = machine
-                        .services
-                        .docker
-                        .iter_mut()
-                        .find(|c| c.id.as_str() == cont_id.as_str())
-                    {
+                if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
+                    this.pending_docker_actions.insert(id.clone(), action);
+                    if let Some(container) = m.services.docker.iter_mut().find(|c| c.id == id) {
                         container.error = None;
                     }
                 }
 
                 cx.notify();
 
+                let spawn_name = name.clone();
+                let spawn_id = id.clone();
+
                 cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
                     let mut cx = cx.clone();
-                    let bg_cont_id = cont_id.clone();
+                    let bg_id = spawn_id.clone();
 
                     async move {
                         let result = cx
                             .background_spawn(async move {
-                                machine.container_action(&bg_cont_id, action.command())?;
+                                machine.container_action(&bg_id, action.command())?;
                                 machine.list_docker()
                             })
                             .await;
 
                         this.update(&mut cx, move |this, cx| {
-                            this.pending_docker_actions.remove(&cont_id);
-
+                            this.pending_docker_actions.remove(&spawn_id);
                             match result {
-                                Ok(services) => {
-                                    if let Some(machine) =
+                                Ok(containers) => {
+                                    if let Some(m) =
                                         this.machine_store.machines.get_mut(machine_index)
                                     {
-                                        machine.services.docker = services;
-                                        machine.services.docker_error = None;
+                                        m.services.docker = containers;
+                                        m.services.docker_error = None;
                                     }
-
                                     this.clear_status_message();
                                 }
                                 Err(err) => {
                                     let message = format!(
-                                        "Failed to {} {cont_name}: {err}",
+                                        "Failed to {} {spawn_name}: {err}",
                                         action.command()
                                     );
                                     eprintln!("{message}");
                                     this.set_status_error(message.clone());
-
-                                    if let Some(machine) =
+                                    if let Some(m) =
                                         this.machine_store.machines.get_mut(machine_index)
                                     {
-                                        if let Some(container) = machine
-                                            .services
-                                            .docker
-                                            .iter_mut()
-                                            .find(|c| c.id.as_str() == cont_id.as_str())
+                                        if let Some(container) =
+                                            m.services.docker.iter_mut().find(|c| c.id == spawn_id)
                                         {
                                             container.error = Some(message);
                                         }
                                     }
                                 }
                             }
-
                             cx.notify();
                         })
                         .ok();
@@ -208,8 +183,8 @@ fn action_button(
     }
 }
 
-fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &ServiceItem) -> Div {
-    let pending_action = app.pending_docker_actions.get(&service.id).copied();
+fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Container) -> Div {
+    let pending_action = app.pending_docker_actions.get(&container.id).copied();
     let actions_disabled = pending_action.is_some();
 
     div()
@@ -233,32 +208,33 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &ServiceIt
                     div()
                         .text_sm()
                         .text_color(white())
-                        .child(service.name.clone()),
+                        .child(container.name.clone()),
                 )
-                .child(div().text_xs().text_color(rgb(0x8E8E93)).child(format!(
-                    "ID: {}",
-                    // service.kind.label(),
-                    service.id
-                ))),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8E8E93))
+                        .child(format!("ID: {}", container.id)),
+                ),
         )
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                .child(if !is_running_status(&service.status) {
-                    action_button(cx, service, DockerAction::Start, actions_disabled)
+                .child(if !container.is_running_status() {
+                    action_button(cx, container, DockerAction::Start, actions_disabled)
                 } else {
-                    action_button(cx, service, DockerAction::Stop, actions_disabled)
+                    action_button(cx, container, DockerAction::Stop, actions_disabled)
                 })
                 .child(action_button(
                     cx,
-                    service,
+                    container,
                     DockerAction::Restart,
                     actions_disabled,
                 ))
                 .child(
-                    status_badge(&service.status.capitalize(), pending_action)
+                    status_badge(&container, pending_action)
                         .w(px(80.0))
                         .text_center(),
                 ),
@@ -267,25 +243,18 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &ServiceIt
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     let machine = app.selected_machine();
-    let services = machine.services.docker.clone();
+    let containers = machine.services.docker.clone();
 
-    if machine.services.docker_error.is_some() {
-        return placeholder_card(
-            "No Containers Found",
-            "No containers have been loaded for this machine yet.",
-        );
-    }
-
-    let total_count = services.len();
-    let running_count = services
+    let total_count = containers.len();
+    let running_count = containers
         .iter()
-        .filter(|service| is_running_status(&service.status))
+        .filter(|container| container.is_running_status())
         .count();
-    let visible_services: Vec<ServiceItem> = match app.docker_filter {
-        DockerFilter::Total => services,
-        DockerFilter::Running => services
+    let visible_services: Vec<Container> = match app.docker_filter {
+        DockerFilter::Total => containers,
+        DockerFilter::Running => containers
             .into_iter()
-            .filter(|service| is_running_status(&service.status))
+            .filter(|container| container.is_running_status())
             .collect(),
     };
 

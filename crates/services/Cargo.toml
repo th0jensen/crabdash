@@ -7,6 +7,8 @@ authors.workspace = true
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
+plist = "1.8.0"
+lucide-icons = "0.575.0"
 serde = { version = "1.0.228", features = ["derive"] }
 
 [lints]

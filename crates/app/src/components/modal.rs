@@ -2,8 +2,48 @@ use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
 
-use crate::app::Crabdash;
+use crate::app::{AddMachineAuthMode, Crabdash};
 use crate::components::common::{button, lucide_icon};
+
+fn auth_mode_button(
+    app: &Crabdash,
+    mode: AddMachineAuthMode,
+    cx: &mut Context<Crabdash>,
+) -> Stateful<Div> {
+    let selected = app.add_machine_auth_mode == mode;
+
+    div()
+        .id(SharedString::from(format!("auth-mode-{}", mode.label())))
+        .h(px(34.0))
+        .px(px(12.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(if selected {
+            rgb(0x0A84FF)
+        } else {
+            rgb(0x2F2F31)
+        })
+        .bg(if selected {
+            rgb(0x1F3656)
+        } else {
+            rgb(0x2C2C2E)
+        })
+        .text_sm()
+        .text_color(if selected {
+            rgb(0xFFFFFF)
+        } else {
+            rgb(0xAEAEB2)
+        })
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(0x3A3A3C)))
+        .child(mode.label())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_add_machine_auth_mode(mode, cx);
+        }))
+}
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()
@@ -95,12 +135,40 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .gap(px(12.0))
                                         .child(app.remote_host_field.clone())
                                         .child(app.remote_user_field.clone())
-                                        .child(app.remote_password_field.clone())
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .gap(px(8.0))
+                                                .child(auth_mode_button(
+                                                    app,
+                                                    AddMachineAuthMode::Password,
+                                                    cx,
+                                                ))
+                                                .child(auth_mode_button(
+                                                    app,
+                                                    AddMachineAuthMode::AuthKey,
+                                                    cx,
+                                                )),
+                                        )
+                                        .when(
+                                            app.add_machine_auth_mode
+                                                == AddMachineAuthMode::Password,
+                                            |this| this.child(app.remote_password_field.clone()),
+                                        )
+                                        .when(
+                                            app.add_machine_auth_mode
+                                                == AddMachineAuthMode::AuthKey,
+                                            |this| {
+                                                this.child(app.remote_private_key_field.clone())
+                                                    .child(app.remote_public_key_field.clone())
+                                                    .child(app.remote_passphrase_field.clone())
+                                            },
+                                        )
                                         .child(
                                             div()
                                                 .text_xs()
                                                 .text_color(rgb(0xAEAEB2))
-                                                .child("Your passwords will be stored in your local encrypted keychain and not uploaded anywhere."),
+                                                .child("Passwords and SSH key passphrases are stored in your local encrypted keychain and not uploaded anywhere."),
                                         )
                                         .when_some(app.add_machine_error.as_ref(), |this, error| {
                                             this.child(

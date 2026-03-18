@@ -1,5 +1,5 @@
 //! Documentation for my own reference:
-//! https://leopard-adc.pepas.com/technotes/tn2006/tn2179.html
+//! <https://leopard-adc.pepas.com/technotes/tn2006/tn2179.html>
 
 #[cfg(target_os = "macos")]
 use objc2::runtime::AnyObject;

@@ -118,7 +118,7 @@ fn machine_item(
                         this.selected_machine_mut()
                             .remote
                             .as_ref()
-                            .filter(|rc| rc.password.is_empty())
+                            .filter(|rc| rc.auth.is_some())
                             .map(|rc| format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host))
                     })
                     .ok()
@@ -129,7 +129,9 @@ fn machine_item(
                         if let Ok(Some((_, bytes))) = creds_future.await {
                             this.update(cx, |this, _| {
                                 if let Some(rc) = this.selected_machine_mut().remote.as_mut() {
-                                    rc.password = String::from_utf8_lossy(&bytes).to_string();
+                                    if let Some(auth) = rc.auth.as_mut() {
+                                        auth.apply_secret(String::from_utf8_lossy(&bytes).into());
+                                    }
                                 }
                             })
                             .ok();

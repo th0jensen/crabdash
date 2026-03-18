@@ -22,8 +22,8 @@ jobs:
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
           cp assets/icons/Assets.car "$APP/Contents/Resources/Assets.car"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$APP/Contents/Info.plist" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Contents/Info.plist" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Contents/Info.plist"
       - name: Codesign app
         run: |
           APP="target/release/bundle/osx/Crabdash.app"

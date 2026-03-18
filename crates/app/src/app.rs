@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
+use services::docker::{DockerAction, DockerFilter};
 
 use crate::components::common::LucideIcon;
 use crate::components::text_field::{
@@ -17,8 +18,9 @@ use crate::{
     AboutCrabdash, CloseWindow, MinimizeWindow, OpenAddMachine, RefreshServices, ToggleFullScreen,
     ToggleSidebar, ZoomWindow, show_about_dialog,
 };
-use machines::{machine::Machine, store::MachineStore};
+use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
 use services::{disks::Disks, docker::Docker};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum MainTab {
@@ -46,38 +48,6 @@ impl MainTab {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum DockerFilter {
-    #[default]
-    Total,
-    Running,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DockerAction {
-    Start,
-    Stop,
-    Restart,
-}
-
-impl DockerAction {
-    pub(crate) fn command(self) -> &'static str {
-        match self {
-            Self::Start => "start",
-            Self::Stop => "stop",
-            Self::Restart => "restart",
-        }
-    }
-
-    pub(crate) fn pending_label(self) -> &'static str {
-        match self {
-            Self::Start => "Starting",
-            Self::Stop => "Stopping",
-            Self::Restart => "Restarting",
-        }
-    }
-}
-
 pub struct Crabdash {
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
@@ -93,9 +63,29 @@ pub struct Crabdash {
     pub(crate) services_scroll_handle: ScrollHandle,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
+    pub(crate) add_machine_auth_mode: AddMachineAuthMode,
     pub(crate) remote_password_field: Entity<TextField>,
+    pub(crate) remote_private_key_field: Entity<TextField>,
+    pub(crate) remote_public_key_field: Entity<TextField>,
+    pub(crate) remote_passphrase_field: Entity<TextField>,
     pub(crate) add_machine_error: Option<anyhow::Error>,
     pub focus_handle: FocusHandle,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AddMachineAuthMode {
+    #[default]
+    Password,
+    AuthKey,
+}
+
+impl AddMachineAuthMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Password => "Password",
+            Self::AuthKey => "Auth Key",
+        }
+    }
 }
 
 impl Crabdash {
@@ -125,8 +115,16 @@ impl Crabdash {
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
-            remote_user_field: cx.new(|cx| TextField::new("User", "thomas", 2, cx)),
-            remote_password_field: cx.new(|cx| TextField::new("Password", "password", 3, cx)),
+            remote_user_field: cx.new(|cx| TextField::new("User", "user", 2, cx)),
+            add_machine_auth_mode: AddMachineAuthMode::default(),
+            remote_password_field: cx
+                .new(|cx| TextField::new("Password (Optional)", "password", 3, cx)),
+            remote_private_key_field: cx
+                .new(|cx| TextField::new("Private Key", "~/.ssh/id_ed25519", 4, cx)),
+            remote_public_key_field: cx
+                .new(|cx| TextField::new("Public Key (Optional)", "~/.ssh/id_ed25519.pub", 5, cx)),
+            remote_passphrase_field: cx
+                .new(|cx| TextField::new("Passphrase (Optional)", "passphrase", 6, cx)),
             add_machine_error: None,
             focus_handle: cx.focus_handle(),
         };
@@ -174,9 +172,9 @@ impl Crabdash {
 
         match self.active_tab {
             MainTab::Docker => match self.selected_machine_mut().list_docker() {
-                Ok(services) => {
+                Ok(containers) => {
                     let machine = self.selected_machine_mut();
-                    machine.services.docker = services;
+                    machine.services.docker = containers;
                     machine.services.docker_error = None;
                     self.clear_status_message();
                 }
@@ -220,6 +218,16 @@ impl Crabdash {
         cx.notify();
     }
 
+    pub(crate) fn set_add_machine_auth_mode(
+        &mut self,
+        mode: AddMachineAuthMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_machine_auth_mode = mode;
+        self.add_machine_error = None;
+        cx.notify();
+    }
+
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
@@ -243,7 +251,14 @@ impl Crabdash {
             .update(cx, |field, cx| field.clear(cx));
         self.remote_user_field
             .update(cx, |field, cx| field.clear(cx));
+        self.add_machine_auth_mode = AddMachineAuthMode::Password;
         self.remote_password_field
+            .update(cx, |field, cx| field.clear(cx));
+        self.remote_private_key_field
+            .update(cx, |field, cx| field.clear(cx));
+        self.remote_public_key_field
+            .update(cx, |field, cx| field.clear(cx));
+        self.remote_passphrase_field
             .update(cx, |field, cx| field.clear(cx));
     }
 
@@ -252,17 +267,62 @@ impl Crabdash {
 
         let host = self.remote_host_field.read(cx).text().trim().to_string();
         let user = self.remote_user_field.read(cx).text().trim().to_string();
-        let password = self.remote_password_field.read(cx).text();
+        let auth = match self.add_machine_auth_mode {
+            AddMachineAuthMode::Password => {
+                let password = self.remote_password_field.read(cx).text();
+                Ok(AuthMethod::Password(password))
+            }
+            AddMachineAuthMode::AuthKey => {
+                let private_key = self
+                    .remote_private_key_field
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .to_string();
+                let public_key = self
+                    .remote_public_key_field
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .to_string();
+                let passphrase = self
+                    .remote_passphrase_field
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .to_string();
 
-        if host.is_empty() || user.is_empty() || password.trim().is_empty() {
-            let error = anyhow!("Host, user, and password are required.");
+                if private_key.is_empty() {
+                    Err(anyhow!("Host, user, and private key are required."))
+                } else {
+                    Ok(AuthMethod::AuthKey {
+                        pubkey: (!public_key.is_empty()).then(|| PathBuf::from(public_key)),
+                        privatekey: PathBuf::from(private_key),
+                        passphrase: (!passphrase.is_empty()).then_some(passphrase),
+                    })
+                }
+            }
+        };
+
+        if host.is_empty() || user.is_empty() {
+            let error = anyhow!("Host and user are required.");
             self.set_status_error(error.to_string());
             self.add_machine_error = Some(error);
             cx.notify();
             return;
         }
 
-        match self.machine_store.add_remote_machine(user, host, password) {
+        let auth = match auth {
+            Ok(auth) => auth,
+            Err(error) => {
+                self.set_status_error(error.to_string());
+                self.add_machine_error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+
+        match self.machine_store.add_remote_machine(user, host, auth) {
             Ok(index) => {
                 self.selected_machine = index;
                 self.add_machine_modal_open = false;
@@ -273,16 +333,26 @@ impl Crabdash {
                 if let Some(rc) = self.selected_machine().remote.as_ref() {
                     let key = format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host);
                     let user = rc.user.clone();
-                    let password = rc.password.clone();
-                    cx.spawn(async move |_, cx| {
-                        let future = cx
-                            .update(|app| app.write_credentials(&key, &user, password.as_bytes()))
-                            .ok();
-                        if let Some(future) = future {
-                            future.await.ok();
-                        }
-                    })
-                    .detach();
+                    let auth = rc.auth.clone();
+                    if let Some(secret) = auth.and_then(|auth| auth.secret_bytes()) {
+                        cx.spawn(async move |_, cx| {
+                            let future = cx
+                                .update(|app| app.write_credentials(&key, &user, &secret))
+                                .ok();
+                            if let Some(future) = future {
+                                future.await.ok();
+                            }
+                        })
+                        .detach();
+                    } else {
+                        cx.spawn(async move |_, cx| {
+                            let future = cx.update(|app| app.delete_credentials(&key)).ok();
+                            if let Some(future) = future {
+                                future.await.ok();
+                            }
+                        })
+                        .detach();
+                    }
                 }
             }
             Err(error) => {

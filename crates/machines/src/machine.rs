@@ -1,11 +1,21 @@
-use crate::{commands::SystemInfo, remote_connection::RemoteConnection, store::MachineStore};
+use crate::{
+    commands::SystemInfo,
+    remote_connection::{AuthMethod, RemoteConnection},
+    store::MachineStore,
+};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use services::{MachineServices, ServiceItem, disks::Disks, docker::Docker};
+use services::{
+    Disk, MachineServices,
+    disks::Disks,
+    docker::{Container, Docker},
+};
 use std::process::Command;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Machine {
+    pub uuid: Uuid,
     pub id: String,
     pub system_info: SystemInfo,
     pub kind: MachineKind,
@@ -16,11 +26,26 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new_remote(user: &str, host: &str, password: &str) -> Result<Self> {
-        let mut rc = RemoteConnection::new_connection(user, host, password)?;
+    /// Creates a new [`Machine`] connected to a remote host via SSH.
+    ///
+    /// Establishes an SSH connection and queries the remote system for its
+    /// information, which is used to determine the machine kind.
+    ///
+    /// # Arguments
+    /// * `user`: The SSH username
+    /// * `host`: The hostname or IP address to connect to
+    /// * `auth`: SSH authentication details
+    ///
+    /// # Returns
+    /// * `Ok(Machine)`: A fully initialised machine with an active SSH connection
+    /// * `Err(anyhow::Error)`: If the SSH connection fails, or if querying remote
+    ///   system information fails
+    pub fn new_remote(user: &str, host: &str, auth: AuthMethod) -> Result<Self> {
+        let mut rc = RemoteConnection::new_connection(user, host, auth)?;
         let system_info = SystemInfo::remote(&mut rc)?;
 
         Ok(Self {
+            uuid: Uuid::new_v4(),
             id: format!("{user}@{host}"),
             kind: MachineKind::get_kind(&system_info),
             system_info,
@@ -29,7 +54,20 @@ impl Machine {
             services: MachineServices::default(),
         })
     }
-
+    /// Runs a command either locally or on the configured remote machine via SSH,
+    /// depending on whether a remote connection is active.
+    ///
+    /// On failure, diagnostic output is written to stderr.
+    ///
+    /// # Arguments
+    /// * `cmd`: The program to execute
+    /// * `args`: Arguments to pass to the program. `None` is equivalent to `Some(&[])`.
+    ///
+    /// # Returns
+    /// * `Ok(String)`: Captured stdout from the command
+    /// * `Err(anyhow::Error)`: If the command exits with a non-zero status, or if
+    ///   spawning/communication fails. The error message prefers stderr over stdout,
+    ///   falling back to a generic exit status message if both are empty.
     pub fn run(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<String> {
         match &mut self.remote {
             Some(rc) => {
@@ -73,9 +111,17 @@ impl Machine {
             }
         }
     }
-
+    /// Creates a lightweight clone of this machine with a fresh service state.
+    ///
+    /// All fields are cloned from the original except `services`, which is
+    /// reset to [`MachineServices::default`]. Intended for use when the same
+    /// machine connection needs to be shared across background tasks.
+    ///
+    /// Note: if the machine has an active SSH connection, the underlying
+    /// connection handle is cloned and shared — not duplicated.
     pub fn background_clone(&self) -> Self {
         Self {
+            uuid: self.uuid.clone(),
             id: self.id.clone(),
             system_info: self.system_info.clone(),
             kind: self.kind,
@@ -84,13 +130,26 @@ impl Machine {
             services: MachineServices::default(),
         }
     }
-
+    /// Returns whether the machine is reachable and has an active connection.
+    ///
+    /// For remote machines, delegates to the underlying SSH session state.
+    /// For local machines, always returns `true`.
     pub fn has_active_connection(&self) -> bool {
         self.remote
             .as_ref()
             .map_or(true, |remote| remote.has_active_session())
     }
-
+    /// Refreshes system information from the machine and updates internal state
+    /// if it has changed.
+    ///
+    /// If the newly retrieved info differs from the current state, the machine
+    /// kind is re-evaluated and the updated machine is persisted via
+    /// [`MachineStore::save_machine`]. Persistence failures are silently ignored.
+    ///
+    /// # Returns
+    /// * `Ok(true)`: System info has changed and state was updated
+    /// * `Ok(false)`: System info is unchanged
+    /// * `Err(anyhow::Error)`: If querying system info fails
     pub fn sync_system_info(&mut self) -> Result<bool> {
         let system_info = match &mut self.remote {
             Some(rc) => SystemInfo::remote(rc)?,
@@ -132,13 +191,13 @@ impl Docker for Machine {
         path
     }
 
-    fn list_docker(&mut self) -> Result<Vec<ServiceItem>> {
+    fn list_docker(&mut self) -> Result<Vec<Container>> {
         let docker = self.find_docker();
         let stdout = self.run(
             &docker,
             Some(&["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"]),
         )?;
-        Ok(ServiceItem::convert_docker(stdout))
+        Ok(Container::parse_output(stdout))
     }
 
     fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
@@ -157,18 +216,34 @@ impl Docker for Machine {
 }
 
 impl Disks for Machine {
-    fn list_disks(&mut self) -> Result<Vec<ServiceItem>> {
+    fn list_disks(&mut self) -> Result<Vec<Disk>> {
         match self.kind {
             MachineKind::MacOS => {
-                let stdout = self.run("diskutil", Some(&["list"]))?;
-                Ok(ServiceItem::convert_diskutil(&stdout))
+                let list_stdout = self.run("diskutil", Some(&["list", "-plist"]))?;
+                let apfs_stdout = self.run("diskutil", Some(&["apfs", "list", "-plist"])).ok();
+                let mut disks = Disk::convert_diskutil(&list_stdout, apfs_stdout.as_deref())?;
+
+                for disk in &mut disks {
+                    let identifier = disk.id.trim_start_matches("/dev/");
+                    if let Ok(info_stdout) =
+                        self.run("diskutil", Some(&["info", "-plist", identifier]))
+                    {
+                        let _ = disk.apply_diskutil_info(&info_stdout);
+                    }
+                }
+
+                Ok(disks)
             }
             MachineKind::Linux => {
                 let stdout = self.run(
                     "lsblk",
-                    Some(&["-P", "-o", "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL"]),
+                    Some(&[
+                        "-P",
+                        "-o",
+                        "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL,PKNAME,FSTYPE,LABEL,RM,HOTPLUG,TRAN",
+                    ]),
                 )?;
-                Ok(ServiceItem::convert_lsblk(&stdout))
+                Ok(Disk::convert_lsblk(&stdout))
             }
             MachineKind::Unknown => bail!("System does not yet support the disks feature"),
         }
