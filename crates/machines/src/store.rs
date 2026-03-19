@@ -79,13 +79,13 @@ impl MachineStore {
     /// # Returns
     /// * `Ok(())`: The store was successfully saved
     /// * `Err(anyhow::Error)`: If loading or saving the store fails
-    pub fn remove_machine(mc: Machine) -> Result<()> {
+    pub fn remove_machine(uuid: Uuid) -> Result<()> {
         let mut store = Self::load()?;
         let index = store
             .machines
             .iter()
-            .position(|m| m.uuid == mc.uuid)
-            .ok_or_else(|| anyhow!("No machine found with id '{}'", mc.id))?;
+            .position(|m| m.uuid == uuid)
+            .ok_or_else(|| anyhow!("No machine found with uuid '{}'", uuid))?;
         store.machines.remove(index);
         store.save()
     }

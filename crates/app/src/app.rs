@@ -22,6 +22,7 @@ use crate::{
 use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
 use services::{disks::Disks, docker::Docker};
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum MainTab {
@@ -213,6 +214,34 @@ impl Crabdash {
             },
             MainTab::Services => {}
         }
+    }
+
+    pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
+        if let Err(error) = MachineStore::remove_machine(uuid) {
+            let message = format!("Unable to delete machine: {error}");
+            eprintln!("{message}");
+            self.set_status_error(message);
+            cx.notify();
+            return;
+        }
+
+        match MachineStore::load() {
+            Ok(store) => {
+                self.machine_store = store;
+                self.selected_machine = self
+                    .selected_machine
+                    .min(self.machine_store.machines.len().saturating_sub(1));
+                self.refresh_services();
+                self.clear_status_message();
+            }
+            Err(error) => {
+                let message = format!("Unable to reload machines after delete: {error}");
+                eprintln!("{message}");
+                self.set_status_error(message);
+            }
+        }
+
+        cx.notify();
     }
 
     pub(crate) fn open_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

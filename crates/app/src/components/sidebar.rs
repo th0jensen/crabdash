@@ -3,7 +3,11 @@ use gpui::*;
 use lucide_icons::Icon;
 
 use crate::app::Crabdash;
-use crate::components::common::{lucide_icon, machine_icon};
+use crate::components::{
+    common::{lucide_icon, machine_icon},
+    context_menu::ContextMenu,
+    right_click_menu::right_click_menu,
+};
 use machines::machine::Machine;
 
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 250.0;
@@ -202,13 +206,48 @@ fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
 }
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
+    let app_entity = cx.entity();
     let machine_entries: Vec<_> = app
         .machine_store
         .machines
         .iter()
         .enumerate()
         .map(|(index, machine)| {
-            machine_item(machine, index, app.selected_machine == index, cx).into_any_element()
+            let row =
+                machine_item(machine, index, app.selected_machine == index, cx).into_any_element();
+            let machine_uuid = machine.uuid;
+
+            let menu_app = app_entity.clone();
+            let is_localhost = machine.id == "localhost";
+            right_click_menu(SharedString::from(format!(
+                "machine-context-menu-{}",
+                machine.id
+            )))
+            .trigger(move |_, _, _| row)
+            .menu(move |window, cx| {
+                let menu_app = menu_app.clone();
+                ContextMenu::build(window, cx, move |menu, _, _| {
+                    let menu_app_refresh = menu_app.clone();
+                    let menu_app_delete = menu_app.clone();
+                    let menu = menu.entry("Refresh", Icon::RefreshCw, None, move |_, cx| {
+                        menu_app_refresh.update(cx, |app, _| app.refresh_services())
+                    });
+                    if is_localhost {
+                        menu
+                    } else {
+                        menu.destructive_entry(
+                            "Delete",
+                            Icon::X,
+                            Some(rgb(0xBA3C3C)),
+                            move |_, cx| {
+                                menu_app_delete
+                                    .update(cx, |app, cx| app.delete_machine(machine_uuid, cx))
+                            },
+                        )
+                    }
+                })
+            })
+            .into_any_element()
         })
         .collect();
 
