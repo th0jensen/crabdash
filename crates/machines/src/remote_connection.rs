@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ssh2::Session;
 use std::{
     fmt::{Debug, Formatter},
@@ -8,43 +8,10 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Clone)]
-pub enum AuthMethod {
-    Password(String),
-    AuthKey {
-        pubkey: Option<PathBuf>,
-        privatekey: PathBuf,
-        passphrase: Option<String>,
-    },
-}
-
-impl AuthMethod {
-    pub fn secret_bytes(&self) -> Option<Vec<u8>> {
-        match self {
-            Self::Password(password) if !password.trim().is_empty() => {
-                Some(password.as_bytes().to_vec())
-            }
-            Self::AuthKey {
-                passphrase: Some(passphrase),
-                ..
-            } if !passphrase.trim().is_empty() => Some(passphrase.as_bytes().to_vec()),
-            _ => None,
-        }
-    }
-
-    pub fn apply_secret(&mut self, secret: String) {
-        match self {
-            Self::Password(password) => *password = secret,
-            Self::AuthKey { passphrase, .. } => *passphrase = Some(secret),
-        }
-    }
-}
-
 #[derive(Default, Serialize, Deserialize)]
 pub struct RemoteConnection {
     pub user: String,
     pub host: String,
-    #[serde(skip, default)]
     pub auth: Option<AuthMethod>,
     #[serde(skip)]
     session: Option<Session>,
@@ -84,6 +51,7 @@ impl RemoteConnection {
         )?;
 
         match &self.auth {
+            Some(AuthMethod::None) => sess.userauth_password(&self.user, "")?,
             Some(AuthMethod::AuthKey {
                 pubkey,
                 privatekey,
@@ -185,29 +153,78 @@ impl Debug for RemoteConnection {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[derive(Clone)]
+pub enum AuthMethod {
+    None,
+    Password(String),
+    AuthKey {
+        pubkey: Option<PathBuf>,
+        privatekey: PathBuf,
+        passphrase: Option<String>,
+    },
+}
 
-//     #[test]
-//     fn test_connect() -> Result<()> {
-// let rc = RemoteConnection {
-//     user: "thomas".to_string(),
-//     host: "prestige".to_string(),
-//     password: "tailscale".to_string(),
-//     session: None,
-// };
-//     let sess = rc.connect()?;
-//     assert!(sess.authenticated());
-//     Ok(())
-// }
+impl AuthMethod {
+    pub fn secret_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::None => None,
+            Self::Password(password) if !password.trim().is_empty() => {
+                Some(password.as_bytes().to_vec())
+            }
+            Self::AuthKey {
+                passphrase: Some(passphrase),
+                ..
+            } if !passphrase.trim().is_empty() => Some(passphrase.as_bytes().to_vec()),
+            _ => None,
+        }
+    }
 
-// #[test]
-// fn test_command() -> Result<()> {
-// let mut rc = RemoteConnection::new_connection("thomas", "prestige", "tailscale")?;
-//         let (output, exit_status) = rc.run_ssh_command("ls", Some(&[&"-a"]))?;
-//         assert_eq!(exit_status, 0);
-//         assert!(!output.is_empty());
-//         Ok(())
-//     }
-// }
+    pub fn apply_secret(&mut self, secret: String) -> () {
+        match self {
+            Self::None => {}
+            Self::Password(password) => *password = secret,
+            Self::AuthKey { passphrase, .. } => *passphrase = Some(secret),
+        }
+    }
+}
+
+impl Serialize for AuthMethod {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let def = match self {
+            AuthMethod::None => AuthMethodDef::None,
+            AuthMethod::Password(_) => AuthMethodDef::Password,
+            AuthMethod::AuthKey {
+                pubkey, privatekey, ..
+            } => AuthMethodDef::AuthKey {
+                pubkey: pubkey.clone(),
+                privatekey: privatekey.clone(),
+            },
+        };
+        def.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuthMethod {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match AuthMethodDef::deserialize(deserializer)? {
+            AuthMethodDef::Password => AuthMethod::Password(String::new()),
+            AuthMethodDef::AuthKey { pubkey, privatekey } => AuthMethod::AuthKey {
+                pubkey,
+                privatekey,
+                passphrase: None,
+            },
+            AuthMethodDef::None => AuthMethod::None,
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AuthMethodDef {
+    None,
+    Password,
+    AuthKey {
+        pubkey: Option<PathBuf>,
+        privatekey: PathBuf,
+    },
+}

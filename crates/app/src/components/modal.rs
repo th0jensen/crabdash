@@ -45,6 +45,28 @@ fn auth_mode_button(
         }))
 }
 
+fn auth_field(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0xAEAEB2))
+                .child("Authentication Method"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(8.0))
+                .child(auth_mode_button(app, AddMachineAuthMode::None, cx))
+                .child(auth_mode_button(app, AddMachineAuthMode::Password, cx))
+                .child(auth_mode_button(app, AddMachineAuthMode::AuthKey, cx)),
+        )
+}
+
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()
         .absolute()
@@ -120,12 +142,6 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                                         ),
                                                 ),
                                         )
-                                        // .child(
-                                        //     button("close-add-machine-modal", Icon::X, "Close", false)
-                                        //         .on_click(cx.listener(
-                                        //             |this, _, _, cx| this.close_add_machine_modal(cx),
-                                        //         )),
-                                        // ),
                                 )
                                 .child(
                                     div()
@@ -135,21 +151,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .gap(px(12.0))
                                         .child(app.remote_host_field.clone())
                                         .child(app.remote_user_field.clone())
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .gap(px(8.0))
-                                                .child(auth_mode_button(
-                                                    app,
-                                                    AddMachineAuthMode::Password,
-                                                    cx,
-                                                ))
-                                                .child(auth_mode_button(
-                                                    app,
-                                                    AddMachineAuthMode::AuthKey,
-                                                    cx,
-                                                )),
-                                        )
+                                        .child(auth_field(app, cx))
                                         .when(
                                             app.add_machine_auth_mode
                                                 == AddMachineAuthMode::Password,
@@ -168,7 +170,12 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                             div()
                                                 .text_xs()
                                                 .text_color(rgb(0xAEAEB2))
-                                                .child("Passwords and SSH key passphrases are stored in your local encrypted keychain and not uploaded anywhere."),
+                                                .when(app.add_machine_auth_mode
+                                                   != AddMachineAuthMode::None,
+                                                |this| this.child("Passwords and SSH key passphrases are stored in your local encrypted keychain and not uploaded anywhere."))
+                                                .when(app.add_machine_auth_mode
+                                                   == AddMachineAuthMode::None,
+                                                |this| this.child("This method allows for connecting without a password using for example Tailscale or WireGuard."))
                                         )
                                         .when_some(app.add_machine_error.as_ref(), |this, error| {
                                             this.child(
@@ -194,8 +201,8 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .gap(px(10.0))
                                         .child(
                                             button("cancel-add-machine", Icon::X, Some("Cancel"), false).on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.close_add_machine_modal(cx);
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.close_add_machine_modal(window, cx);
                                                 }),
                                             ),
                                         )

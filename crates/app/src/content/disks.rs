@@ -1,8 +1,12 @@
 use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
 
-use crate::{app::Crabdash, components::scroll_list};
+use crate::{
+    app::Crabdash,
+    components::{common::lucide_icon, scroll_list},
+};
 
 use super::shared::placeholder_card;
 use services::{Disk, DiskNode};
@@ -176,9 +180,55 @@ fn collect_rows(rows: &mut Vec<AnyElement>, nodes: &[DiskNode], ancestors: &[boo
     }
 }
 
-fn disk_row(disk: &Disk) -> Div {
+fn tree_toggle_button(
+    cx: &mut Context<Crabdash>,
+    disk_id: &str,
+    has_nodes: bool,
+    expanded: bool,
+) -> AnyElement {
+    let button = div()
+        .id(SharedString::from(format!("disk-toggle-{disk_id}")))
+        .h(px(24.0))
+        .w(px(24.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
+        .text_color(rgb(0xAEAEB2));
+
+    if !has_nodes {
+        return button.into_any_element();
+    }
+
+    let disk_id = disk_id.to_string();
+
+    button
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(0x343437)))
+        .child(lucide_icon(
+            if expanded {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            14.0,
+        ))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_disk_row(&disk_id, cx);
+        }))
+        .into_any_element()
+}
+
+fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+    let disk_key = format!("{}:{}", app.selected_machine, disk.id);
+    let has_nodes = !disk.nodes.is_empty();
+    let expanded = app.expanded_disk_rows.contains(&disk_key);
     let mut rows = Vec::new();
-    collect_rows(&mut rows, &disk.nodes, &[]);
+
+    if has_nodes && expanded {
+        collect_rows(&mut rows, &disk.nodes, &[]);
+    }
 
     div()
         .w_full()
@@ -195,28 +245,35 @@ fn disk_row(disk: &Disk) -> Div {
             div()
                 .w_full()
                 .flex()
-                .justify_between()
-                .items_start()
+                .items_center()
                 .gap(px(12.0))
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .gap(px(4.0))
-                        .child(div().text_sm().text_color(white()).child(disk.name.clone()))
-                        .when(!disk_meta(disk).is_empty(), |this| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x8E8E93))
-                                    .child(disk_meta(disk)),
-                            )
-                        })
+                        .flex_1()
+                        .items_center()
+                        .gap(px(12.0))
+                        .child(tree_toggle_button(cx, &disk_key, has_nodes, expanded))
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(rgb(0x636366))
-                                .child(format!("ID: {}", disk.id)),
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(div().text_sm().text_color(white()).child(disk.name.clone()))
+                                .when(!disk_meta(disk).is_empty(), |this| {
+                                    this.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x8E8E93))
+                                            .child(disk_meta(disk)),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x636366))
+                                        .child(format!("ID: {}", disk.id)),
+                                ),
                         ),
                 )
                 .child(
@@ -239,7 +296,7 @@ fn disk_row(disk: &Disk) -> Div {
                         .child(status_badge(&disk).w(px(80.0)).text_center()),
                 ),
         )
-        .when(!rows.is_empty(), |this| {
+        .when(expanded && !rows.is_empty(), |this| {
             this.child(div().h(px(1.0)).bg(rgb(0x2F2F31)))
                 .child(div().flex().flex_col().children(rows))
         })
@@ -273,7 +330,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                 ))
             })
             .when(!disks.is_empty(), |this| {
-                this.children(disks.iter().map(disk_row))
+                this.children(disks.iter().map(|disk| disk_row(disk, app, cx)))
             }),
         cx,
     )

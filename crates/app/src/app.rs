@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use gpui::prelude::*;
@@ -15,8 +15,9 @@ use crate::components::text_field::{
 use crate::components::{modal, sidebar, toast};
 use crate::content;
 use crate::{
-    AboutCrabdash, CloseWindow, MinimizeWindow, OpenAddMachine, RefreshServices, ToggleFullScreen,
-    ToggleSidebar, ZoomWindow, show_about_dialog,
+    AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
+    RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ZoomWindow,
+    show_about_dialog,
 };
 use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
 use services::{disks::Disks, docker::Docker};
@@ -54,6 +55,7 @@ pub struct Crabdash {
     pub(crate) active_tab: MainTab,
     pub(crate) docker_filter: DockerFilter,
     pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
+    pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
@@ -75,6 +77,7 @@ pub struct Crabdash {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum AddMachineAuthMode {
     #[default]
+    None,
     Password,
     AuthKey,
 }
@@ -82,6 +85,7 @@ pub(crate) enum AddMachineAuthMode {
 impl AddMachineAuthMode {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::None => "None",
             Self::Password => "Password",
             Self::AuthKey => "Auth Key",
         }
@@ -107,6 +111,7 @@ impl Crabdash {
             active_tab: MainTab::default(),
             docker_filter: DockerFilter::default(),
             pending_docker_actions: HashMap::default(),
+            expanded_disk_rows: HashSet::default(),
             sidebar_collapsed: false,
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
             status_message,
@@ -117,8 +122,7 @@ impl Crabdash {
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "user", 2, cx)),
             add_machine_auth_mode: AddMachineAuthMode::default(),
-            remote_password_field: cx
-                .new(|cx| TextField::new("Password (Optional)", "password", 3, cx)),
+            remote_password_field: cx.new(|cx| TextField::new("Password", "password", 3, cx)),
             remote_private_key_field: cx
                 .new(|cx| TextField::new("Private Key", "~/.ssh/id_ed25519", 4, cx)),
             remote_public_key_field: cx
@@ -140,6 +144,12 @@ impl Crabdash {
             KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("cmd-m", MinimizeWindow, None),
             KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+            KeyBinding::new("escape", DismissAddMachineModal, None),
+            KeyBinding::new("escape", DismissAddMachineModal, Some("CrabdashTextField")),
+            KeyBinding::new("enter", SubmitAddMachineModal, None),
+            KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
+            KeyBinding::new("return", SubmitAddMachineModal, None),
+            KeyBinding::new("return", SubmitAddMachineModal, Some("CrabdashTextField")),
             KeyBinding::new("backspace", FieldBackspace, None),
             KeyBinding::new("delete", FieldDelete, None),
             KeyBinding::new("left", FieldLeft, None),
@@ -212,10 +222,22 @@ impl Crabdash {
         cx.notify();
     }
 
-    pub(crate) fn close_add_machine_modal(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_modal_open = false;
         self.add_machine_error = None;
+        window.focus(&self.focus_handle);
         cx.notify();
+    }
+
+    pub(crate) fn dismiss_add_machine_modal_action(
+        &mut self,
+        _: &DismissAddMachineModal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.add_machine_modal_open {
+            self.close_add_machine_modal(window, cx);
+        }
     }
 
     pub(crate) fn set_add_machine_auth_mode(
@@ -230,6 +252,13 @@ impl Crabdash {
 
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_disk_row(&mut self, disk_id: &str, cx: &mut Context<Self>) {
+        if !self.expanded_disk_rows.insert(disk_id.to_string()) {
+            self.expanded_disk_rows.remove(disk_id);
+        }
         cx.notify();
     }
 
@@ -262,15 +291,20 @@ impl Crabdash {
             .update(cx, |field, cx| field.clear(cx));
     }
 
-    pub(crate) fn submit_add_machine(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn submit_add_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_error = None;
 
         let host = self.remote_host_field.read(cx).text().trim().to_string();
         let user = self.remote_user_field.read(cx).text().trim().to_string();
         let auth = match self.add_machine_auth_mode {
+            AddMachineAuthMode::None => Ok(AuthMethod::None),
             AddMachineAuthMode::Password => {
-                let password = self.remote_password_field.read(cx).text();
-                Ok(AuthMethod::Password(password))
+                if !self.remote_password_field.read(cx).text().is_empty() {
+                    let password = self.remote_password_field.read(cx).text();
+                    Ok(AuthMethod::Password(password))
+                } else {
+                    Err(anyhow!("Host, user, and password are required."))
+                }
             }
             AddMachineAuthMode::AuthKey => {
                 let private_key = self
@@ -329,6 +363,7 @@ impl Crabdash {
                 self.clear_remote_machine_form(cx);
                 self.refresh_services();
                 self.clear_status_message();
+                window.focus(&self.focus_handle);
 
                 if let Some(rc) = self.selected_machine().remote.as_ref() {
                     let key = format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host);
@@ -344,14 +379,6 @@ impl Crabdash {
                             }
                         })
                         .detach();
-                    } else {
-                        cx.spawn(async move |_, cx| {
-                            let future = cx.update(|app| app.delete_credentials(&key)).ok();
-                            if let Some(future) = future {
-                                future.await.ok();
-                            }
-                        })
-                        .detach();
                     }
                 }
             }
@@ -362,6 +389,17 @@ impl Crabdash {
         }
 
         cx.notify();
+    }
+
+    pub(crate) fn submit_add_machine_action(
+        &mut self,
+        _: &SubmitAddMachineModal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.add_machine_modal_open {
+            self.submit_add_machine(window, cx);
+        }
     }
 
     pub(crate) fn focus_next(
@@ -409,6 +447,8 @@ impl Render for Crabdash {
             .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
                 this.open_add_machine_modal(window, cx);
             }))
+            .on_action(cx.listener(Crabdash::dismiss_add_machine_modal_action))
+            .on_action(cx.listener(Crabdash::submit_add_machine_action))
             .on_action(|_: &MinimizeWindow, window, _| {
                 window.minimize_window();
             })

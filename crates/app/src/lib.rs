@@ -32,6 +32,7 @@ actions!(
     [
         AboutCrabdash,
         CloseWindow,
+        DismissAddMachineModal,
         Hide,
         HideOthers,
         MinimizeWindow,
@@ -42,6 +43,7 @@ actions!(
         Quit,
         RefreshServices,
         ShowAll,
+        SubmitAddMachineModal,
         ToggleFullScreen,
         ToggleSidebar,
         ZoomWindow
