@@ -35,8 +35,8 @@ impl ServiceItem {
         }
         false
     }
-
-    pub fn parse_output_mac(stdout: String) -> Vec<ServiceItem> {
+  
+  pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
         stdout
             .lines()
             .skip(1)
@@ -45,32 +45,16 @@ impl ServiceItem {
 
                 let pid = parts.next()?.to_string();
                 let status = parts.next()?.to_string();
-                let label = parts.next()?.to_string();
+                let name = parts.next()?.to_string();
+
+                if name.contains("●") {
+                    return None;
+                }
 
                 Some(ServiceItem {
                     id: pid,
-                    name: label,
+                    name: name,
                     status,
-                    error: None,
-                })
-            })
-            .collect()
-    }
-
-    pub fn parse_output_linux(stdout: String) -> Vec<ServiceItem> {
-        stdout
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split('\t');
-
-                let name = parts.next()?;
-                let status = parts.next()?;
-                let pid = parts.next()?;
-
-                Some(ServiceItem {
-                    id: pid.to_string(),
-                    name: name.to_string(),
-                    status: status.to_string(),
                     error: None,
                 })
             })

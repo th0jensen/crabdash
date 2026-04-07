@@ -217,29 +217,25 @@ impl Docker for Machine {
 
 impl Services for Machine {
     fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
-        match self.kind {
-            MachineKind::MacOS => {
-                let services = self.run("launchctl", Some(&["list"]))?;
-                Ok(ServiceItem::parse_output_mac(services))
-            }
-            MachineKind::Linux => {
-                let services = self.run(
-                    "sh",
-                    Some(&[
-                        "-c",
-                        r#"systemctl list-units --type=service --all --no-legend --no-pager \
-            | awk '{print $1}' \
-            | while read -r unit; do
-                status=$(systemctl show -p ActiveState --value "$unit")
-                pid=$(systemctl show -p MainPID --value "$unit")
-                printf "%s\t%s\t%s\n" "$unit" "$status" "$pid"
-              done"#,
-                    ]),
-                )?;
-                Ok(ServiceItem::parse_output_linux(services))
-            }
-            MachineKind::Unknown => bail!("System does not yet support the services feature"),
-        }
+        let (command, args): (&str, Option<&[&str]>) = match self.kind {
+            MachineKind::MacOS => ("launchctl", Some(&["list"])),
+            MachineKind::Linux => (
+                "sh",
+                Some(&[
+                    "-c",
+                    r#"systemctl list-units --type=service --all --no-legend --no-pager \
+    | awk '{print $1}' \
+    | while read -r unit; do
+        status=$(systemctl show -p ActiveState --value "$unit")
+        pid=$(systemctl show -p MainPID --value "$unit")
+        printf "%s\t%s\t%s\n" "$pid" "$status" "$unit"
+      done"#,
+                ]),
+            ),
+            _ => bail!("System does not yet support the services feature"),
+        };
+
+        Ok(ServiceItem::parse_output(self.run(command, args)?))
     }
 }
 
