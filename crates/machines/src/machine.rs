@@ -210,8 +210,10 @@ impl Docker for Machine {
         Ok(stdout)
     }
 
-    fn container_logs(&mut self, _id: &str) -> Result<String> {
-        todo!()
+    fn container_logs(&mut self, id: &str) -> Result<String> {
+        let docker = self.find_docker();
+        let stdout = self.run(&docker, Some(&["logs", "--follow", id]))?;
+        Ok(stdout)
     }
 }
 
