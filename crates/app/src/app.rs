@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
-use services::Services;
 use services::docker::{DockerAction, DockerFilter};
+use services::{ServiceFilter, Services};
 
 use crate::components::common::LucideIcon;
 use crate::components::text_field::{
@@ -56,6 +56,7 @@ pub struct Crabdash {
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
     pub(crate) docker_filter: DockerFilter,
+    pub(crate) service_filter: ServiceFilter,
     pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
     pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
@@ -112,6 +113,7 @@ impl Crabdash {
             selected_machine: 0,
             active_tab: MainTab::default(),
             docker_filter: DockerFilter::default(),
+            service_filter: ServiceFilter::default(),
             pending_docker_actions: HashMap::default(),
             expanded_disk_rows: HashSet::default(),
             sidebar_collapsed: false,
