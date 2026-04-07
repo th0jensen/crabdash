@@ -21,8 +21,22 @@ pub struct ServiceItem {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServiceFilter {
+    #[default]
+    Total,
+    Running,
+}
+
 impl ServiceItem {
-    pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
+    pub fn is_running(&self) -> bool {
+        if self.status.contains("0") || !self.status.to_ascii_lowercase().contains("inactive") {
+            return true;
+        }
+        false
+    }
+  
+  pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
         stdout
             .lines()
             .skip(1)
