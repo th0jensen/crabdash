@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
+use services::Services;
 use services::docker::{DockerAction, DockerFilter};
 
 use crate::components::common::LucideIcon;
@@ -212,7 +213,21 @@ impl Crabdash {
                     self.set_status_error(message);
                 }
             },
-            MainTab::Services => {}
+            MainTab::Services => match self.selected_machine_mut().list_services() {
+                Ok(services) => {
+                    let machine = self.selected_machine_mut();
+                    machine.services.systemd = services;
+                    machine.services.systemd_error = None;
+                    self.clear_status_message();
+                }
+                Err(error) => {
+                    let message = format!("Unable to load Disks: {error}");
+                    let machine = self.selected_machine_mut();
+                    machine.services.systemd.clear();
+                    machine.services.systemd_error = Some(error.to_string());
+                    self.set_status_error(message);
+                }
+            },
         }
     }
 

@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use services::{
-    Disk, MachineServices,
+    Disk, MachineServices, ServiceItem, Services,
     disks::Disks,
     docker::{Container, Docker},
 };
@@ -212,6 +212,34 @@ impl Docker for Machine {
 
     fn container_logs(&mut self, _id: &str) -> Result<String> {
         todo!()
+    }
+}
+
+impl Services for Machine {
+    fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
+        match self.kind {
+            MachineKind::MacOS => {
+                let services = self.run("launchctl", Some(&["list"]))?;
+                Ok(ServiceItem::parse_output_mac(services))
+            }
+            MachineKind::Linux => {
+                let services = self.run(
+                    "sh",
+                    Some(&[
+                        "-c",
+                        r#"systemctl list-units --type=service --all --no-legend --no-pager \
+            | awk '{print $1}' \
+            | while read -r unit; do
+                status=$(systemctl show -p ActiveState --value "$unit")
+                pid=$(systemctl show -p MainPID --value "$unit")
+                printf "%s\t%s\t%s\n" "$unit" "$status" "$pid"
+              done"#,
+                    ]),
+                )?;
+                Ok(ServiceItem::parse_output_linux(services))
+            }
+            MachineKind::Unknown => bail!("System does not yet support the services feature"),
+        }
     }
 }
 

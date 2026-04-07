@@ -8,7 +8,7 @@ use services::ServiceItem;
 
 fn status_badge(status: &str) -> Div {
     let normalized = status.to_ascii_lowercase();
-    let is_running = normalized.contains("running") || normalized.contains("active");
+    let is_running = normalized.contains("0") || !normalized.contains("inactive");
     let status_bg = if is_running {
         rgb(0x193D2A)
     } else {
@@ -73,11 +73,12 @@ fn system_service_row(service: &ServiceItem) -> Div {
                         .text_color(white())
                         .child(service.name.clone()),
                 )
-                .child(div().text_xs().text_color(rgb(0x8E8E93)).child(format!(
-                    "{} • {}",
-                    service.kind.label(),
-                    service.id
-                ))),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8E8E93))
+                        .child(format!("{}", service.id)),
+                ),
         )
         .child(status_badge(&service.status))
 }
@@ -99,7 +100,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
 
     let running_count = services
         .iter()
-        .filter(|service| service.status.contains("running") || service.status.contains("active"))
+        .filter(|service| service.status.contains("0") || !service.status.contains("inactive"))
         .count();
 
     scroll_list::render(
