@@ -212,7 +212,7 @@ impl Docker for Machine {
 
     fn container_logs(&mut self, id: &str) -> Result<String> {
         let docker = self.find_docker();
-        let stdout = self.run(&docker, Some(&["logs", "--follow", id]))?;
+        let stdout = self.run(&docker, Some(&["logs", id]))?;
         Ok(stdout)
     }
 }
