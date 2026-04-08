@@ -200,14 +200,14 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .justify_end()
                                         .gap(px(10.0))
                                         .child(
-                                            button("cancel-add-machine", Icon::X, Some("Cancel"), false).on_click(
+                                            button("cancel-add-machine", Some(Icon::X), Some("Cancel"), false).on_click(
                                                 cx.listener(|this, _, window, cx| {
                                                     this.close_add_machine_modal(window, cx);
                                                 }),
                                             ),
                                         )
                                         .child(
-                                            button("submit-add-machine", Icon::Plus, Some("Add Machine"), true)
+                                            button("submit-add-machine", Some(Icon::Plus), Some("Add Machine"), true)
                                                 .on_click(cx.listener(
                                                     |this, _, window, cx| {
                                                         this.submit_add_machine(window, cx);

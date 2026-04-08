@@ -48,6 +48,15 @@ pub trait Docker {
     /// * `Ok(Vec<ServiceItem>)`: The containers on the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn list_docker(&mut self) -> Result<Vec<Container>>;
+    /// Runs a Docker container
+    ///
+    /// # Arguments
+    /// * `args`: The arguments to pass to the Docker command
+    ///
+    /// # Returns
+    /// * `Ok(String)`: The ID of the container is returned
+    /// * `Err(anyhow::Error)`: Any errors that occurred
+    fn run_container(&mut self, args: &str) -> Result<String>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments

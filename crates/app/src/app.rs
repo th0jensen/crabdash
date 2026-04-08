@@ -66,6 +66,8 @@ pub struct Crabdash {
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
+    pub(crate) docker_run_args_field: Entity<TextField>,
+    pub(crate) show_docker_run_args_field: bool,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) add_machine_auth_mode: AddMachineAuthMode,
@@ -123,6 +125,9 @@ impl Crabdash {
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
+            docker_run_args_field: cx
+                .new(|cx| TextField::new("", "args: [image, env, ports]", 1, cx)),
+            show_docker_run_args_field: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "user", 2, cx)),
             add_machine_auth_mode: AddMachineAuthMode::default(),

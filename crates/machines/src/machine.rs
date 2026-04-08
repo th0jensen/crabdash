@@ -192,21 +192,26 @@ impl Docker for Machine {
     }
 
     fn list_docker(&mut self) -> Result<Vec<Container>> {
+        let args = vec!["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
         let docker = self.find_docker();
-        let stdout = self.run(
-            &docker,
-            Some(&["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"]),
-        )?;
+        let stdout = self.run(&docker, Some(&args))?;
         Ok(Container::parse_output(stdout))
     }
 
     fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
-        let args = [action, id];
+        let args = vec![action, id];
         let docker = self.find_docker();
         let stdout = self.run(&docker, Some(&args))?;
         if stdout.trim() != id {
             bail!(stdout)
         }
+        Ok(stdout)
+    }
+
+    fn run_container(&mut self, args: &str) -> Result<String> {
+        let args = vec!["run", args];
+        let docker = self.find_docker();
+        let stdout = self.run(&docker, Some(&args))?;
         Ok(stdout)
     }
 
