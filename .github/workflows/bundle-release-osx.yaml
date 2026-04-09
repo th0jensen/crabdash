@@ -17,6 +17,7 @@ jobs:
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
       - name: Build app bundle
+      - uses: step-security/setup-zig@v2
         run: cargo bundle --release --format osx -p crabdash
       - name: Patch Tahoe icon assets
         run: |
