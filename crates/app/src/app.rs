@@ -641,6 +641,7 @@ impl Render for Crabdash {
             })
             .when(self.docker_run_modal_open, |this| {
                 this.child(content::render_docker_run_modal(self, cx))
+            })
             .when(self.docker_log_modal.is_some(), |this| {
                 this.child(content::render_logs_modal(self, cx))
             })
