@@ -79,7 +79,7 @@ impl RemoteConnection {
         Ok(self.session.as_ref().unwrap())
     }
 
-    pub fn run_ssh_command(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<(String, i32)> {
+    pub fn run_ssh_command(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<(String, String, i32)> {
         let session = self.ensure_connected()?;
         let mut channel = session.channel_session()?;
 
@@ -97,12 +97,14 @@ impl RemoteConnection {
         };
 
         channel.exec(&full_cmd)?;
-        let mut s = String::new();
-        channel.read_to_string(&mut s)?;
+        let mut stdout = String::new();
+        channel.read_to_string(&mut stdout)?;
+        let mut stderr = String::new();
+        channel.stderr().read_to_string(&mut stderr)?;
         channel.wait_close()?;
         let exit_status = channel.exit_status()?;
 
-        Ok((s, exit_status))
+        Ok((stdout, stderr, exit_status))
     }
 
     pub fn has_active_session(&self) -> bool {

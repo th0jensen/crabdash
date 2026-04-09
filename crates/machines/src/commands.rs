@@ -22,9 +22,9 @@ impl SystemInfo {
 
     pub fn remote(rc: &mut RemoteConnection) -> Result<Self> {
         let cmd = "uname";
-        let (machine_name, _) = rc.run_ssh_command(cmd, Some(&["-n"]))?;
-        let (os_version, _) = rc.run_ssh_command(cmd, Some(&["-sr"]))?;
-        let (arch, _) = rc.run_ssh_command(cmd, Some(&["-m"]))?;
+        let (machine_name, _, _) = rc.run_ssh_command(cmd, Some(&["-n"]))?;
+        let (os_version, _, _) = rc.run_ssh_command(cmd, Some(&["-sr"]))?;
+        let (arch, _, _) = rc.run_ssh_command(cmd, Some(&["-m"]))?;
 
         Ok(Self {
             machine_name: machine_name.trim().to_string(),

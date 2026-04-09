@@ -71,16 +71,18 @@ impl Machine {
     pub fn run(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<String> {
         match &mut self.remote {
             Some(rc) => {
-                let (stdout, exit_status) = rc.run_ssh_command(cmd, args)?;
+                let (stdout, stderr, exit_status) = rc.run_ssh_command(cmd, args)?;
                 if exit_status != 0 {
-                    let message = if stdout.trim().is_empty() {
-                        format!("{cmd} exited with status {exit_status}")
-                    } else {
+                    let message = if !stderr.trim().is_empty() {
+                        stderr.trim().to_string()
+                    } else if !stdout.trim().is_empty() {
                         stdout.trim().to_string()
+                    } else {
+                        format!("{cmd} exited with status {exit_status}")
                     };
                     eprintln!(
-                        "Remote command failed: cmd={cmd} args={:?} status={} output={}",
-                        args, exit_status, message
+                        "Remote command failed: cmd={cmd} args={:?} status={} stderr={} stdout={}",
+                        args, exit_status, stderr.trim(), stdout.trim()
                     );
                     return Err(anyhow!(message));
                 }
@@ -240,6 +242,36 @@ impl Services for Machine {
 }
 
 impl Disks for Machine {
+    fn mount_disk(&mut self, id: &str) -> Result<()> {
+        match self.kind {
+            MachineKind::MacOS => {
+                let identifier = id.trim_start_matches("/dev/");
+                self.run("diskutil", Some(&["mount", identifier]))?;
+                Ok(())
+            }
+            MachineKind::Linux => {
+                self.run("udisksctl", Some(&["mount", "-b", id]))?;
+                Ok(())
+            }
+            MachineKind::Unknown => bail!("Mount not supported on this system"),
+        }
+    }
+
+    fn unmount_disk(&mut self, id: &str) -> Result<()> {
+        match self.kind {
+            MachineKind::MacOS => {
+                let identifier = id.trim_start_matches("/dev/");
+                self.run("diskutil", Some(&["unmount", identifier]))?;
+                Ok(())
+            }
+            MachineKind::Linux => {
+                self.run("udisksctl", Some(&["unmount", "-b", id]))?;
+                Ok(())
+            }
+            MachineKind::Unknown => bail!("Unmount not supported on this system"),
+        }
+    }
+
     fn list_disks(&mut self) -> Result<Vec<Disk>> {
         match self.kind {
             MachineKind::MacOS => {

@@ -5,11 +5,17 @@ use lucide_icons::Icon;
 
 use crate::{
     app::Crabdash,
-    components::{common::lucide_icon, scroll_list},
+    components::{
+        common::{button, lucide_icon},
+        scroll_list,
+    },
 };
 
 use super::shared::placeholder_card;
-use services::{Disk, DiskNode};
+use services::{
+    Disk, DiskNode,
+    disks::{DiskAction, Disks},
+};
 
 const TREE_LINE: Hsla = Hsla {
     h: 0.0,
@@ -138,8 +144,33 @@ fn branch_column(is_last: bool) -> Div {
         )
 }
 
-fn node_row(node: &DiskNode, ancestors: &[bool], is_last: bool) -> AnyElement {
+fn node_row(
+    node: &DiskNode,
+    ancestors: &[bool],
+    is_last: bool,
+    cx: &mut Context<Crabdash>,
+    pending: bool,
+    machine_index: usize,
+) -> AnyElement {
     let tree_offset = ((ancestors.len() + 1) as f32 * TREE_COL_WIDTH) + 10.0;
+
+    let action_button = node.is_mountable().then(|| {
+        let action = if node.is_mounted() {
+            DiskAction::Unmount
+        } else {
+            DiskAction::Mount
+        };
+        // Synthesize a temporary Disk so we can reuse disk_action_button
+        let proxy = Disk {
+            id: node.id.clone().unwrap_or_default(),
+            name: node.name.clone(),
+            size: node.size.clone(),
+            status: node.status.clone().unwrap_or_default(),
+            detail: node.detail.clone(),
+            nodes: Vec::new(),
+        };
+        disk_action_button(cx, &proxy, action, pending, machine_index)
+    });
 
     div()
         .relative()
@@ -149,12 +180,20 @@ fn node_row(node: &DiskNode, ancestors: &[bool], is_last: bool) -> AnyElement {
             div()
                 .pl(px(tree_offset))
                 .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .child(div().text_sm().text_color(white()).child(node.name.clone()))
-                .when_some(node_meta(node), |this, meta| {
-                    this.child(div().text_xs().text_color(rgb(0x8E8E93)).child(meta))
-                }),
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(div().text_sm().text_color(white()).child(node.name.clone()))
+                        .when_some(node_meta(node), |this, meta| {
+                            this.child(div().text_xs().text_color(rgb(0x8E8E93)).child(meta))
+                        }),
+                )
+                .when_some(action_button, |this, btn| this.child(btn)),
         )
         .child(
             div()
@@ -169,14 +208,25 @@ fn node_row(node: &DiskNode, ancestors: &[bool], is_last: bool) -> AnyElement {
         .into_any_element()
 }
 
-fn collect_rows(rows: &mut Vec<AnyElement>, nodes: &[DiskNode], ancestors: &[bool]) {
+fn collect_rows(
+    rows: &mut Vec<AnyElement>,
+    nodes: &[DiskNode],
+    ancestors: &[bool],
+    cx: &mut Context<Crabdash>,
+    pending_ids: &std::collections::HashSet<String>,
+    machine_index: usize,
+) {
     for (index, node) in nodes.iter().enumerate() {
         let is_last = index + 1 == nodes.len();
-        rows.push(node_row(node, ancestors, is_last));
+        let pending = node
+            .id
+            .as_deref()
+            .is_some_and(|id| pending_ids.contains(id));
+        rows.push(node_row(node, ancestors, is_last, cx, pending, machine_index));
 
         let mut next = ancestors.to_vec();
         next.push(!is_last);
-        collect_rows(rows, &node.nodes, &next);
+        collect_rows(rows, &node.nodes, &next, cx, pending_ids, machine_index);
     }
 }
 
@@ -220,14 +270,106 @@ fn tree_toggle_button(
         .into_any_element()
 }
 
+fn disk_action_button(
+    cx: &mut Context<Crabdash>,
+    disk: &Disk,
+    action: DiskAction,
+    pending: bool,
+    machine_index: usize,
+) -> AnyElement {
+    let id = disk.id.clone();
+    let button_id = SharedString::from(format!(
+        "{}-disk-{}",
+        match action {
+            DiskAction::Mount => "mount",
+            DiskAction::Unmount => "unmount",
+        },
+        id
+    ));
+    let icon = match action {
+        DiskAction::Mount => lucide_icons::Icon::CirclePlay,
+        DiskAction::Unmount => lucide_icons::Icon::CircleStop,
+    };
+    let color = match action {
+        DiskAction::Mount => rgb(0x30D158),
+        DiskAction::Unmount => rgb(0xFF453A),
+    };
+
+    button(button_id, icon, Option::<&str>::None, false)
+        .text_color(color)
+        .when(pending, |d| d.cursor_default())
+        .when(!pending, |d| {
+            d.on_click(cx.listener(move |this, _, _, cx| {
+                this.pending_disk_actions.insert(id.clone(), action);
+                cx.notify();
+
+                let spawn_id = id.clone();
+                let remove_id = id.clone();
+                let mut machine = this.selected_machine().background_clone();
+
+                cx.spawn(move |this: gpui::WeakEntity<Crabdash>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let result = cx
+                            .background_spawn(async move {
+                                match action {
+                                    DiskAction::Mount => machine.mount_disk(&spawn_id),
+                                    DiskAction::Unmount => machine.unmount_disk(&spawn_id),
+                                }
+                            })
+                            .await;
+
+                        this.update(&mut cx, move |this, cx| {
+                            this.pending_disk_actions.remove(&remove_id);
+                            match result {
+                                Ok(()) => {
+                                    let mut fresh = this.selected_machine().background_clone();
+                                    if let Ok(disks) = fresh.list_disks() {
+                                        if let Some(m) =
+                                            this.machine_store.machines.get_mut(machine_index)
+                                        {
+                                            m.services.disks = disks;
+                                            m.services.disks_error = None;
+                                        }
+                                    }
+                                    this.clear_status_message();
+                                }
+                                Err(err) => {
+                                    this.set_status_error(format!(
+                                        "Disk {} failed: {err}",
+                                        match action {
+                                            DiskAction::Mount => "mount",
+                                            DiskAction::Unmount => "unmount",
+                                        }
+                                    ));
+                                }
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+            }))
+        })
+        .into_any_element()
+}
+
 fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
-    let disk_key = format!("{}:{}", app.selected_machine, disk.id);
+    let machine_index = app.selected_machine;
+    let disk_key = format!("{}:{}", machine_index, disk.id);
     let has_nodes = !disk.nodes.is_empty();
     let expanded = app.expanded_disk_rows.contains(&disk_key);
+    let pending = app.pending_disk_actions.contains_key(&disk.id);
+    let status = disk.status.to_ascii_lowercase();
+    let is_mounted = status == "mounted";
+    let is_swap = status == "swap";
+    let pending_ids: std::collections::HashSet<String> =
+        app.pending_disk_actions.keys().cloned().collect();
     let mut rows = Vec::new();
 
     if has_nodes && expanded {
-        collect_rows(&mut rows, &disk.nodes, &[]);
+        collect_rows(&mut rows, &disk.nodes, &[], cx, &pending_ids, machine_index);
     }
 
     div()
@@ -282,17 +424,14 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                         .flex()
                         .items_center()
                         .gap(px(10.0))
-                        // .child(if !container.is_running_status() {
-                        //     action_button(cx, container, DockerAction::Start, actions_disabled)
-                        // } else {
-                        //     action_button(cx, container, DockerAction::Stop, actions_disabled)
-                        // })
-                        // .child(action_button(
-                        //     cx,
-                        //     container,
-                        //     DockerAction::Restart,
-                        //     actions_disabled,
-                        // ))
+                        .when(!is_swap, |this| {
+                            let action = if is_mounted {
+                                DiskAction::Unmount
+                            } else {
+                                DiskAction::Mount
+                            };
+                            this.child(disk_action_button(cx, disk, action, pending, machine_index))
+                        })
                         .child(status_badge(&disk).w(px(80.0)).text_center()),
                 ),
         )

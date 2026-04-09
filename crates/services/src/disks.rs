@@ -14,10 +14,26 @@ pub struct Disk {
 
 #[derive(Clone, Debug, Default)]
 pub struct DiskNode {
+    pub id: Option<String>,
     pub name: String,
     pub size: Option<String>,
+    pub status: Option<String>,
     pub detail: Option<String>,
     pub nodes: Vec<DiskNode>,
+}
+
+impl DiskNode {
+    pub fn is_mountable(&self) -> bool {
+        self.id.is_some()
+            && !matches!(
+                self.status.as_deref(),
+                Some("swap") | Some("container") | None
+            )
+    }
+
+    pub fn is_mounted(&self) -> bool {
+        self.status.as_deref() == Some("mounted")
+    }
 }
 
 impl Disk {
@@ -180,6 +196,21 @@ impl Disk {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiskAction {
+    Mount,
+    Unmount,
+}
+
+impl DiskAction {
+    pub fn pending_label(self) -> &'static str {
+        match self {
+            Self::Mount => "Mounting",
+            Self::Unmount => "Unmounting",
+        }
+    }
+}
+
 pub trait Disks {
     /// Lists all disks connected to the machine
     ///
@@ -187,6 +218,12 @@ pub trait Disks {
     /// * `Ok(Vec<Disk>)`: The disks connected to the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn list_disks(&mut self) -> Result<Vec<Disk>>;
+
+    /// Mounts a disk by device ID.
+    fn mount_disk(&mut self, id: &str) -> Result<()>;
+
+    /// Unmounts a disk by device ID.
+    fn unmount_disk(&mut self, id: &str) -> Result<()>;
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,15 +367,19 @@ fn diskutil_nodes(
                 active |= container_active;
 
                 Some(DiskNode {
+                    id: None,
                     name: String::from("Container"),
                     size: partition.size.map(format_bytes),
+                    status: Some(String::from("container")),
                     detail: Some(String::from("APFS container")),
                     nodes: container_nodes,
                 })
             } else if partition_is_visible(partition) {
                 Some(DiskNode {
+                    id: Some(device_path(&partition.device_identifier)),
                     name: partition_label(partition),
                     size: partition.size.map(format_bytes),
+                    status: Some(String::from("unmounted")),
                     detail: partition_detail(partition),
                     nodes: Vec::new(),
                 })
@@ -371,8 +412,10 @@ fn diskutil_volume_nodes(
 
             Some((
                 DiskNode {
+                    id: Some(device_path(&volume.device_identifier)),
                     name: name.to_string(),
                     size: volume.capacity_in_use.or(volume.size).map(format_bytes),
+                    status: Some(if mounted { "mounted" } else { "unmounted" }.to_string()),
                     detail: Some(macos_volume_detail(&role, volume.mount_point.as_deref())),
                     nodes: Vec::new(),
                 },
@@ -406,10 +449,19 @@ fn lsblk_children(
                 .is_some_and(|value| value.eq_ignore_ascii_case("swap"));
             let mounted_here = mounted(&row.mount_points) || is_swap;
 
+            let node_status = if is_swap {
+                "swap"
+            } else if mounted(&row.mount_points) {
+                "mounted"
+            } else {
+                "unmounted"
+            };
             (
                 DiskNode {
+                    id: Some(row.path.clone()),
                     name: lsblk_label(row),
                     size: row.size.clone(),
+                    status: Some(node_status.to_string()),
                     detail: node_detail(row, is_swap),
                     nodes,
                 },

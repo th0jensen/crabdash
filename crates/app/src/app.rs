@@ -21,7 +21,7 @@ use crate::{
     show_about_dialog,
 };
 use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
-use services::{disks::Disks, docker::Docker};
+use services::{disks::{DiskAction, Disks}, docker::Docker};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -58,6 +58,7 @@ pub struct Crabdash {
     pub(crate) docker_filter: DockerFilter,
     pub(crate) service_filter: ServiceFilter,
     pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
+    pub(crate) pending_disk_actions: HashMap<String, DiskAction>,
     pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
@@ -115,6 +116,7 @@ impl Crabdash {
             docker_filter: DockerFilter::default(),
             service_filter: ServiceFilter::default(),
             pending_docker_actions: HashMap::default(),
+            pending_disk_actions: HashMap::default(),
             expanded_disk_rows: HashSet::default(),
             sidebar_collapsed: false,
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
