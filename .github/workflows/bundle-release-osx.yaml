@@ -10,6 +10,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: step-security/setup-zig@v2
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
@@ -18,7 +19,6 @@ jobs:
         run: cargo install cargo-bundle
       - uses: step-security/setup-zig@v2
       - name: Build app bundle
-      - uses: step-security/setup-zig@v2
         run: cargo bundle --release --format osx -p crabdash
       - name: Patch Tahoe icon assets
         run: |
