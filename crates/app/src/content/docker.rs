@@ -5,7 +5,10 @@ use lucide_icons::Icon;
 
 use crate::{
     app::Crabdash,
-    components::{common::lucide_icon, scroll_list},
+    components::{
+        common::{LucideIcon, button, lucide_icon},
+        scroll_list,
+    },
 };
 
 use super::shared::placeholder_card;
@@ -576,6 +579,19 @@ pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) 
             div()
                 .flex()
                 .gap(px(8.0))
+                .child(
+                    div().flex().child(
+                        button(
+                            "run-container-open",
+                            Some(LucideIcon::Play),
+                            Some("Run"),
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_docker_run_modal(cx);
+                        })),
+                    ),
+                )
                 .child(stats_chip(
                     "docker-filter-total",
                     "Total",

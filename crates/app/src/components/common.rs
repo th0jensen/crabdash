@@ -23,17 +23,20 @@ pub fn lucide_icon(icon: LucideIcon, size: f32) -> Div {
         .child(char::from(icon).to_string())
 }
 
-pub fn button<L>(
+pub fn button<I, L>(
     id: impl Into<ElementId>,
-    icon: LucideIcon,
+    icon: Option<I>,
     label: Option<L>,
     primary: bool,
 ) -> Stateful<Div>
 where
     L: Into<SharedString>,
+    I: Into<LucideIcon>,
 {
     let has_label = label.is_some();
     let label = label.map(Into::into);
+    let icon = icon.map(Into::into);
+
     let bg = if primary {
         rgb(0x0A84FF)
     } else {
@@ -66,6 +69,6 @@ where
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .when(has_label, |this| this.gap(px(8.0)))
-        .child(lucide_icon(icon, 14.0))
+        .when_some(icon, |this, icon| this.child(lucide_icon(icon, 14.0)))
         .when_some(label, |this, label| this.child(div().child(label)))
 }
