@@ -10,6 +10,7 @@ build = "build.rs"
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
 capitalize = "0.3.4"
 gpui = { version = "*" }
+libghostty-vt = "0.1.1"
 lucide-icons = "0.575.0"
 machines = { path = "../machines" }
 services = { path = "../services" }

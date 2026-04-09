@@ -35,8 +35,8 @@ impl ServiceItem {
         }
         false
     }
-  
-  pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
+
+    pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
         stdout
             .lines()
             .skip(1)
