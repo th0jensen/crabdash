@@ -5,6 +5,7 @@ use lucide_icons::Icon;
 use crate::app::{AddMachineAuthMode, Crabdash};
 use crate::components::common::{button, lucide_icon};
 
+
 fn auth_mode_button(
     app: &Crabdash,
     mode: AddMachineAuthMode,

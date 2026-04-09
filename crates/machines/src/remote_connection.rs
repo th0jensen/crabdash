@@ -105,6 +105,7 @@ impl RemoteConnection {
         Ok((s, exit_status))
     }
 
+
     pub fn has_active_session(&self) -> bool {
         self.session
             .as_ref()

@@ -1,6 +1,7 @@
 mod disks;
 mod docker;
 mod docker_run_modal;
+pub mod docker_logs;
 mod header;
 mod services;
 mod shared;
@@ -11,9 +12,9 @@ use gpui::*;
 
 use crate::app::{Crabdash, MainTab};
 
-fn active_panel(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+fn active_panel(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
     match app.active_tab {
-        MainTab::Docker => docker::render(app, cx),
+        MainTab::Docker => docker::render(app, window, cx),
         MainTab::Disks => disks::render(app, cx),
         MainTab::Services => services::render(app, cx),
     }
@@ -30,7 +31,11 @@ pub fn render_title_bar(app: &Crabdash, window: &mut Window, cx: &mut Context<Cr
     title_bar::render(app, window, cx)
 }
 
-pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
+pub fn render_logs_modal(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
+    docker::render_logs_modal(app, cx)
+}
+
+pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()
         .flex_1()
         .flex()
@@ -52,7 +57,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                         .flex_col()
                         .px(px(20.0))
                         .pt(px(20.0))
-                        .child(div().flex_1().w_full().child(active_panel(app, cx))),
+                        .child(div().flex_1().w_full().child(active_panel(app, window, cx))),
                 ),
         )
 }

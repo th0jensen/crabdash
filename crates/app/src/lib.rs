@@ -34,6 +34,7 @@ actions!(
         AboutCrabdash,
         CloseWindow,
         DismissAddMachineModal,
+        DismissDockerLogModal,
         Hide,
         HideOthers,
         MinimizeWindow,
@@ -51,8 +52,23 @@ actions!(
     ]
 );
 
+pub const JETBRAINS_MONO_NERD_REGULAR: &[u8] =
+    include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf");
+pub const JETBRAINS_MONO_NERD_BOLD: &[u8] =
+    include_bytes!("../assets/JetBrainsMonoNerdFont-Bold.ttf");
+pub const JETBRAINS_MONO_NERD_ITALIC: &[u8] =
+    include_bytes!("../assets/JetBrainsMonoNerdFont-Italic.ttf");
+pub const JETBRAINS_MONO_NERD_BOLD_ITALIC: &[u8] =
+    include_bytes!("../assets/JetBrainsMonoNerdFont-BoldItalic.ttf");
+
 pub fn register_fonts(cx: &mut App) {
     cx.text_system()
-        .add_fonts(vec![Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES)])
-        .expect("failed to load lucide icon font");
+        .add_fonts(vec![
+            Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES),
+            Cow::Borrowed(JETBRAINS_MONO_NERD_REGULAR),
+            Cow::Borrowed(JETBRAINS_MONO_NERD_BOLD),
+            Cow::Borrowed(JETBRAINS_MONO_NERD_ITALIC),
+            Cow::Borrowed(JETBRAINS_MONO_NERD_BOLD_ITALIC),
+        ])
+        .expect("failed to load fonts");
 }

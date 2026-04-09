@@ -17,9 +17,9 @@ use crate::components::{modal, sidebar, toast};
 use crate::content;
 use crate::docker_run::DockerRunConfig;
 use crate::{
-    AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
-    RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ZoomWindow,
-    show_about_dialog,
+    AboutCrabdash, CloseWindow, DismissAddMachineModal, DismissDockerLogModal, MinimizeWindow,
+    OpenAddMachine, RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar,
+    ZoomWindow, show_about_dialog,
 };
 use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
 use services::{disks::Disks, docker::Docker};
@@ -64,6 +64,8 @@ pub struct Crabdash {
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
+    pub(crate) expanded_docker_logs: HashMap<String, content::docker_logs::DockerLogState>,
+    pub(crate) docker_log_modal: Option<String>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
@@ -123,6 +125,8 @@ impl Crabdash {
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
             status_message,
             add_machine_modal_open: false,
+            expanded_docker_logs: HashMap::default(),
+            docker_log_modal: None,
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
@@ -155,6 +159,9 @@ impl Crabdash {
             KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
             KeyBinding::new("escape", DismissAddMachineModal, None),
             KeyBinding::new("escape", DismissAddMachineModal, Some("CrabdashTextField")),
+            KeyBinding::new("escape", DismissDockerLogModal, None),
+            KeyBinding::new("enter", DismissDockerLogModal, None),
+            KeyBinding::new("return", DismissDockerLogModal, None),
             KeyBinding::new("enter", SubmitAddMachineModal, None),
             KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
             KeyBinding::new("return", SubmitAddMachineModal, None),
@@ -558,6 +565,15 @@ impl Render for Crabdash {
                 this.open_add_machine_modal(window, cx);
             }))
             .on_action(cx.listener(Crabdash::dismiss_add_machine_modal_action))
+            .on_action(cx.listener(|this, _: &DismissDockerLogModal, _, cx| {
+                if this.docker_log_modal.is_some() {
+                    let id = this.docker_log_modal.take();
+                    if let Some(id) = id {
+                        this.expanded_docker_logs.remove(&id);
+                    }
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(Crabdash::submit_add_machine_action))
             .on_action(|_: &MinimizeWindow, window, _| {
                 window.minimize_window();
@@ -600,7 +616,7 @@ impl Render for Crabdash {
                             .when(!self.sidebar_collapsed, |this| {
                                 this.child(sidebar::render(self, cx))
                             })
-                            .child(content::render(self, cx)),
+                            .child(content::render(self, window, cx)),
                     ), // .child(
                        //     div()
                        //         .h(px(36.0))
@@ -625,6 +641,8 @@ impl Render for Crabdash {
             })
             .when(self.docker_run_modal_open, |this| {
                 this.child(content::render_docker_run_modal(self, cx))
+            .when(self.docker_log_modal.is_some(), |this| {
+                this.child(content::render_logs_modal(self, cx))
             })
     }
 }
