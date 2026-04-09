@@ -6,6 +6,7 @@ mod about;
 pub mod app;
 pub mod components;
 pub mod content;
+pub(crate) mod docker_run;
 pub(crate) use about::show_about_dialog;
 pub use app::Crabdash;
 

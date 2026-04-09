@@ -15,6 +15,7 @@ use crate::components::text_field::{
 };
 use crate::components::{modal, sidebar, toast};
 use crate::content;
+use crate::docker_run::DockerRunConfig;
 use crate::{
     AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
     RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ZoomWindow,
@@ -66,8 +67,8 @@ pub struct Crabdash {
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
-    pub(crate) docker_run_args_field: Entity<TextField>,
-    pub(crate) show_docker_run_args_field: bool,
+    pub(crate) docker_run_config: DockerRunConfig,
+    pub(crate) docker_run_modal_open: bool,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) add_machine_auth_mode: AddMachineAuthMode,
@@ -125,9 +126,8 @@ impl Crabdash {
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
-            docker_run_args_field: cx
-                .new(|cx| TextField::new("", "args: [image, env, ports]", 1, cx)),
-            show_docker_run_args_field: false,
+            docker_run_config: DockerRunConfig::new(cx),
+            docker_run_modal_open: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "user", 2, cx)),
             add_machine_auth_mode: AddMachineAuthMode::default(),
@@ -236,6 +236,65 @@ impl Crabdash {
                 }
             },
         }
+    }
+
+    pub(crate) fn open_docker_run_modal(&mut self, cx: &mut Context<Self>) {
+        self.docker_run_modal_open = true;
+        cx.notify();
+    }
+
+    pub(crate) fn close_docker_run_modal(&mut self, cx: &mut Context<Self>) {
+        self.docker_run_modal_open = false;
+        cx.notify();
+    }
+
+    pub(crate) fn submit_docker_run(&mut self, cx: &mut Context<Self>) {
+        let image = self.docker_run_config.image.read(cx).text();
+        if image.trim().is_empty() {
+            self.set_status_error("Image name is required.");
+            cx.notify();
+            return;
+        }
+
+        let mut machine = self.selected_machine().background_clone();
+        let machine_index = self.selected_machine;
+
+        let args: Vec<String> = self.docker_run_config.build_args(cx);
+
+        self.docker_run_modal_open = false;
+        self.docker_run_config.reset(cx);
+        cx.notify();
+
+        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                let result = cx
+                    .background_spawn(async move { machine.run_container(args) })
+                    .await;
+
+                this.update(&mut cx, move |this, cx| {
+                    match result {
+                        Ok(_) => {
+                            let mut fresh_machine = this.selected_machine().background_clone();
+                            if let Ok(containers) = fresh_machine.list_docker() {
+                                if let Some(m) = this.machine_store.machines.get_mut(machine_index)
+                                {
+                                    m.services.docker = containers;
+                                    m.services.docker_error = None;
+                                }
+                            }
+                            this.clear_status_message();
+                        }
+                        Err(err) => {
+                            this.set_status_error(format!("docker run failed: {err}"));
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
@@ -563,6 +622,9 @@ impl Render for Crabdash {
             })
             .when(self.add_machine_modal_open, |this| {
                 this.child(modal::render(self, cx))
+            })
+            .when(self.docker_run_modal_open, |this| {
+                this.child(content::render_docker_run_modal(self, cx))
             })
     }
 }

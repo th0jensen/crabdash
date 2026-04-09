@@ -4,13 +4,14 @@ use crate::{
     store::MachineStore,
 };
 use anyhow::{Result, anyhow, bail};
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use services::{
     Disk, MachineServices, ServiceItem, Services,
     disks::Disks,
     docker::{Container, Docker},
 };
-use std::process::Command;
+use std::{iter::once, process::Command};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,9 +209,9 @@ impl Docker for Machine {
         Ok(stdout)
     }
 
-    fn run_container(&mut self, args: &str) -> Result<String> {
-        let args = vec!["run", args];
+    fn run_container(&mut self, args: Vec<String>) -> Result<String> {
         let docker = self.find_docker();
+        let args: Vec<&str> = once("run").chain(args.iter().map(String::as_str)).collect();
         let stdout = self.run(&docker, Some(&args))?;
         Ok(stdout)
     }
@@ -228,13 +229,15 @@ impl Services for Machine {
                 "sh",
                 Some(&[
                     "-c",
-                    r#"systemctl list-units --type=service --all --no-legend --no-pager \
-    | awk '{print $1}' \
-    | while read -r unit; do
-        status=$(systemctl show -p ActiveState --value "$unit")
-        pid=$(systemctl show -p MainPID --value "$unit")
-        printf "%s\t%s\t%s\n" "$pid" "$status" "$unit"
-      done"#,
+                    indoc! {r#"
+                        systemctl list-units --type=service --all --no-legend --no-pager \
+                        | awk '{print $1}' \
+                        | while read -r unit; do
+                            status=$(systemctl show -p ActiveState --value "$unit")
+                            pid=$(systemctl show -p MainPID --value "$unit")
+                            printf "%s\t%s\t%s\n" "$pid" "$status" "$unit"
+                        done
+                    "#},
                 ]),
             ),
             _ => bail!("System does not yet support the services feature"),

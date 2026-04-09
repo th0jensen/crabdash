@@ -1,5 +1,6 @@
 mod disks;
 mod docker;
+mod docker_run_modal;
 mod header;
 mod services;
 mod shared;
@@ -16,6 +17,13 @@ fn active_panel(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         MainTab::Disks => disks::render(app, cx),
         MainTab::Services => services::render(app, cx),
     }
+}
+
+pub fn render_docker_run_modal(
+    app: &Crabdash,
+    cx: &mut Context<Crabdash>,
+) -> impl IntoElement {
+    docker_run_modal::render(app, cx)
 }
 
 pub fn render_title_bar(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {

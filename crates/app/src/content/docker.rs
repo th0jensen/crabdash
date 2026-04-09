@@ -268,51 +268,19 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             div()
                 .flex()
                 .gap(px(8.0))
-                .child(if app.show_docker_run_args_field {
-                    div()
-                        .flex()
-                        .gap(px(8.0))
-                        .child(
-                            button(
-                                "add-new-container",
-                                Some(LucideIcon::Play),
-                                "Run".into(),
-                                true,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let args = this.docker_run_args_field.read(cx).text();
-                                if args.is_empty() {
-                                    this.show_docker_run_args_field = false;
-                                    return cx.notify();
-                                }
-
-                                let mut machine = this.selected_machine_mut().background_clone();
-                                let stdout = machine.run_container(&args);
-                                if stdout.is_ok_and(|value| !value.is_empty()) {
-                                    this.show_docker_run_args_field = false;
-                                    this.docker_run_args_field
-                                        .update(cx, |field, cx| field.clear(cx));
-                                    this.refresh_services();
-                                    return cx.notify();
-                                }
-                            })),
-                        )
-                        .child(app.docker_run_args_field.clone())
-                        .w_full()
-                } else {
+                .child(
                     div().flex().child(
                         button(
-                            "add-new-container",
+                            "run-container-open",
                             Some(LucideIcon::Play),
-                            "Run".into(),
+                            Some("Run"),
                             true,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_docker_run_args_field = true;
-                            cx.notify();
+                            this.open_docker_run_modal(cx);
                         })),
-                    )
-                })
+                    ),
+                )
                 .child(stats_chip(
                     "docker-filter-total",
                     "Total",

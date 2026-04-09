@@ -56,7 +56,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn run_container(&mut self, args: &str) -> Result<String>;
+    fn run_container(&mut self, args: Vec<String>) -> Result<String>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments
@@ -76,6 +76,69 @@ pub trait Docker {
     /// * `Ok(_)`: The container logs are returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn container_logs(&mut self, id: &str) -> Result<String>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RestartPolicy {
+    #[default]
+    No,
+    Always,
+    OnFailure,
+    UnlessStopped,
+}
+
+impl RestartPolicy {
+    pub fn flag_value(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Always => "always",
+            Self::OnFailure => "on-failure",
+            Self::UnlessStopped => "unless-stopped",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::No => "No",
+            Self::Always => "Always",
+            Self::OnFailure => "On Failure",
+            Self::UnlessStopped => "Unless Stopped",
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::No, Self::Always, Self::OnFailure, Self::UnlessStopped]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NetworkMode {
+    #[default]
+    Bridge,
+    Host,
+    None,
+}
+
+impl NetworkMode {
+    pub fn flag_value(self) -> Option<&'static str> {
+        match self {
+            Self::Bridge => Option::None,
+            Self::Host => Some("host"),
+            Self::None => Some("none"),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bridge => "Bridge",
+            Self::Host => "Host",
+            Self::None => "None",
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::Bridge, Self::Host, Self::None]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
