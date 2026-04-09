@@ -121,7 +121,7 @@ fn action_button(
             .hover(move |style| style.bg(hover_bg))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let machine_index = this.selected_machine;
-                let mut machine = this.selected_machine().background_clone();
+                let mut machine = this.selected_machine().clone();
 
                 if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
                     this.pending_docker_actions.insert(id.clone(), action);
@@ -142,8 +142,8 @@ fn action_button(
                     async move {
                         let result = cx
                             .background_spawn(async move {
-                                machine.container_action(&bg_id, action.command())?;
-                                machine.list_docker()
+                                machine.container_action(&bg_id, action.command()).await?;
+                                machine.list_docker().await
                             })
                             .await;
 
@@ -242,14 +242,14 @@ fn logs_button(
                 };
                 this.expanded_docker_logs.insert(id.clone(), state);
 
-                let mut machine = this.selected_machine().background_clone();
+                let mut machine = this.selected_machine().clone();
                 let fetch_id = id.clone();
                 cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
                         let bg_id = fetch_id.clone();
                         let result = cx
-                            .background_spawn(async move { machine.container_logs(&bg_id) })
+                            .background_spawn(async move { machine.container_logs(&bg_id).await })
                             .await;
                         this.update(&mut cx, move |this, cx| {
                             if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_id) {
@@ -373,32 +373,27 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
             };
 
             d.child(
-                div()
-                    .w_full()
-                    .p(px(12.0))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("logs-scroll-{}", container_id)))
-                            .w_full()
-                            .h(px(300.0))
-                            .track_scroll(&scroll_handle)
-                            .overflow_scroll()
-                            .on_scroll_wheel(cx.listener(
-                                move |_, event: &ScrollWheelEvent, window, cx| {
-                                    let delta = event.delta.pixel_delta(window.line_height());
-                                    let current = wheel_handle.offset();
-                                    let max = wheel_handle.max_offset();
-                                    let next_x =
-                                        (current.x + delta.x).max(-max.width).min(px(0.0));
-                                    let next_y =
-                                        (current.y + delta.y).max(-max.height).min(px(0.0));
-                                    wheel_handle.set_offset(point(next_x, next_y));
-                                    cx.notify();
-                                    cx.stop_propagation();
-                                },
-                            ))
-                            .child(logs_content),
-                    ),
+                div().w_full().p(px(12.0)).child(
+                    div()
+                        .id(SharedString::from(format!("logs-scroll-{}", container_id)))
+                        .w_full()
+                        .h(px(300.0))
+                        .track_scroll(&scroll_handle)
+                        .overflow_scroll()
+                        .on_scroll_wheel(cx.listener(
+                            move |_, event: &ScrollWheelEvent, window, cx| {
+                                let delta = event.delta.pixel_delta(window.line_height());
+                                let current = wheel_handle.offset();
+                                let max = wheel_handle.max_offset();
+                                let next_x = (current.x + delta.x).max(-max.width).min(px(0.0));
+                                let next_y = (current.y + delta.y).max(-max.height).min(px(0.0));
+                                wheel_handle.set_offset(point(next_x, next_y));
+                                cx.notify();
+                                cx.stop_propagation();
+                            },
+                        ))
+                        .child(logs_content),
+                ),
             )
         })
 }

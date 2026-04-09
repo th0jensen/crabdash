@@ -7,12 +7,14 @@ authors.workspace = true
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
+async-ssh2-lite = { version = "0.5.0", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 dirs = "6.0.0"
 indoc = "2.0.7"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 services = { path = "../services" }
-ssh2 = "0.9.5"
+smol = "2.0.2"
 uuid = { version = "1", features = ["v4"] }
 
 [lints]

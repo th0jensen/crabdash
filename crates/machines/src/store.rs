@@ -116,13 +116,13 @@ impl MachineStore {
     /// # Returns
     /// * `Ok(usize)`: The index of the newly added machine
     /// * `Err(anyhow::Error)`: If the SSH connection fails or saving the store fails
-    pub fn add_remote_machine(
+    pub async fn add_remote_machine(
         &mut self,
         user: String,
         host: String,
         password: AuthMethod,
     ) -> Result<usize> {
-        let machine = Machine::new_remote(&user, &host, password)?;
+        let machine = Machine::new_remote(&user, &host, password).await?;
         self.add_machine(machine)
     }
 }
@@ -130,18 +130,17 @@ impl MachineStore {
 impl Default for MachineStore {
     /// Creates a default [`MachineStore`] pre-populated with a single local
     /// machine with the id `"localhost"`.
-    ///
-    /// # Panics
-    /// Panics if local system information cannot be retrieved.
     fn default() -> Self {
-        let sys = SystemInfo::local().expect("Failed to retrieve SystemInfo");
-        let kind = MachineKind::get_kind(&sys);
         MachineStore {
             machines: vec![Machine {
                 uuid: Uuid::new_v4(),
                 id: "localhost".to_string(),
-                system_info: sys,
-                kind,
+                system_info: SystemInfo {
+                    machine_name: "computer".into(),
+                    os_version: "0.1.1".into(),
+                    arch: "x69_42".into(),
+                },
+                kind: MachineKind::Linux,
                 remote: None,
                 docker_path: None,
                 services: MachineServices::default(),

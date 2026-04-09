@@ -11,7 +11,8 @@ use services::{
     disks::Disks,
     docker::{Container, Docker},
 };
-use std::{iter::once, process::Command};
+use smol::process::Command;
+use std::iter::once;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,9 +42,9 @@ impl Machine {
     /// * `Ok(Machine)`: A fully initialised machine with an active SSH connection
     /// * `Err(anyhow::Error)`: If the SSH connection fails, or if querying remote
     ///   system information fails
-    pub fn new_remote(user: &str, host: &str, auth: AuthMethod) -> Result<Self> {
-        let mut rc = RemoteConnection::new_connection(user, host, auth)?;
-        let system_info = SystemInfo::remote(&mut rc)?;
+    pub async fn new_remote(user: &str, host: &str, auth: AuthMethod) -> Result<Self> {
+        let mut rc = RemoteConnection::new_connection(user, host, auth).await?;
+        let system_info = SystemInfo::remote(&mut rc).await?;
 
         Ok(Self {
             uuid: Uuid::new_v4(),
@@ -69,10 +70,10 @@ impl Machine {
     /// * `Err(anyhow::Error)`: If the command exits with a non-zero status, or if
     ///   spawning/communication fails. The error message prefers stderr over stdout,
     ///   falling back to a generic exit status message if both are empty.
-    pub fn run(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<String> {
+    pub async fn run(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<String> {
         match &mut self.remote {
             Some(rc) => {
-                let (stdout, exit_status) = rc.run_ssh_command(cmd, args)?;
+                let (stdout, exit_status) = rc.run_ssh_command(cmd, args).await?;
                 if exit_status != 0 {
                     let message = if stdout.trim().is_empty() {
                         format!("{cmd} exited with status {exit_status}")
@@ -88,7 +89,7 @@ impl Machine {
                 Ok(stdout)
             }
             None => {
-                let result = Command::new(cmd).args(args.unwrap_or(&[])).output()?;
+                let result = Command::new(cmd).args(args.unwrap_or(&[])).output().await?;
                 if !result.status.success() {
                     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
                     let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
@@ -112,25 +113,6 @@ impl Machine {
             }
         }
     }
-    /// Creates a lightweight clone of this machine with a fresh service state.
-    ///
-    /// All fields are cloned from the original except `services`, which is
-    /// reset to [`MachineServices::default`]. Intended for use when the same
-    /// machine connection needs to be shared across background tasks.
-    ///
-    /// Note: if the machine has an active SSH connection, the underlying
-    /// connection handle is cloned and shared — not duplicated.
-    pub fn background_clone(&self) -> Self {
-        Self {
-            uuid: self.uuid.clone(),
-            id: self.id.clone(),
-            system_info: self.system_info.clone(),
-            kind: self.kind,
-            remote: self.remote.clone(),
-            docker_path: self.docker_path.clone(),
-            services: MachineServices::default(),
-        }
-    }
     /// Returns whether the machine is reachable and has an active connection.
     ///
     /// For remote machines, delegates to the underlying SSH session state.
@@ -151,10 +133,10 @@ impl Machine {
     /// * `Ok(true)`: System info has changed and state was updated
     /// * `Ok(false)`: System info is unchanged
     /// * `Err(anyhow::Error)`: If querying system info fails
-    pub fn sync_system_info(&mut self) -> Result<bool> {
+    pub async fn sync_system_info(&mut self) -> Result<bool> {
         let system_info = match &mut self.remote {
-            Some(rc) => SystemInfo::remote(rc)?,
-            None => SystemInfo::local()?,
+            Some(rc) => SystemInfo::remote(rc).await?,
+            None => SystemInfo::local().await?,
         };
 
         if self.system_info == system_info {
@@ -170,7 +152,7 @@ impl Machine {
 }
 
 impl Docker for Machine {
-    fn find_docker(&mut self) -> String {
+    async fn find_docker(&mut self) -> String {
         if let Some(path) = &self.docker_path {
             return path.clone();
         }
@@ -181,50 +163,55 @@ impl Docker for Machine {
             "/usr/bin/docker",
         ];
 
-        let path = CANDIDATES
-            .iter()
-            .copied()
-            .find(|p| self.run("test", Some(&["-f", p])).is_ok())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| String::from("docker"));
+        let path = {
+            let mut found = None;
+            for p in CANDIDATES.iter().copied() {
+                if self.run("test", Some(&["-f", p])).await.is_ok() {
+                    found = Some(p.to_string());
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| String::from("docker"))
+        };
+
         self.docker_path = Some(path.clone());
         MachineStore::save_machine(self.clone()).ok();
         path
     }
 
-    fn list_docker(&mut self) -> Result<Vec<Container>> {
+    async fn list_docker(&mut self) -> Result<Vec<Container>> {
         let args = vec!["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
-        let docker = self.find_docker();
-        let stdout = self.run(&docker, Some(&args))?;
+        let docker = self.find_docker().await;
+        let stdout = self.run(&docker, Some(&args)).await?;
         Ok(Container::parse_output(stdout))
     }
 
-    fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
+    async fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
         let args = vec![action, id];
-        let docker = self.find_docker();
-        let stdout = self.run(&docker, Some(&args))?;
+        let docker = self.find_docker().await;
+        let stdout = self.run(&docker, Some(&args)).await?;
         if stdout.trim() != id {
             bail!(stdout)
         }
         Ok(stdout)
     }
 
-    fn run_container(&mut self, args: Vec<String>) -> Result<String> {
-        let docker = self.find_docker();
+    async fn run_container(&mut self, args: Vec<String>) -> Result<String> {
+        let docker = self.find_docker().await;
         let args: Vec<&str> = once("run").chain(args.iter().map(String::as_str)).collect();
-        let stdout = self.run(&docker, Some(&args))?;
+        let stdout = self.run(&docker, Some(&args)).await?;
         Ok(stdout)
     }
 
-    fn container_logs(&mut self, id: &str) -> Result<String> {
-        let docker = self.find_docker();
-        let stdout = self.run(&docker, Some(&["logs", id]))?;
+    async fn container_logs(&mut self, id: &str) -> Result<String> {
+        let docker = self.find_docker().await;
+        let stdout = self.run(&docker, Some(&["logs", id])).await?;
         Ok(stdout)
     }
 }
 
 impl Services for Machine {
-    fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
+    async fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
         let (command, args): (&str, Option<&[&str]>) = match self.kind {
             MachineKind::MacOS => ("launchctl", Some(&["list"])),
             MachineKind::Linux => (
@@ -245,22 +232,26 @@ impl Services for Machine {
             _ => bail!("System does not yet support the services feature"),
         };
 
-        Ok(ServiceItem::parse_output(self.run(command, args)?))
+        Ok(ServiceItem::parse_output(self.run(command, args).await?))
     }
 }
 
 impl Disks for Machine {
-    fn list_disks(&mut self) -> Result<Vec<Disk>> {
+    async fn list_disks(&mut self) -> Result<Vec<Disk>> {
         match self.kind {
             MachineKind::MacOS => {
-                let list_stdout = self.run("diskutil", Some(&["list", "-plist"]))?;
-                let apfs_stdout = self.run("diskutil", Some(&["apfs", "list", "-plist"])).ok();
+                let list_stdout = self.run("diskutil", Some(&["list", "-plist"])).await?;
+                let apfs_stdout = self
+                    .run("diskutil", Some(&["apfs", "list", "-plist"]))
+                    .await
+                    .ok();
                 let mut disks = Disk::convert_diskutil(&list_stdout, apfs_stdout.as_deref())?;
 
                 for disk in &mut disks {
                     let identifier = disk.id.trim_start_matches("/dev/");
-                    if let Ok(info_stdout) =
-                        self.run("diskutil", Some(&["info", "-plist", identifier]))
+                    if let Ok(info_stdout) = self
+                        .run("diskutil", Some(&["info", "-plist", identifier]))
+                        .await
                     {
                         let _ = disk.apply_diskutil_info(&info_stdout);
                     }
@@ -276,7 +267,7 @@ impl Disks for Machine {
                         "-o",
                         "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL,PKNAME,FSTYPE,LABEL,RM,HOTPLUG,TRAN",
                     ]),
-                )?;
+                ).await?;
                 Ok(Disk::convert_lsblk(&stdout))
             }
             MachineKind::Unknown => bail!("System does not yet support the disks feature"),

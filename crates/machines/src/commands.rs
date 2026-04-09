@@ -12,19 +12,19 @@ pub struct SystemInfo {
 }
 
 impl SystemInfo {
-    pub fn local() -> Result<Self> {
+    pub async fn local() -> Result<Self> {
         Ok(Self {
-            machine_name: Self::run_uname(&["-n"])?,
-            os_version: Self::run_uname(&["-sr"])?,
-            arch: Self::run_uname(&["-m"])?,
+            machine_name: Self::run_uname(&["-n"]).await?,
+            os_version: Self::run_uname(&["-sr"]).await?,
+            arch: Self::run_uname(&["-m"]).await?,
         })
     }
 
-    pub fn remote(rc: &mut RemoteConnection) -> Result<Self> {
+    pub async fn remote(rc: &mut RemoteConnection) -> Result<Self> {
         let cmd = "uname";
-        let (machine_name, _) = rc.run_ssh_command(cmd, Some(&["-n"]))?;
-        let (os_version, _) = rc.run_ssh_command(cmd, Some(&["-sr"]))?;
-        let (arch, _) = rc.run_ssh_command(cmd, Some(&["-m"]))?;
+        let (machine_name, _) = rc.run_ssh_command(cmd, Some(&["-n"])).await?;
+        let (os_version, _) = rc.run_ssh_command(cmd, Some(&["-sr"])).await?;
+        let (arch, _) = rc.run_ssh_command(cmd, Some(&["-m"])).await?;
 
         Ok(Self {
             machine_name: machine_name.trim().to_string(),
@@ -33,7 +33,7 @@ impl SystemInfo {
         })
     }
 
-    fn run_uname(args: &[&str]) -> Result<String> {
+    async fn run_uname(args: &[&str]) -> Result<String> {
         let result = Command::new("uname").args(args).output()?;
 
         if !result.status.success() {
