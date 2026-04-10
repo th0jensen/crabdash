@@ -1,5 +1,6 @@
 use gpui::*;
 use services::docker::{NetworkMode, RestartPolicy};
+use utils::args::Args;
 
 use crate::app::Crabdash;
 use crate::components::text_field::TextField;
@@ -76,17 +77,17 @@ impl DockerRunConfig {
         self.network = NetworkMode::default();
     }
 
-    pub fn build_args(&self, cx: &App) -> Vec<String> {
-        let mut parts = Vec::<String>::new();
+    pub fn build_args(&self, cx: &App) -> Args {
+        let mut parts = Args::new();
 
         if self.detach {
-            parts.push("-d".into());
+            parts.push("-d");
         }
         if self.interactive {
-            parts.push("-it".into());
+            parts.push("-it");
         }
         if self.remove {
-            parts.push("--rm".into());
+            parts.push("--rm");
         }
         if self.restart != RestartPolicy::No {
             parts.push(format!("--restart={}", self.restart.flag_value()));
@@ -127,21 +128,21 @@ impl DockerRunConfig {
         for field in &self.ports {
             let v = field.read(cx).text();
             if !v.is_empty() {
-                parts.push("-p".into());
+                parts.push("-p");
                 parts.push(v);
             }
         }
         for field in &self.volumes {
             let v = field.read(cx).text();
             if !v.is_empty() {
-                parts.push("-v".into());
+                parts.push("-v");
                 parts.push(v);
             }
         }
         for field in &self.env_vars {
             let v = field.read(cx).text();
             if !v.is_empty() {
-                parts.push("-e".into());
+                parts.push("-e");
                 parts.push(v);
             }
         }

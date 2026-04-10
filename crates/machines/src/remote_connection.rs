@@ -12,6 +12,8 @@ use std::{
 };
 use tokio::runtime::Runtime;
 
+use utils::args::Args;
+
 static SSH_RT: OnceLock<Runtime> = OnceLock::new();
 
 fn ssh_rt() -> &'static Runtime {
@@ -136,39 +138,36 @@ impl RemoteConnection {
         Ok(())
     }
 
-    pub async fn run_ssh_command(
-        &mut self,
-        cmd: &str,
-        args: Option<&[&str]>,
-    ) -> Result<(String, i32)> {
+    pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<(Vec<u8>, i32)> {
         self.ensure_connected().await?;
         let session = self.session.lock().unwrap().clone();
         let Some(session) = session else {
             bail!("Not connected!")
         };
 
-        let full_cmd = match args {
-            Some(args) if !args.is_empty() => {
-                let escaped_args = args
-                    .iter()
-                    .map(|arg| Self::shell_escape(arg))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-
-                format!("{cmd} {escaped_args}")
-            }
-            _ => cmd.to_string(),
+        fn shell_quote(s: &str) -> String {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        }
+        let quoted_args: String = args
+            .iter()
+            .map(|a| shell_quote(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let full_cmd = if quoted_args.is_empty() {
+            cmd.to_string()
+        } else {
+            format!("{} {}", cmd, quoted_args)
         };
 
         ssh_rt()
             .spawn(async move {
                 let mut channel = session.channel_session().await?;
                 channel.exec(&full_cmd).await?;
-                let mut s = String::new();
-                channel.read_to_string(&mut s).await?;
+                let mut stdout = Vec::new();
+                channel.read_to_end(&mut stdout).await?;
                 channel.wait_close().await?;
                 let exit_status = channel.exit_status()?;
-                Ok((s, exit_status))
+                Ok((stdout, exit_status))
             })
             .await
             .map_err(|e| anyhow!("SSH task panicked: {e}"))
@@ -183,24 +182,8 @@ impl RemoteConnection {
             .map_or(false, |session| session.authenticated())
     }
 
-    fn shell_escape(arg: &str) -> String {
-        if arg.is_empty() {
-            return "''".to_string();
-        }
-
-        if arg.bytes().all(|b| {
-            matches!(
-                b,
-                b'a'..=b'z'
-                    | b'A'..=b'Z'
-                    | b'0'..=b'9'
-                    | b'-' | b'_' | b'.' | b'/' | b':'
-            )
-        }) {
-            return arg.to_string();
-        }
-
-        format!("'{}'", arg.replace('\'', r"'\''"))
+    pub fn restore_session_from(&mut self, other: &RemoteConnection) {
+        self.session = Arc::clone(&other.session);
     }
 }
 

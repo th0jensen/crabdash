@@ -1,5 +1,6 @@
 use anyhow::Result;
 use lucide_icons::Icon;
+use utils::args::Args;
 
 #[derive(Clone, Debug, Default)]
 pub struct Container {
@@ -56,7 +57,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn run_container(&mut self, args: Vec<String>) -> impl Future<Output = Result<String>>;
+    fn run_container(&mut self, args: &Args) -> impl Future<Output = Result<String>>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments

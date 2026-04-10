@@ -1,17 +1,17 @@
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use services::MachineServices;
+use smol::fs;
 use uuid::Uuid;
 
 use crate::{
-    commands::SystemInfo,
-    machine::{Machine, MachineKind},
+    machine::{Machine, MachineKind, SystemInfo},
     remote_connection::AuthMethod,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineStore {
     pub machines: Vec<Machine>,
 }
@@ -25,30 +25,34 @@ fn machines_file_path() -> Result<PathBuf> {
     Ok(path)
 }
 
+pub async fn load_store() -> Result<MachineStore> {
+    MachineStore::load().await
+}
+
 impl MachineStore {
-    pub fn load() -> Result<Self> {
+    pub async fn load() -> Result<Self> {
         let path = machines_file_path()?;
 
         if !path.exists() {
-            let store = MachineStore::default();
-            store.save()?;
+            let store = Self::default();
+            store.save().await?;
             return Ok(store);
         };
 
-        let contents = fs::read_to_string(&path)?;
+        let contents = fs::read_to_string(&path).await?;
         let store = serde_json::from_str(&contents)?;
         Ok(store)
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub async fn save(&self) -> Result<()> {
         let path = machines_file_path()?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).await?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)?;
+        fs::write(path, json).await?;
         Ok(())
     }
     /// Updates an existing machine in the store by matching on `uuid`, then
@@ -60,15 +64,15 @@ impl MachineStore {
     /// # Returns
     /// * `Ok(())`: The store was successfully saved
     /// * `Err(anyhow::Error)`: If loading or saving the store fails
-    pub fn save_machine(mc: Machine) -> Result<()> {
-        let mut store = Self::load()?;
+    pub async fn update_machine(mc: Machine) -> Result<()> {
+        let mut store = load_store().await?;
         let existing = store
             .machines
             .iter_mut()
             .find(|m| m.uuid == mc.uuid)
             .ok_or_else(|| anyhow!("No machine found with id '{}'", mc.id))?;
         *existing = mc;
-        store.save()
+        store.save().await
     }
     /// Removes an existing machine from the store by matching on `uuid`, then
     /// persists the change to disk.
@@ -79,15 +83,15 @@ impl MachineStore {
     /// # Returns
     /// * `Ok(())`: The store was successfully saved
     /// * `Err(anyhow::Error)`: If loading or saving the store fails
-    pub fn remove_machine(uuid: Uuid) -> Result<()> {
-        let mut store = Self::load()?;
+    pub async fn remove_machine(uuid: Uuid) -> Result<()> {
+        let mut store = load_store().await?;
         let index = store
             .machines
             .iter()
             .position(|m| m.uuid == uuid)
             .ok_or_else(|| anyhow!("No machine found with uuid '{}'", uuid))?;
         store.machines.remove(index);
-        store.save()
+        store.save().await
     }
     /// Appends a machine to the store and persists it to disk.
     ///
@@ -97,14 +101,13 @@ impl MachineStore {
     /// # Returns
     /// * `Ok(usize)`: The index of the newly added machine
     /// * `Err(anyhow::Error)`: If saving the store fails
-    pub fn add_machine(&mut self, machine: Machine) -> Result<usize> {
+    pub async fn create_machine(&mut self, machine: Machine) -> Result<usize> {
         self.machines.push(machine);
         let index = self.machines.len() - 1;
 
-        if let Err(error) = self.save() {
+        self.save().await.inspect_err(|_| {
             self.machines.pop();
-            return Err(error);
-        }
+        })?;
 
         Ok(index)
     }
@@ -120,10 +123,10 @@ impl MachineStore {
         &mut self,
         user: String,
         host: String,
-        password: AuthMethod,
+        auth: AuthMethod,
     ) -> Result<usize> {
-        let machine = Machine::new_remote(&user, &host, password).await?;
-        self.add_machine(machine)
+        let machine = Machine::new_remote(&user, &host, auth).await?;
+        self.create_machine(machine).await
     }
 }
 
@@ -136,7 +139,7 @@ impl Default for MachineStore {
                 uuid: Uuid::new_v4(),
                 id: "localhost".to_string(),
                 system_info: SystemInfo {
-                    machine_name: "computer".into(),
+                    machine_name: "localhost".into(),
                     os_version: "0.1.1".into(),
                     arch: "x69_42".into(),
                 },

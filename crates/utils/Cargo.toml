@@ -1,17 +1,12 @@
 [package]
-name = "services"
+name = "utils"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-lucide-icons.workspace = true
-serde.workspace = true
-utils.workspace = true
-
-plist = "1.8.0"
+# utils.workspace = true
 
 [lints]
 workspace = true

@@ -5,6 +5,7 @@ members = [
     "crates/crabdash",
     "crates/machines",
     "crates/services",
+    "crates/utils",
 ]
 default-members = ["crates/crabdash"]
 
@@ -14,6 +15,21 @@ version = "0.1.2"
 license = "MIT"
 authors = ["Thomas Jensen"]
 description = "Crabdash desktop app built with Rust and GPUI"
+
+[workspace.dependencies]
+app = { path = "crates/app" }
+machines = { path = "crates/machines" }
+services = { path = "crates/services" }
+utils = { path = "crates/utils" }
+
+anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
+gpui = { version = "*" }
+indoc = { version = "2.0.7" }
+libghostty-vt = "0.1.1"
+lucide-icons = { version = "0.575.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+smol = { version = "2.0.2" }
+uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
