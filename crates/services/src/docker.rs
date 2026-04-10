@@ -1,5 +1,6 @@
 use anyhow::Result;
 use lucide_icons::Icon;
+use utils::args::Args;
 
 #[derive(Clone, Debug, Default)]
 pub struct Container {
@@ -41,13 +42,13 @@ pub trait Docker {
     ///
     /// # Returns
     /// * `String`: The Docker binary path
-    fn find_docker(&mut self) -> String;
+    fn find_docker(&mut self) -> impl Future<Output = String>;
     /// Lists all Docker containers on the machine
     ///
     /// # Returns
     /// * `Ok(Vec<ServiceItem>)`: The containers on the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn list_docker(&mut self) -> Result<Vec<Container>>;
+    fn list_docker(&mut self) -> impl Future<Output = Result<Vec<Container>>>;
     /// Runs a Docker container
     ///
     /// # Arguments
@@ -56,7 +57,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn run_container(&mut self, args: Vec<String>) -> Result<String>;
+    fn run_container(&mut self, args: &Args) -> impl Future<Output = Result<String>>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments
@@ -66,7 +67,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_action(&mut self, id: &str, action: &str) -> Result<String>;
+    fn container_action(&mut self, id: &str, action: &str) -> impl Future<Output = Result<String>>;
     /// Gets the logs of a Docker container
     ///
     /// # Arguments
@@ -75,7 +76,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(_)`: The container logs are returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_logs(&mut self, id: &str) -> Result<String>;
+    fn container_logs(&mut self, id: &str) -> impl Future<Output = Result<String>>;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

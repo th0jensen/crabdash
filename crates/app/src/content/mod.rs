@@ -1,7 +1,7 @@
 mod disks;
 mod docker;
-mod docker_run_modal;
 pub mod docker_logs;
+mod docker_run_modal;
 mod header;
 mod services;
 mod shared;
@@ -20,10 +20,7 @@ fn active_panel(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>)
     }
 }
 
-pub fn render_docker_run_modal(
-    app: &Crabdash,
-    cx: &mut Context<Crabdash>,
-) -> impl IntoElement {
+pub fn render_docker_run_modal(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     docker_run_modal::render(app, cx)
 }
 
@@ -31,9 +28,9 @@ pub fn render_title_bar(app: &Crabdash, window: &mut Window, cx: &mut Context<Cr
     title_bar::render(app, window, cx)
 }
 
-pub fn render_logs_modal(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
-    docker::render_logs_modal(app, cx)
-}
+// pub fn render_logs_modal(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
+//     docker::render_logs_modal(app, cx)
+// }
 
 pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()

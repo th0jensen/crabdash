@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
+use machines::store::load_store;
 use services::docker::{DockerAction, DockerFilter};
 use services::{ServiceFilter, Services};
 
@@ -65,7 +66,7 @@ pub struct Crabdash {
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
     pub(crate) expanded_docker_logs: HashMap<String, content::docker_logs::DockerLogState>,
-    pub(crate) docker_log_modal: Option<String>,
+    pub(crate) logs_open_containers: HashSet<String>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
@@ -102,16 +103,18 @@ impl AddMachineAuthMode {
 
 impl Crabdash {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let (machine_store, status_message) = match MachineStore::load() {
-            Ok(store) => (store, None),
-            Err(error) => {
-                eprintln!("Failed to load MachineStore {error}");
-                (
-                    MachineStore::default(),
-                    Some(format!("Failed to load saved machines: {error}")),
-                )
+        let (machine_store, status_message) = smol::block_on(async {
+            match load_store().await {
+                Ok(store) => (store, None),
+                Err(error) => {
+                    eprintln!("Failed to load MachineStore {error}");
+                    (
+                        MachineStore::default(),
+                        Some(format!("Failed to load saved machines: {error}")),
+                    )
+                }
             }
-        };
+        });
 
         let mut app = Self {
             machine_store,
@@ -126,7 +129,7 @@ impl Crabdash {
             status_message,
             add_machine_modal_open: false,
             expanded_docker_logs: HashMap::default(),
-            docker_log_modal: None,
+            logs_open_containers: HashSet::default(),
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
@@ -145,7 +148,7 @@ impl Crabdash {
             add_machine_error: None,
             focus_handle: cx.focus_handle(),
         };
-        app.refresh_services();
+        app.refresh_services(cx);
         app
     }
 
@@ -191,58 +194,102 @@ impl Crabdash {
         &mut self.machine_store.machines[self.selected_machine]
     }
 
-    pub(crate) fn refresh_services(&mut self) {
-        if let Err(error) = self.selected_machine_mut().sync_system_info() {
-            eprintln!("Failed to sync machine system info: {error}");
-        }
+    pub(crate) fn sync_state(&mut self, cx: &mut Context<Self>) {
+        let mut mc = self.selected_machine_mut().clone();
 
-        match self.active_tab {
-            MainTab::Docker => match self.selected_machine_mut().list_docker() {
-                Ok(containers) => {
-                    let machine = self.selected_machine_mut();
-                    machine.services.docker = containers;
-                    machine.services.docker_error = None;
-                    self.clear_status_message();
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            if let Err(e) = mc.sync_system_info().await {
+                eprintln!("[app] sync_system_info failed: {e}");
+            }
+
+            let store = load_store().await;
+            this.update(cx, |this, _cx| match store {
+                Ok(store) => {
+                    let saved: HashMap<Uuid, _> = this
+                        .machine_store
+                        .machines
+                        .iter()
+                        .map(|m| (m.uuid, (m.services.clone(), m.remote.clone())))
+                        .collect();
+                    this.machine_store.machines = store.machines;
+                    for m in &mut this.machine_store.machines {
+                        if let Some((services, old_remote)) = saved.get(&m.uuid) {
+                            m.services = services.clone();
+                            if let (Some(new_rc), Some(old_rc)) =
+                                (m.remote.as_mut(), old_remote.as_ref())
+                            {
+                                new_rc.restore_session_from(old_rc);
+                            }
+                        }
+                    }
                 }
-                Err(error) => {
-                    let message = format!("Unable to load Docker: {error}");
-                    let machine = self.selected_machine_mut();
-                    machine.services.docker.clear();
-                    machine.services.docker_error = Some(error.to_string());
-                    self.set_status_error(message);
+                Err(e) => eprintln!("[app] load_store failed: {e}"),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn refresh_services(&mut self, cx: &mut Context<Self>) {
+        let mut machine = self.selected_machine_mut().clone();
+        let machine_index = self.selected_machine;
+        let active_tab = self.active_tab;
+
+        self.sync_state(cx);
+
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let result: Result<(), anyhow::Error> = async {
+                match active_tab {
+                    MainTab::Docker => {
+                        let containers = machine.list_docker().await?;
+                        this.update(cx, move |this, cx| {
+                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
+                                m.services.docker = containers;
+                                m.services.docker_error = None;
+                            }
+                            this.clear_status_message();
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                    MainTab::Disks => {
+                        let disks = machine.list_disks().await?;
+                        this.update(cx, move |this, cx| {
+                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
+                                m.services.disks = disks;
+                                m.services.disks_error = None;
+                            }
+                            this.clear_status_message();
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                    MainTab::Services => {
+                        let services = machine.list_services().await?;
+                        this.update(cx, move |this, cx| {
+                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
+                                m.services.systemd = services;
+                                m.services.systemd_error = None;
+                            }
+                            this.clear_status_message();
+                            cx.notify();
+                        })
+                        .ok();
+                    }
                 }
-            },
-            MainTab::Disks => match self.selected_machine_mut().list_disks() {
-                Ok(services) => {
-                    let machine = self.selected_machine_mut();
-                    machine.services.disks = services;
-                    machine.services.disks_error = None;
-                    self.clear_status_message();
-                }
-                Err(error) => {
-                    let message = format!("Unable to load Disks: {error}");
-                    let machine = self.selected_machine_mut();
-                    machine.services.disks.clear();
-                    machine.services.disks_error = Some(error.to_string());
-                    self.set_status_error(message);
-                }
-            },
-            MainTab::Services => match self.selected_machine_mut().list_services() {
-                Ok(services) => {
-                    let machine = self.selected_machine_mut();
-                    machine.services.systemd = services;
-                    machine.services.systemd_error = None;
-                    self.clear_status_message();
-                }
-                Err(error) => {
-                    let message = format!("Unable to load Disks: {error}");
-                    let machine = self.selected_machine_mut();
-                    machine.services.systemd.clear();
-                    machine.services.systemd_error = Some(error.to_string());
-                    self.set_status_error(message);
-                }
-            },
-        }
+                Ok(())
+            }
+            .await;
+
+            if let Err(error) = result {
+                this.update(cx, move |this, cx| {
+                    this.set_status_error(format!("Unable to load {active_tab:?}: {error}"));
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     pub(crate) fn open_docker_run_modal(&mut self, cx: &mut Context<Self>) {
@@ -263,10 +310,10 @@ impl Crabdash {
             return;
         }
 
-        let mut machine = self.selected_machine().background_clone();
+        let mut machine = self.selected_machine().clone();
         let machine_index = self.selected_machine;
 
-        let args: Vec<String> = self.docker_run_config.build_args(cx);
+        let args = self.docker_run_config.build_args(cx);
 
         self.docker_run_modal_open = false;
         self.docker_run_config.reset(cx);
@@ -275,61 +322,80 @@ impl Crabdash {
         cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                let result = cx
-                    .background_spawn(async move { machine.run_container(args) })
-                    .await;
+                let result = machine.run_container(&args).await;
 
-                this.update(&mut cx, move |this, cx| {
-                    match result {
-                        Ok(_) => {
-                            let mut fresh_machine = this.selected_machine().background_clone();
-                            if let Ok(containers) = fresh_machine.list_docker() {
-                                if let Some(m) = this.machine_store.machines.get_mut(machine_index)
-                                {
-                                    m.services.docker = containers;
-                                    m.services.docker_error = None;
+                match result {
+                    Ok(_) => {
+                        let containers = machine.list_docker().await;
+                        this.update(&mut cx, move |this, cx| {
+                            match containers {
+                                Ok(containers) => {
+                                    if let Some(m) =
+                                        this.machine_store.machines.get_mut(machine_index)
+                                    {
+                                        m.services.docker = containers;
+                                        m.services.docker_error = None;
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!("Failed to refresh docker after run: {err}");
                                 }
                             }
                             this.clear_status_message();
-                        }
-                        Err(err) => {
-                            this.set_status_error(format!("docker run failed: {err}"));
-                        }
+                            cx.notify();
+                        })
+                        .ok();
                     }
-                    cx.notify();
-                })
-                .ok();
+                    Err(err) => {
+                        this.update(&mut cx, move |this, cx| {
+                            this.set_status_error(format!("docker run failed: {err}"));
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                }
             }
         })
         .detach();
     }
 
     pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
-        if let Err(error) = MachineStore::remove_machine(uuid) {
-            let message = format!("Unable to delete machine: {error}");
-            eprintln!("{message}");
-            self.set_status_error(message);
-            cx.notify();
-            return;
-        }
-
-        match MachineStore::load() {
-            Ok(store) => {
-                self.machine_store = store;
-                self.selected_machine = self
-                    .selected_machine
-                    .min(self.machine_store.machines.len().saturating_sub(1));
-                self.refresh_services();
-                self.clear_status_message();
+        eprintln!("[delete] delete_machine called for uuid={uuid}");
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            if let Err(error) = MachineStore::remove_machine(uuid).await {
+                this.update(&mut cx, |this, cx| {
+                    this.set_status_error(format!("Unable to delete machine: {error}"));
+                    cx.notify();
+                })
+                .ok();
+                return;
             }
-            Err(error) => {
-                let message = format!("Unable to reload machines after delete: {error}");
-                eprintln!("{message}");
-                self.set_status_error(message);
+            match load_store().await {
+                Ok(store) => {
+                    this.update(&mut cx, |this, cx| {
+                        this.machine_store = store;
+                        this.selected_machine = this
+                            .selected_machine
+                            .min(this.machine_store.machines.len().saturating_sub(1));
+                        this.clear_status_message();
+                        this.refresh_services(cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    this.update(&mut cx, |this, cx| {
+                        this.set_status_error(format!(
+                            "Unable to reload machines after delete: {error}"
+                        ));
+                        cx.notify();
+                    })
+                    .ok();
+                }
             }
-        }
-
-        cx.notify();
+        })
+        .detach();
     }
 
     pub(crate) fn open_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -408,7 +474,7 @@ impl Crabdash {
             .update(cx, |field, cx| field.clear(cx));
     }
 
-    pub(crate) fn submit_add_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn submit_add_machine(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_error = None;
 
         let host = self.remote_host_field.read(cx).text().trim().to_string();
@@ -473,39 +539,57 @@ impl Crabdash {
             }
         };
 
-        match self.machine_store.add_remote_machine(user, host, auth) {
-            Ok(index) => {
-                self.selected_machine = index;
-                self.add_machine_modal_open = false;
-                self.clear_remote_machine_form(cx);
-                self.refresh_services();
-                self.clear_status_message();
-                window.focus(&self.focus_handle);
+        cx.spawn(
+            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| -> Result<()> {
+                let (mut cx, mut store) = (cx.clone(), load_store().await?);
+                match store.add_remote_machine(user, host, auth).await {
+                    Ok(index) => {
+                        this.update(&mut cx, move |this, cx| {
+                            this.machine_store = store;
+                            this.selected_machine = index;
+                            this.add_machine_modal_open = false;
+                            this.clear_remote_machine_form(cx);
+                            this.clear_status_message();
+                            this.refresh_services(cx);
 
-                if let Some(rc) = self.selected_machine().remote.as_ref() {
-                    let key = format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host);
-                    let user = rc.user.clone();
-                    let auth = rc.auth.clone();
-                    if let Some(secret) = auth.and_then(|auth| auth.secret_bytes()) {
-                        cx.spawn(async move |_, cx| {
-                            let future = cx
-                                .update(|app| app.write_credentials(&key, &user, &secret))
-                                .ok();
-                            if let Some(future) = future {
-                                future.await.ok();
+                            if let Some(rc) = this.selected_machine().remote.as_ref() {
+                                let (key, user, auth) = (
+                                    format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host),
+                                    rc.user.clone(),
+                                    rc.auth.clone(),
+                                );
+                                if let Some(secret) = auth.and_then(|auth| auth.secret_bytes()) {
+                                    cx.spawn(async move |_, cx| {
+                                        if let Some(future) = cx
+                                            .update(|app| {
+                                                app.write_credentials(&key, &user, &secret)
+                                            })
+                                            .ok()
+                                        {
+                                            future.await.ok();
+                                        }
+                                    })
+                                    .detach();
+                                }
                             }
+                            cx.notify();
                         })
-                        .detach();
+                        .ok();
+                        Ok(())
+                    }
+                    Err(err) => {
+                        this.update(&mut cx, move |this, cx| {
+                            this.set_status_error(err.to_string());
+                            this.add_machine_error = Some(err);
+                            cx.notify();
+                        })
+                        .ok();
+                        Err(anyhow::anyhow!("Failed to create machine"))
                     }
                 }
-            }
-            Err(error) => {
-                self.set_status_error(error.to_string());
-                self.add_machine_error = Some(error);
-            }
-        }
-
-        cx.notify();
+            },
+        )
+        .detach();
     }
 
     pub(crate) fn submit_add_machine_action(
@@ -558,22 +642,22 @@ impl Render for Crabdash {
                 this.toggle_sidebar(cx);
             }))
             .on_action(cx.listener(|this, _: &RefreshServices, _window, cx| {
-                this.refresh_services();
+                this.refresh_services(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
                 this.open_add_machine_modal(window, cx);
             }))
             .on_action(cx.listener(Crabdash::dismiss_add_machine_modal_action))
-            .on_action(cx.listener(|this, _: &DismissDockerLogModal, _, cx| {
-                if this.docker_log_modal.is_some() {
-                    let id = this.docker_log_modal.take();
-                    if let Some(id) = id {
-                        this.expanded_docker_logs.remove(&id);
-                    }
-                    cx.notify();
-                }
-            }))
+            // .on_action(cx.listener(|this, _: &DismissDockerLogModal, _, cx| {
+            //     if this.docker_log_modal.is_some() {
+            //         let id = this.docker_log_modal.take();
+            //         if let Some(id) = id {
+            //             this.expanded_docker_logs.remove(&id);
+            //         }
+            //         cx.notify();
+            //     }
+            // }))
             .on_action(cx.listener(Crabdash::submit_add_machine_action))
             .on_action(|_: &MinimizeWindow, window, _| {
                 window.minimize_window();
@@ -642,8 +726,8 @@ impl Render for Crabdash {
             .when(self.docker_run_modal_open, |this| {
                 this.child(content::render_docker_run_modal(self, cx))
             })
-            .when(self.docker_log_modal.is_some(), |this| {
-                this.child(content::render_logs_modal(self, cx))
-            })
+        // .when(self.docker_log_modal.is_some(), |this| {
+        //     this.child(content::render_logs_modal(self, cx))
+        // })
     }
 }

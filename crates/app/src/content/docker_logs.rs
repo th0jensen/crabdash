@@ -49,6 +49,11 @@ impl DockerLogState {
         })
     }
 
+    pub fn feed_string(&mut self, data: String) {
+        let data = data.into_bytes();
+        self.feed(&data);
+    }
+
     /// Feed raw log bytes into the terminal and update the rendered output.
     pub fn feed(&mut self, data: &[u8]) {
         self.terminal.vt_write(data);

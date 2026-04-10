@@ -143,7 +143,7 @@ fn machine_item(
                     }
                 }
                 this.update(cx, |this, cx| {
-                    this.refresh_services();
+                    this.refresh_services(cx);
                     cx.notify();
                 })
                 .ok();
@@ -230,7 +230,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                     let menu_app_refresh = menu_app.clone();
                     let menu_app_delete = menu_app.clone();
                     let menu = menu.entry("Refresh", Icon::RefreshCw, None, move |_, cx| {
-                        menu_app_refresh.update(cx, |app, _| app.refresh_services())
+                        menu_app_refresh.update(cx, |app, cx| app.refresh_services(cx))
                     });
                     if is_localhost {
                         menu

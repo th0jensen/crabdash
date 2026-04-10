@@ -75,7 +75,7 @@ fn tab_button(tab: MainTab, active: bool, cx: &mut Context<Crabdash>) -> impl In
         })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.active_tab = tab;
-            this.refresh_services();
+            this.refresh_services(cx);
             cx.notify();
         }))
 }
@@ -106,7 +106,7 @@ fn refresh_button(cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .child("Refresh"),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            this.refresh_services();
+            this.refresh_services(cx);
             cx.notify();
         }))
 }

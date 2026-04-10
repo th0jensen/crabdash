@@ -186,7 +186,7 @@ pub trait Disks {
     /// # Returns
     /// * `Ok(Vec<Disk>)`: The disks connected to the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn list_disks(&mut self) -> Result<Vec<Disk>>;
+    fn list_disks(&mut self) -> impl Future<Output = Result<Vec<Disk>>>;
 }
 
 #[derive(Debug, Deserialize)]

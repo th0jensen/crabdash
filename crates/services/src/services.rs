@@ -68,7 +68,7 @@ pub trait Services {
     /// # Returns
     /// * `Ok(Vec<Disk>)`: The disks connected to the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn list_services(&mut self) -> Result<Vec<ServiceItem>>;
+    fn list_services(&mut self) -> impl Future<Output = Result<Vec<ServiceItem>>>;
 }
 
 #[derive(Debug, Clone, Serialize)]

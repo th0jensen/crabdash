@@ -121,7 +121,7 @@ fn action_button(
             .hover(move |style| style.bg(hover_bg))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let machine_index = this.selected_machine;
-                let mut machine = this.selected_machine().background_clone();
+                let mut machine = this.selected_machine().clone();
 
                 if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
                     this.pending_docker_actions.insert(id.clone(), action);
@@ -142,8 +142,8 @@ fn action_button(
                     async move {
                         let result = cx
                             .background_spawn(async move {
-                                machine.container_action(&bg_id, action.command())?;
-                                machine.list_docker()
+                                machine.container_action(&bg_id, action.command()).await?;
+                                machine.list_docker().await
                             })
                             .await;
 
@@ -221,15 +221,13 @@ fn logs_button(
         .hover(move |style| style.bg(rgb(0x2F2F31)))
         .child(lucide_icon(Icon::ChartNoAxesGantt, 14.0))
         .on_click(cx.listener(move |this, _, _, cx| {
-            // Close modal if already open for this container.
-            if this.docker_log_modal.as_deref() == Some(&id) {
-                this.docker_log_modal = None;
+            if this.logs_open_containers.contains(&id) {
+                this.logs_open_containers.remove(&id);
                 cx.notify();
                 return;
+            } else {
+                this.logs_open_containers.insert(id.clone());
             }
-
-            // Open modal and fetch logs if not already fetched.
-            this.docker_log_modal = Some(id.clone());
 
             if !this.expanded_docker_logs.contains_key(&id) {
                 let state = match super::docker_logs::DockerLogState::new(500) {
@@ -242,20 +240,20 @@ fn logs_button(
                 };
                 this.expanded_docker_logs.insert(id.clone(), state);
 
-                let mut machine = this.selected_machine().background_clone();
+                let mut machine = this.selected_machine().clone();
                 let fetch_id = id.clone();
                 cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
                         let bg_id = fetch_id.clone();
                         let result = cx
-                            .background_spawn(async move { machine.container_logs(&bg_id) })
+                            .background_spawn(async move { machine.container_logs(&bg_id).await })
                             .await;
                         this.update(&mut cx, move |this, cx| {
                             if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_id) {
                                 match result {
-                                    Ok(logs) => state.feed(logs.as_bytes()),
-                                    Err(err) => state.feed(format!("Error: {err}").as_bytes()),
+                                    Ok(logs) => state.feed_string(logs),
+                                    Err(err) => state.feed_string(format!("Error: {err}")),
                                 }
                             }
                             cx.notify();
@@ -335,8 +333,8 @@ fn container_row_card(
 }
 
 fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Container) -> Div {
-    let modal_open = app.docker_log_modal.as_deref() == Some(&container.id);
     let container_id = container.id.clone();
+    let modal_open = app.logs_open_containers.contains(&container_id);
 
     let state = app.expanded_docker_logs.get(&container_id);
     let scroll_handle = state.map(|s| s.scroll_handle.clone()).unwrap_or_default();
@@ -373,186 +371,29 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
             };
 
             d.child(
-                div()
-                    .w_full()
-                    .p(px(12.0))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("logs-scroll-{}", container_id)))
-                            .w_full()
-                            .h(px(300.0))
-                            .track_scroll(&scroll_handle)
-                            .overflow_scroll()
-                            .on_scroll_wheel(cx.listener(
-                                move |_, event: &ScrollWheelEvent, window, cx| {
-                                    let delta = event.delta.pixel_delta(window.line_height());
-                                    let current = wheel_handle.offset();
-                                    let max = wheel_handle.max_offset();
-                                    let next_x =
-                                        (current.x + delta.x).max(-max.width).min(px(0.0));
-                                    let next_y =
-                                        (current.y + delta.y).max(-max.height).min(px(0.0));
-                                    wheel_handle.set_offset(point(next_x, next_y));
-                                    cx.notify();
-                                    cx.stop_propagation();
-                                },
-                            ))
-                            .child(logs_content),
-                    ),
+                div().w_full().p(px(12.0)).child(
+                    div()
+                        .id(SharedString::from(format!("logs-scroll-{}", container_id)))
+                        .w_full()
+                        .h(px(300.0))
+                        .track_scroll(&scroll_handle)
+                        .overflow_scroll()
+                        .on_scroll_wheel(cx.listener(
+                            move |_, event: &ScrollWheelEvent, window, cx| {
+                                let delta = event.delta.pixel_delta(window.line_height());
+                                let current = wheel_handle.offset();
+                                let max = wheel_handle.max_offset();
+                                let next_x = (current.x + delta.x).max(-max.width).min(px(0.0));
+                                let next_y = (current.y + delta.y).max(-max.height).min(px(0.0));
+                                wheel_handle.set_offset(point(next_x, next_y));
+                                cx.notify();
+                                cx.stop_propagation();
+                            },
+                        ))
+                        .child(logs_content),
+                ),
             )
         })
-}
-
-pub fn render_logs_modal(_app: &Crabdash, _cx: &mut Context<Crabdash>) -> impl IntoElement {
-    // Logs are now rendered inline in container_row, not as a modal
-    div()
-}
-
-#[allow(dead_code)]
-fn render_logs_modal_old(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
-    let container_id = match app.docker_log_modal.as_deref() {
-        Some(id) => id.to_string(),
-        None => return div().into_any_element(),
-    };
-
-    let container_name = app
-        .selected_machine()
-        .services
-        .docker
-        .iter()
-        .find(|c| c.id == container_id)
-        .map(|c| c.name.clone())
-        .unwrap_or_else(|| container_id.clone());
-
-    let state = app.expanded_docker_logs.get(&container_id);
-    let scroll_handle = state.map(|s| s.scroll_handle.clone()).unwrap_or_default();
-    let wheel_handle = scroll_handle.clone();
-    let rendered = state.map(|s| s.rendered.clone()).unwrap_or_default();
-    let loaded = state.map_or(false, |s| s.loaded);
-
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .child(
-            // Backdrop
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .bg(rgba(0x00000099)),
-        )
-        .child(
-            // Modal box
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .w_4_5()
-                        .h_4_5()
-                        .bg(rgb(0x1C1C1E))
-                        .border_1()
-                        .border_color(rgb(0x2F2F31))
-                        .rounded(px(14.0))
-                        .overflow_hidden()
-                        .flex()
-                        .flex_col()
-                        // Header
-                        .child(
-                            div()
-                                .px(px(18.0))
-                                .py(px(14.0))
-                                .border_b_1()
-                                .border_color(rgb(0x2F2F31))
-                                .flex()
-                                .justify_between()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(10.0))
-                                        .child(
-                                            div()
-                                                .text_color(rgb(0x8AB4FF))
-                                                .child(lucide_icon(Icon::ChartNoAxesGantt, 16.0)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(white())
-                                                .child(container_name),
-                                        ),
-                                )
-                                .child({
-                                    let close_id2 = container_id.clone();
-                                    div()
-                                        .id("logs-modal-close")
-                                        .h(px(28.0))
-                                        .w(px(28.0))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(6.0))
-                                        .bg(rgb(0x2C2C2E))
-                                        .text_color(rgb(0xAEAEB2))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(0x3A3A3C)))
-                                        .child(lucide_icon(Icon::X, 14.0))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.docker_log_modal = None;
-                                            this.expanded_docker_logs.remove(&close_id2);
-                                            cx.notify();
-                                        }))
-                                }),
-                        )
-                        // Log content
-                        .child(
-                            div()
-                                .id("logs-modal-content")
-                                .flex_1()
-                                .p(px(14.0))
-                                .track_scroll(&scroll_handle)
-                                .overflow_scroll()
-                                .on_scroll_wheel(cx.listener(
-                                    move |_, event: &ScrollWheelEvent, window, cx| {
-                                        let delta = event.delta.pixel_delta(window.line_height());
-                                        let current = wheel_handle.offset();
-                                        let max = wheel_handle.max_offset();
-                                        let next_x =
-                                            (current.x + delta.x).max(-max.width).min(px(0.0));
-                                        let next_y =
-                                            (current.y + delta.y).max(-max.height).min(px(0.0));
-                                        wheel_handle.set_offset(point(next_x, next_y));
-                                        cx.notify();
-                                        cx.stop_propagation();
-                                    },
-                                ))
-                                .when(!loaded, |d| {
-                                    d.text_xs()
-                                        .text_color(rgb(0x8E8E93))
-                                        .child("Loading logs...")
-                                })
-                                .when(loaded && rendered.is_empty(), |d| {
-                                    d.text_xs()
-                                        .text_color(rgb(0x8E8E93))
-                                        .child("No logs available.")
-                                })
-                                .when(loaded && !rendered.is_empty(), |d| {
-                                    d.child(super::docker_logs::render_view(&rendered))
-                                }),
-                        ),
-                ),
-        )
-        .into_any_element()
 }
 
 pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
