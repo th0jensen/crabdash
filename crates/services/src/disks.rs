@@ -217,13 +217,13 @@ pub trait Disks {
     /// # Returns
     /// * `Ok(Vec<Disk>)`: The disks connected to the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn list_disks(&mut self) -> Result<Vec<Disk>>;
+    fn list_disks(&mut self) -> impl Future<Output = Result<Vec<Disk>>>;
 
     /// Mounts a disk by device ID.
-    fn mount_disk(&mut self, id: &str) -> Result<()>;
+    fn mount_disk(&mut self, id: &str) -> impl Future<Output = Result<()>>;
 
     /// Unmounts a disk by device ID.
-    fn unmount_disk(&mut self, id: &str) -> Result<()>;
+    fn unmount_disk(&mut self, id: &str) -> impl Future<Output = Result<()>>;
 }
 
 #[derive(Debug, Deserialize)]

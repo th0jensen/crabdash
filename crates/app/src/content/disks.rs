@@ -222,7 +222,14 @@ fn collect_rows(
             .id
             .as_deref()
             .is_some_and(|id| pending_ids.contains(id));
-        rows.push(node_row(node, ancestors, is_last, cx, pending, machine_index));
+        rows.push(node_row(
+            node,
+            ancestors,
+            is_last,
+            cx,
+            pending,
+            machine_index,
+        ));
 
         let mut next = ancestors.to_vec();
         next.push(!is_last);
@@ -295,36 +302,45 @@ fn disk_action_button(
         DiskAction::Unmount => rgb(0xFF453A),
     };
 
-    button(button_id, icon, Option::<&str>::None, false)
+    button(button_id, Some(icon), Option::<&str>::None, false)
         .text_color(color)
         .when(pending, |d| d.cursor_default())
         .when(!pending, |d| {
             d.on_click(cx.listener(move |this, _, _, cx| {
                 this.pending_disk_actions.insert(id.clone(), action);
                 cx.notify();
-
                 let spawn_id = id.clone();
                 let remove_id = id.clone();
-                let mut machine = this.selected_machine().background_clone();
-
-                cx.spawn(move |this: gpui::WeakEntity<Crabdash>, cx: &mut gpui::AsyncApp| {
-                    let mut cx = cx.clone();
-                    async move {
+                let mut machine = this.selected_machine_mut().clone();
+                cx.spawn(
+                    async move |this: gpui::WeakEntity<Crabdash>, cx: &mut gpui::AsyncApp| {
                         let result = cx
                             .background_spawn(async move {
                                 match action {
-                                    DiskAction::Mount => machine.mount_disk(&spawn_id),
-                                    DiskAction::Unmount => machine.unmount_disk(&spawn_id),
+                                    DiskAction::Mount => machine.mount_disk(&spawn_id).await,
+                                    DiskAction::Unmount => machine.unmount_disk(&spawn_id).await,
                                 }
                             })
                             .await;
 
-                        this.update(&mut cx, move |this, cx| {
+                        let updated_disks = if result.is_ok() {
+                            let fresh = this
+                                .update(cx, |this, _| this.selected_machine_mut().clone())
+                                .ok();
+                            if let Some(mut fresh) = fresh {
+                                fresh.list_disks().await.ok()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        this.update(cx, move |this, cx| {
                             this.pending_disk_actions.remove(&remove_id);
                             match result {
                                 Ok(()) => {
-                                    let mut fresh = this.selected_machine().background_clone();
-                                    if let Ok(disks) = fresh.list_disks() {
+                                    if let Some(disks) = updated_disks {
                                         if let Some(m) =
                                             this.machine_store.machines.get_mut(machine_index)
                                         {
@@ -347,8 +363,8 @@ fn disk_action_button(
                             cx.notify();
                         })
                         .ok();
-                    }
-                })
+                    },
+                )
                 .detach();
             }))
         })

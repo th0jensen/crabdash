@@ -10,6 +10,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo

@@ -6,8 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-app = { path = "../app" }
-gpui = { version = "*" }
+app.workspace = true
+gpui.workspace = true
 
 [package.metadata.bundle]
 name = "Crabdash"

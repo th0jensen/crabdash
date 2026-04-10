@@ -1,10 +1,14 @@
 use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
+use lucide_icons::Icon;
 
 use crate::{
     app::Crabdash,
-    components::{common::lucide_icon, scroll_list},
+    components::{
+        common::{LucideIcon, button, lucide_icon},
+        scroll_list,
+    },
 };
 
 use super::shared::placeholder_card;
@@ -117,7 +121,7 @@ fn action_button(
             .hover(move |style| style.bg(hover_bg))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let machine_index = this.selected_machine;
-                let mut machine = this.selected_machine().background_clone();
+                let mut machine = this.selected_machine().clone();
 
                 if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
                     this.pending_docker_actions.insert(id.clone(), action);
@@ -138,8 +142,8 @@ fn action_button(
                     async move {
                         let result = cx
                             .background_spawn(async move {
-                                machine.container_action(&bg_id, action.command())?;
-                                machine.list_docker()
+                                machine.container_action(&bg_id, action.command()).await?;
+                                machine.list_docker().await
                             })
                             .await;
 
@@ -183,7 +187,93 @@ fn action_button(
     }
 }
 
-fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Container) -> Div {
+fn logs_button(
+    cx: &mut Context<Crabdash>,
+    container: &Container,
+    modal_open: bool,
+) -> impl IntoElement {
+    let id = container.id.clone();
+    let button_id = SharedString::from(format!("logs-container-{id}"));
+    let bg = if modal_open {
+        rgb(0x1F3656)
+    } else {
+        rgb(0x242426)
+    };
+    let border_color = if modal_open {
+        rgb(0x0A84FF)
+    } else {
+        rgb(0x2F2F31)
+    };
+
+    div()
+        .id(button_id)
+        .h(px(34.0))
+        .w(px(34.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(bg)
+        .border_1()
+        .border_color(border_color)
+        .rounded(px(8.0))
+        .text_color(rgb(0xFFFFFF))
+        .cursor_pointer()
+        .hover(move |style| style.bg(rgb(0x2F2F31)))
+        .child(lucide_icon(Icon::ChartNoAxesGantt, 14.0))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if this.logs_open_containers.contains(&id) {
+                this.logs_open_containers.remove(&id);
+                cx.notify();
+                return;
+            } else {
+                this.logs_open_containers.insert(id.clone());
+            }
+
+            if !this.expanded_docker_logs.contains_key(&id) {
+                let state = match super::docker_logs::DockerLogState::new(500) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        this.set_status_error(format!("Failed to init terminal: {err}"));
+                        cx.notify();
+                        return;
+                    }
+                };
+                this.expanded_docker_logs.insert(id.clone(), state);
+
+                let mut machine = this.selected_machine().clone();
+                let fetch_id = id.clone();
+                cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let bg_id = fetch_id.clone();
+                        let result = cx
+                            .background_spawn(async move { machine.container_logs(&bg_id).await })
+                            .await;
+                        this.update(&mut cx, move |this, cx| {
+                            if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_id) {
+                                match result {
+                                    Ok(logs) => state.feed_string(logs),
+                                    Err(err) => state.feed_string(format!("Error: {err}")),
+                                }
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+            }
+
+            cx.notify();
+        }))
+}
+
+fn container_row_card(
+    app: &Crabdash,
+    cx: &mut Context<Crabdash>,
+    container: &Container,
+    modal_open: bool,
+) -> Div {
     let pending_action = app.pending_docker_actions.get(&container.id).copied();
     let actions_disabled = pending_action.is_some();
 
@@ -222,6 +312,7 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
                 .flex()
                 .items_center()
                 .gap(px(10.0))
+                .child(logs_button(cx, container, modal_open))
                 .child(if !container.is_running_status() {
                     action_button(cx, container, DockerAction::Start, actions_disabled)
                 } else {
@@ -241,7 +332,71 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
         )
 }
 
-pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Container) -> Div {
+    let container_id = container.id.clone();
+    let modal_open = app.logs_open_containers.contains(&container_id);
+
+    let state = app.expanded_docker_logs.get(&container_id);
+    let scroll_handle = state.map(|s| s.scroll_handle.clone()).unwrap_or_default();
+    let wheel_handle = scroll_handle.clone();
+    let rendered = state.map(|s| s.rendered.clone()).unwrap_or_default();
+    let loaded = state.map_or(false, |s| s.loaded);
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(container_row_card(app, cx, container, modal_open))
+        .when(modal_open, |d| {
+            let logs_content = if !loaded {
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(rgb(0x8E8E93))
+                    .child("Loading logs...")
+                    .into_any_element()
+            } else if rendered.is_empty() {
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(rgb(0x8E8E93))
+                    .child("No logs available.")
+                    .into_any_element()
+            } else {
+                div()
+                    .w_full()
+                    .child(super::docker_logs::render_view(&rendered))
+                    .into_any_element()
+            };
+
+            d.child(
+                div().w_full().p(px(12.0)).child(
+                    div()
+                        .id(SharedString::from(format!("logs-scroll-{}", container_id)))
+                        .w_full()
+                        .h(px(300.0))
+                        .track_scroll(&scroll_handle)
+                        .overflow_scroll()
+                        .on_scroll_wheel(cx.listener(
+                            move |_, event: &ScrollWheelEvent, window, cx| {
+                                let delta = event.delta.pixel_delta(window.line_height());
+                                let current = wheel_handle.offset();
+                                let max = wheel_handle.max_offset();
+                                let next_x = (current.x + delta.x).max(-max.width).min(px(0.0));
+                                let next_y = (current.y + delta.y).max(-max.height).min(px(0.0));
+                                wheel_handle.set_offset(point(next_x, next_y));
+                                cx.notify();
+                                cx.stop_propagation();
+                            },
+                        ))
+                        .child(logs_content),
+                ),
+            )
+        })
+}
+
+pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
     let machine = app.selected_machine();
     let containers = machine.services.docker.clone();
 
@@ -265,6 +420,19 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             div()
                 .flex()
                 .gap(px(8.0))
+                .child(
+                    div().flex().child(
+                        button(
+                            "run-container-open",
+                            Some(LucideIcon::Play),
+                            Some("Run"),
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_docker_run_modal(cx);
+                        })),
+                    ),
+                )
                 .child(stats_chip(
                     "docker-filter-total",
                     "Total",

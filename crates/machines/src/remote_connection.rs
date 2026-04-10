@@ -1,136 +1,189 @@
-use anyhow::{Result, bail};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use ssh2::Session;
-use std::{
-    fmt::{Debug, Formatter},
-    io::Read,
-    net::TcpStream,
-    path::PathBuf,
+use anyhow::{Result, anyhow, bail};
+use async_ssh2_lite::{
+    AsyncSession, TokioTcpStream, ssh2::KnownHostFileKind, tokio::io::AsyncReadExt,
 };
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{
+    env::var,
+    fmt::{Debug, Formatter},
+    path::Path,
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
+};
+use tokio::runtime::Runtime;
 
-#[derive(Default, Serialize, Deserialize)]
+use utils::args::Args;
+
+static SSH_RT: OnceLock<Runtime> = OnceLock::new();
+
+fn ssh_rt() -> &'static Runtime {
+    SSH_RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("Failed to create SSH runtime")
+    })
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct RemoteConnection {
     pub user: String,
     pub host: String,
     pub auth: Option<AuthMethod>,
     #[serde(skip)]
-    session: Option<Session>,
+    session: Arc<Mutex<Option<AsyncSession<TokioTcpStream>>>>,
+}
+
+impl Default for RemoteConnection {
+    fn default() -> Self {
+        Self {
+            user: String::new(),
+            host: String::new(),
+            auth: None,
+            session: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 impl RemoteConnection {
-    pub fn new_connection(
+    pub async fn new_connection(
         user: impl Into<String>,
         host: impl Into<String>,
         auth: AuthMethod,
     ) -> Result<RemoteConnection> {
         let user = user.into();
         let host = host.into();
-        let mut rc = RemoteConnection {
+        eprintln!("[SSH] new_connection: user={user} host={host}");
+        let rc = RemoteConnection {
             user,
             host,
             auth: Some(auth),
-            session: None,
+            session: Arc::new(Mutex::new(None)),
         };
 
-        let sess = rc.connect()?;
-        rc.session = Some(sess);
+        let sess = rc.connect().await?;
+        *rc.session.lock().unwrap() = Some(sess);
+        eprintln!("[SSH] new_connection: success");
         Ok(rc)
     }
 
-    pub fn connect(&self) -> Result<Session> {
-        let host = &self.host;
-        let tcp = TcpStream::connect(format!("{host}:22"))?;
-        let mut sess = Session::new()?;
-        sess.set_tcp_stream(tcp);
-        sess.handshake()?;
+    pub async fn connect(&self) -> Result<AsyncSession<TokioTcpStream>> {
+        let host = self.host.clone();
+        let user = self.user.clone();
+        let auth = self.auth.clone();
 
-        let mut known_hosts = sess.known_hosts()?;
-        known_hosts.read_file(
-            &std::path::Path::new(&format!("{}/.ssh/known_hosts", std::env::var("HOME")?)),
-            ssh2::KnownHostFileKind::OpenSSH,
-        )?;
+        ssh_rt()
+            .spawn(async move {
+                let tcp = match TokioTcpStream::connect(format!("{host}:22")).await {
+                    Ok(s) => {
+                        eprintln!("[SSH] connect: TCP ok");
+                        s
+                    }
+                    Err(e) => {
+                        eprintln!("[SSH] connect: TCP failed: {e}");
+                        return Err(e.into());
+                    }
+                };
 
-        match &self.auth {
-            Some(AuthMethod::None) => sess.userauth_password(&self.user, "")?,
-            Some(AuthMethod::AuthKey {
-                pubkey,
-                privatekey,
-                passphrase,
-            }) => sess.userauth_pubkey_file(
-                &self.user,
-                pubkey.as_deref(),
-                &privatekey,
-                passphrase.as_deref(),
-            )?,
-            Some(AuthMethod::Password(password)) => sess.userauth_password(&self.user, password)?,
-            None => sess.userauth_agent(&self.user)?,
-        };
+                let mut sess = AsyncSession::new(tcp, None)?;
+                sess.handshake().await?;
 
-        if !sess.authenticated() {
-            bail!("Authentication failed!");
-        }
-        Ok(sess)
+                {
+                    let mut known_hosts = sess.known_hosts()?;
+                    let kh_path = format!("{}/.ssh/known_hosts", var("HOME")?);
+                    if let Err(e) =
+                        known_hosts.read_file(Path::new(&kh_path), KnownHostFileKind::OpenSSH)
+                    {
+                        eprintln!("[SSH] connect: known_hosts read failed (non-fatal): {e}");
+                    }
+                }
+
+                match &auth {
+                    Some(AuthMethod::None) => sess.userauth_password(&user, "").await?,
+                    Some(AuthMethod::AuthKey {
+                        pubkey,
+                        privatekey,
+                        passphrase,
+                    }) => {
+                        sess.userauth_pubkey_file(
+                            &user,
+                            pubkey.as_deref(),
+                            privatekey,
+                            passphrase.as_deref(),
+                        )
+                        .await?
+                    }
+                    Some(AuthMethod::Password(password)) => {
+                        sess.userauth_password(&user, password).await?
+                    }
+                    None => sess.userauth_agent(&user).await?,
+                };
+
+                if !sess.authenticated() {
+                    bail!("Authentication failed!");
+                }
+                Ok(sess)
+            })
+            .await
+            .map_err(|e| anyhow!("SSH task panicked: {e}"))
+            .and_then(|r| r)
     }
 
-    pub fn ensure_connected(&mut self) -> Result<&Session> {
-        if self.session.is_none() {
-            self.session = Some(self.connect()?);
+    pub async fn ensure_connected(&mut self) -> Result<()> {
+        if self.session.lock().unwrap().is_none() {
+            let sess = self.connect().await?;
+            *self.session.lock().unwrap() = Some(sess);
         }
-        Ok(self.session.as_ref().unwrap())
+        Ok(())
     }
 
-    pub fn run_ssh_command(&mut self, cmd: &str, args: Option<&[&str]>) -> Result<(String, String, i32)> {
-        let session = self.ensure_connected()?;
-        let mut channel = session.channel_session()?;
-
-        let full_cmd = match args {
-            Some(args) if !args.is_empty() => {
-                let escaped_args = args
-                    .iter()
-                    .map(|arg| Self::shell_escape(arg))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-
-                format!("{cmd} {escaped_args}")
-            }
-            _ => cmd.to_string(),
+    pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<(Vec<u8>, i32)> {
+        self.ensure_connected().await?;
+        let session = self.session.lock().unwrap().clone();
+        let Some(session) = session else {
+            bail!("Not connected!")
         };
 
-        channel.exec(&full_cmd)?;
-        let mut stdout = String::new();
-        channel.read_to_string(&mut stdout)?;
-        let mut stderr = String::new();
-        channel.stderr().read_to_string(&mut stderr)?;
-        channel.wait_close()?;
-        let exit_status = channel.exit_status()?;
+        fn shell_quote(s: &str) -> String {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        }
+        let quoted_args: String = args
+            .iter()
+            .map(|a| shell_quote(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let full_cmd = if quoted_args.is_empty() {
+            cmd.to_string()
+        } else {
+            format!("{} {}", cmd, quoted_args)
+        };
 
-        Ok((stdout, stderr, exit_status))
+        ssh_rt()
+            .spawn(async move {
+                let mut channel = session.channel_session().await?;
+                channel.exec(&full_cmd).await?;
+                let mut stdout = Vec::new();
+                channel.read_to_end(&mut stdout).await?;
+                channel.wait_close().await?;
+                let exit_status = channel.exit_status()?;
+                Ok((stdout, exit_status))
+            })
+            .await
+            .map_err(|e| anyhow!("SSH task panicked: {e}"))
+            .and_then(|r| r)
     }
 
     pub fn has_active_session(&self) -> bool {
         self.session
+            .lock()
+            .unwrap()
             .as_ref()
             .map_or(false, |session| session.authenticated())
     }
 
-    fn shell_escape(arg: &str) -> String {
-        if arg.is_empty() {
-            return "''".to_string();
-        }
-
-        if arg.bytes().all(|b| {
-            matches!(
-                b,
-                b'a'..=b'z'
-                    | b'A'..=b'Z'
-                    | b'0'..=b'9'
-                    | b'-' | b'_' | b'.' | b'/' | b':'
-            )
-        }) {
-            return arg.to_string();
-        }
-
-        format!("'{}'", arg.replace('\'', r"'\''"))
+    pub fn restore_session_from(&mut self, other: &RemoteConnection) {
+        self.session = Arc::clone(&other.session);
     }
 }
 
@@ -140,7 +193,7 @@ impl Clone for RemoteConnection {
             user: self.user.clone(),
             host: self.host.clone(),
             auth: self.auth.clone(),
-            session: None,
+            session: Arc::clone(&self.session),
         }
     }
 }
@@ -150,7 +203,11 @@ impl Debug for RemoteConnection {
         write!(
             f,
             "RemoteConnection {{ connected: {} }}",
-            self.session.as_ref().map_or(false, |s| s.authenticated())
+            self.session
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map_or(false, |s| s.authenticated())
         )
     }
 }
@@ -167,6 +224,14 @@ pub enum AuthMethod {
 }
 
 impl AuthMethod {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Password(_) => "password",
+            Self::AuthKey { .. } => "pubkey",
+        }
+    }
+
     pub fn secret_bytes(&self) -> Option<Vec<u8>> {
         match self {
             Self::None => None,

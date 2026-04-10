@@ -6,13 +6,18 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
+anyhow.workspace = true
+indoc.workspace = true
+serde.workspace = true
+services.workspace = true
+smol.workspace = true
+utils.workspace = true
+uuid.workspace = true
+
+async-ssh2-lite = { version = "0.5.0", features = ["tokio"] }
 dirs = "6.0.0"
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-services = { path = "../services" }
-ssh2 = "0.9.5"
-uuid = { version = "1", features = ["v4"] }
+tokio = { version = "=1.44.2", features = ["rt-multi-thread", "net", "macros"] }
 
 [lints]
 workspace = true

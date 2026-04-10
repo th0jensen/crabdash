@@ -85,8 +85,6 @@ impl Render for ContextMenu {
             .on_mouse_down_out(cx.listener(|_, _: &MouseDownEvent, _, cx| {
                 cx.emit(DismissEvent);
             }))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .w(px(180.0))
             .p(px(6.0))
             .bg(rgb(0x1C1C1E))
@@ -117,7 +115,7 @@ impl Render for ContextMenu {
                     .text_color(color)
                     .child(lucide_icon(entry.icon, 12.0))
                     .child(entry.label)
-                    .on_click(cx.listener(move |_, _, window, cx| {
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, _: &MouseDownEvent, window, cx| {
                         (handler)(window, cx);
                         cx.emit(DismissEvent);
                     }))

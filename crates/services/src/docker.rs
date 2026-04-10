@@ -1,5 +1,6 @@
 use anyhow::Result;
 use lucide_icons::Icon;
+use utils::args::Args;
 
 #[derive(Clone, Debug, Default)]
 pub struct Container {
@@ -41,13 +42,22 @@ pub trait Docker {
     ///
     /// # Returns
     /// * `String`: The Docker binary path
-    fn find_docker(&mut self) -> String;
+    fn find_docker(&mut self) -> impl Future<Output = String>;
     /// Lists all Docker containers on the machine
     ///
     /// # Returns
     /// * `Ok(Vec<ServiceItem>)`: The containers on the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn list_docker(&mut self) -> Result<Vec<Container>>;
+    fn list_docker(&mut self) -> impl Future<Output = Result<Vec<Container>>>;
+    /// Runs a Docker container
+    ///
+    /// # Arguments
+    /// * `args`: The arguments to pass to the Docker command
+    ///
+    /// # Returns
+    /// * `Ok(String)`: The ID of the container is returned
+    /// * `Err(anyhow::Error)`: Any errors that occurred
+    fn run_container(&mut self, args: &Args) -> impl Future<Output = Result<String>>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments
@@ -57,7 +67,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_action(&mut self, id: &str, action: &str) -> Result<String>;
+    fn container_action(&mut self, id: &str, action: &str) -> impl Future<Output = Result<String>>;
     /// Gets the logs of a Docker container
     ///
     /// # Arguments
@@ -66,7 +76,70 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(_)`: The container logs are returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_logs(&mut self, id: &str) -> Result<String>;
+    fn container_logs(&mut self, id: &str) -> impl Future<Output = Result<String>>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RestartPolicy {
+    #[default]
+    No,
+    Always,
+    OnFailure,
+    UnlessStopped,
+}
+
+impl RestartPolicy {
+    pub fn flag_value(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Always => "always",
+            Self::OnFailure => "on-failure",
+            Self::UnlessStopped => "unless-stopped",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::No => "No",
+            Self::Always => "Always",
+            Self::OnFailure => "On Failure",
+            Self::UnlessStopped => "Unless Stopped",
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::No, Self::Always, Self::OnFailure, Self::UnlessStopped]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NetworkMode {
+    #[default]
+    Bridge,
+    Host,
+    None,
+}
+
+impl NetworkMode {
+    pub fn flag_value(self) -> Option<&'static str> {
+        match self {
+            Self::Bridge => Option::None,
+            Self::Host => Some("host"),
+            Self::None => Some("none"),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bridge => "Bridge",
+            Self::Host => "Host",
+            Self::None => "None",
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::Bridge, Self::Host, Self::None]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
