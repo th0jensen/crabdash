@@ -8,11 +8,14 @@ use std::{
     fmt::{Debug, Formatter},
     path::Path,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, sync::Mutex};
 
-use utils::args::Args;
+use utils::{args::Args, output::Output};
 
 static SSH_RT: OnceLock<Runtime> = OnceLock::new();
 
@@ -33,6 +36,18 @@ pub struct RemoteConnection {
     pub auth: Option<AuthMethod>,
     #[serde(skip)]
     session: Arc<Mutex<Option<AsyncSession<TokioTcpStream>>>>,
+    #[serde(skip)]
+    connected: Arc<AtomicBool>,
+}
+
+impl RemoteConnection {
+    pub fn connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    pub fn set_connected(&self, value: bool) {
+        self.connected.store(value, Ordering::Relaxed);
+    }
 }
 
 impl Default for RemoteConnection {
@@ -42,6 +57,7 @@ impl Default for RemoteConnection {
             host: String::new(),
             auth: None,
             session: Arc::new(Mutex::new(None)),
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -60,10 +76,12 @@ impl RemoteConnection {
             host,
             auth: Some(auth),
             session: Arc::new(Mutex::new(None)),
+            connected: Arc::new(AtomicBool::new(false)),
         };
 
         let sess = rc.connect().await?;
-        *rc.session.lock().unwrap() = Some(sess);
+        *rc.session.lock().await = Some(sess);
+        rc.set_connected(true);
         eprintln!("[SSH] new_connection: success");
         Ok(rc)
     }
@@ -131,59 +149,64 @@ impl RemoteConnection {
     }
 
     pub async fn ensure_connected(&mut self) -> Result<()> {
-        if self.session.lock().unwrap().is_none() {
+        if self.session.lock().await.is_none() {
+            self.set_connected(false);
             let sess = self.connect().await?;
-            *self.session.lock().unwrap() = Some(sess);
+            *self.session.lock().await = Some(sess);
+            self.set_connected(true);
         }
         Ok(())
     }
 
-    pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<(Vec<u8>, i32)> {
+    pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<Output> {
         self.ensure_connected().await?;
-        let session = self.session.lock().unwrap().clone();
-        let Some(session) = session else {
-            bail!("Not connected!")
-        };
-
-        fn shell_quote(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
-        let quoted_args: String = args
-            .iter()
-            .map(|a| shell_quote(a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let full_cmd = if quoted_args.is_empty() {
-            cmd.to_string()
-        } else {
-            format!("{} {}", cmd, quoted_args)
-        };
-
         ssh_rt()
-            .spawn(async move {
-                let mut channel = session.channel_session().await?;
-                channel.exec(&full_cmd).await?;
-                let mut stdout = Vec::new();
-                channel.read_to_end(&mut stdout).await?;
-                channel.wait_close().await?;
-                let exit_status = channel.exit_status()?;
-                Ok((stdout, exit_status))
+            .spawn({
+                let session = self.session.clone();
+                let full_cmd = self.build_command(cmd, args);
+                async move {
+                    let session = session.lock().await;
+                    let Some(ref session) = *session else {
+                        bail!("Not connected!");
+                    };
+                    let mut channel = session.channel_session().await?;
+                    channel.exec(&full_cmd).await?;
+                    let mut stdout = Vec::new();
+                    channel.read_to_end(&mut stdout).await?;
+                    channel.wait_close().await?;
+                    let exit_status = channel.exit_status()?;
+                    if exit_status != 0 {
+                        bail!("{full_cmd} failed with exit status: {exit_status}");
+                    }
+                    Ok(Output::from(stdout))
+                }
             })
             .await
             .map_err(|e| anyhow!("SSH task panicked: {e}"))
             .and_then(|r| r)
     }
 
-    pub fn has_active_session(&self) -> bool {
+    fn build_command(&self, cmd: &str, args: &Args) -> String {
+        let shell_quote = |s: &String| -> String { format!("'{}'", s.replace('\'', "'\\''")) };
+        let quoted_args: String = args.iter().map(shell_quote).collect::<Vec<_>>().join(" ");
+        if quoted_args.is_empty() {
+            cmd.to_string()
+        } else {
+            format!("{} {}", cmd, quoted_args)
+        }
+    }
+
+    pub async fn has_active_session(&self) -> bool {
         self.session
             .lock()
-            .unwrap()
+            .await
             .as_ref()
             .map_or(false, |session| session.authenticated())
     }
 
     pub fn restore_session_from(&mut self, other: &RemoteConnection) {
         self.session = Arc::clone(&other.session);
+        self.connected = Arc::clone(&other.connected);
     }
 }
 
@@ -194,6 +217,7 @@ impl Clone for RemoteConnection {
             host: self.host.clone(),
             auth: self.auth.clone(),
             session: Arc::clone(&self.session),
+            connected: Arc::clone(&self.connected),
         }
     }
 }
@@ -202,12 +226,8 @@ impl Debug for RemoteConnection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RemoteConnection {{ connected: {} }}",
-            self.session
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map_or(false, |s| s.authenticated())
+            "RemoteConnection {{ user: {}, host: {} }}",
+            self.user, self.host
         )
     }
 }

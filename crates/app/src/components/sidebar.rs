@@ -28,7 +28,7 @@ fn machine_item(
     selected: bool,
     cx: &mut Context<Crabdash>,
 ) -> impl IntoElement {
-    let connection_active = machine.has_active_connection();
+    let connection_active = machine.connected();
     let icon = machine_icon(machine.kind);
     let name_color = if selected {
         rgb(0xFFFFFF)

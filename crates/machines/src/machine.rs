@@ -47,13 +47,9 @@ impl Machine {
     pub async fn new_remote(user: &str, host: &str, auth: AuthMethod) -> Result<Self> {
         let rc = RemoteConnection::new_connection(user, host, auth).await?;
         let mut machine = Self {
-            uuid: Uuid::new_v4(),
             id: format!("{user}@{host}"),
-            kind: MachineKind::Unknown,
-            system_info: SystemInfo::default(),
             remote: Some(rc),
-            docker_path: None,
-            services: MachineServices::default(),
+            ..Self::default()
         };
 
         machine.system_info = machine.get_system_info().await?;
@@ -74,34 +70,18 @@ impl Machine {
     /// * `Err(anyhow::Error)`: If the command exits with a non-zero status, or if
     ///   spawning/communication fails. The error message prefers stderr over stdout,
     ///   falling back to a generic exit status message if both are empty.
-    pub async fn run(&mut self, cmd: &str, args: &Args) -> Result<String> {
+    pub async fn run(&mut self, cmd: &str, args: &Args) -> Result<Output> {
         match &mut self.remote {
             Some(rc) => {
-                let (stdout, exit_status) = rc.run_ssh_command(cmd, args).await?;
-                let stdout = String::from_utf8_lossy(&stdout).trim().to_string();
-                if exit_status != 0 {
-                    let message = if stdout.trim().is_empty() {
-                        format!("{cmd} exited with status {exit_status}")
-                    } else {
-                        stdout.trim().to_string()
-                    };
-                    eprintln!(
-                        "Remote command failed: cmd={cmd} args={:?} status={} output={}",
-                        args, exit_status, message
-                    );
-                    return Err(anyhow!(message));
-                }
+                let stdout = rc.run_ssh_command(cmd, args).await?;
                 Ok(stdout)
             }
             None => {
                 let result = Command::new(cmd).args(args).output().await?;
                 if !result.status.success() {
                     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                    let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
                     let message = if !stderr.is_empty() {
                         stderr
-                    } else if !stdout.is_empty() {
-                        stdout
                     } else {
                         format!("{cmd} exited with status {}", result.status)
                     };
@@ -114,18 +94,19 @@ impl Machine {
                     );
                     return Err(anyhow!(message));
                 }
-                Ok(String::from_utf8_lossy(&result.stdout).to_string())
+                Ok(Output::from(result.stdout))
             }
         }
     }
-    /// Returns whether the machine is reachable and has an active connection.
+    /// Returns whether the machine has an active connection.
     ///
-    /// For remote machines, delegates to the underlying SSH session state.
-    /// For local machines, always returns `true`.
-    pub fn has_active_connection(&self) -> bool {
-        self.remote
-            .as_ref()
-            .map_or(true, |remote| remote.has_active_session())
+    /// For remote machines, reads the synchronously-maintained `connected` flag
+    /// on the underlying [`RemoteConnection`]. For local machines, always `true`.
+    pub fn connected(&self) -> bool {
+        match self.remote.as_ref() {
+            Some(rc) => rc.connected(),
+            None => true,
+        }
     }
     /// Refreshes system information from the machine and updates internal state
     /// if it has changed.
@@ -155,9 +136,9 @@ impl Machine {
     async fn get_system_info(&mut self) -> Result<SystemInfo> {
         let cmd = "uname";
         let (machine_name, os_version, arch) = (
-            self.run(cmd, &args!["-n"]).await?.trim().to_string(),
-            self.run(cmd, &args!["-sr"]).await?.trim().to_string(),
-            self.run(cmd, &args!["-m"]).await?.trim().to_string(),
+            self.run(cmd, &args!["-n"]).await?.into(),
+            self.run(cmd, &args!["-sr"]).await?.into(),
+            self.run(cmd, &args!["-m"]).await?.into(),
         );
         Ok(SystemInfo {
             machine_name,
@@ -198,30 +179,28 @@ impl Docker for Machine {
     async fn list_docker(&mut self) -> Result<Vec<Container>> {
         let args = args!["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
         let docker = self.find_docker().await;
-        let stdout = self.run(&docker, &args).await?;
-        Ok(Container::parse_output(stdout))
+        Ok(self.run(&docker, &args).await?.parse_container())
     }
 
-    async fn container_action(&mut self, id: &str, action: &str) -> Result<String> {
+    async fn container_action(&mut self, id: &str, action: &str) -> Result<Output> {
         let args = args![action, id];
         let docker = self.find_docker().await;
-        let stdout = self.run(&docker, &args).await?;
-        if stdout.trim() != id {
-            bail!(stdout)
-        }
-        Ok(stdout)
+        Ok(self.run(&docker, &args).await?)
     }
 
-    async fn run_container(&mut self, args: &Args) -> Result<String> {
+    async fn run_container(&mut self, args: &Args) -> Result<Output> {
         let docker = self.find_docker().await;
-        let stdout = self.run(&docker, args).await?;
-        Ok(stdout)
+        Ok(self.run(&docker, &args).await?)
     }
 
-    async fn container_logs(&mut self, id: &str) -> Result<String> {
+    async fn remove_container(&mut self, id: &str) -> Result<Output> {
         let docker = self.find_docker().await;
-        let stdout = self.run(&docker, &args!["logs", id]).await?;
-        Ok(stdout)
+        Ok(self.run(&docker, &args!["rm", id]).await?)
+    }
+
+    async fn container_logs(&mut self, id: &str) -> Result<Output> {
+        let docker = self.find_docker().await;
+        Ok(self.run(&docker, &args!["logs", id]).await?)
     }
 }
 
@@ -247,7 +226,7 @@ impl Services for Machine {
             _ => bail!("System does not yet support the services feature"),
         };
 
-        Ok(ServiceItem::parse_output(self.run(command, &args).await?))
+        Ok(self.run(command, &args).await?.parse_service_item())
     }
 }
 
@@ -260,7 +239,7 @@ impl Disks for Machine {
                     .run("diskutil", &args!["apfs", "list", "-plist"])
                     .await
                     .ok();
-                let mut disks = Disk::convert_diskutil(&list_stdout, apfs_stdout.as_deref())?;
+                let mut disks = list_stdout.parse_diskutil(apfs_stdout)?;
 
                 for disk in &mut disks {
                     let identifier = disk.id.trim_start_matches("/dev/");
@@ -283,9 +262,27 @@ impl Disks for Machine {
                         "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL,PKNAME,FSTYPE,LABEL,RM,HOTPLUG,TRAN"
                     ],
                 ).await?;
-                Ok(Disk::convert_lsblk(&stdout))
+                Ok(stdout.parse_lsblk())
             }
             MachineKind::Unknown => bail!("System does not yet support the disks feature"),
+        }
+    }
+}
+
+impl Default for Machine {
+    fn default() -> Self {
+        Machine {
+            uuid: Uuid::new_v4(),
+            id: "localhost".to_string(),
+            system_info: SystemInfo {
+                machine_name: "localhost".into(),
+                os_version: "0.1.1".into(),
+                arch: "x69_42".into(),
+            },
+            kind: MachineKind::Unknown,
+            remote: None,
+            docker_path: None,
+            services: MachineServices::default(),
         }
     }
 }

@@ -253,7 +253,7 @@ fn logs_button(
                         this.update(&mut cx, move |this, cx| {
                             if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_id) {
                                 match result {
-                                    Ok(logs) => state.feed_string(logs),
+                                    Ok(logs) => state.feed(logs),
                                     Err(err) => state.feed_string(format!("Error: {err}")),
                                 }
                             }

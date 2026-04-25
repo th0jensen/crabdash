@@ -3479,9 +3479,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
+checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 
 [[package]]
 name = "num-derive"
@@ -5055,7 +5055,6 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "lucide-icons",
- "plist",
  "serde",
  "utils",
 ]
@@ -6146,6 +6145,11 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "utils"
 version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "plist",
+ "serde",
+]
 
 [[package]]
 name = "uuid"

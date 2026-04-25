@@ -55,8 +55,8 @@ impl DockerLogState {
     }
 
     /// Feed raw log bytes into the terminal and update the rendered output.
-    pub fn feed(&mut self, data: &[u8]) {
-        self.terminal.vt_write(data);
+    pub fn feed(&mut self, data: impl AsRef<[u8]>) {
+        self.terminal.vt_write(data.as_ref());
         if let Some(rendered) = self.extract_rendered() {
             self.rendered = rendered;
         }

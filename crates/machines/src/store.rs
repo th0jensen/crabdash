@@ -2,14 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
-use services::MachineServices;
 use smol::fs;
 use uuid::Uuid;
 
-use crate::{
-    machine::{Machine, MachineKind, SystemInfo},
-    remote_connection::AuthMethod,
-};
+use crate::{machine::Machine, remote_connection::AuthMethod};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineStore {
@@ -135,19 +131,7 @@ impl Default for MachineStore {
     /// machine with the id `"localhost"`.
     fn default() -> Self {
         MachineStore {
-            machines: vec![Machine {
-                uuid: Uuid::new_v4(),
-                id: "localhost".to_string(),
-                system_info: SystemInfo {
-                    machine_name: "localhost".into(),
-                    os_version: "0.1.1".into(),
-                    arch: "x69_42".into(),
-                },
-                kind: MachineKind::Linux,
-                remote: None,
-                docker_path: None,
-                services: MachineServices::default(),
-            }],
+            machines: vec![Machine::default()],
         }
     }
 }
