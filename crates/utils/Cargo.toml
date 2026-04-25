@@ -6,7 +6,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-# utils.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+plist = "1.8.0"
 
 [lints]
 workspace = true

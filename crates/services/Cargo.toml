@@ -11,7 +11,5 @@ lucide-icons.workspace = true
 serde.workspace = true
 utils.workspace = true
 
-plist = "1.8.0"
-
 [lints]
 workspace = true

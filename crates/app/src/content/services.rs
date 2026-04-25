@@ -1,10 +1,11 @@
 use gpui::prelude::*;
 use gpui::*;
+use utils::service_item::ServiceItem;
 
 use crate::{app::Crabdash, components::scroll_list};
 
 use super::shared::{error_panel, placeholder_card};
-use services::{ServiceFilter, ServiceItem};
+use services::ServiceFilter;
 
 fn status_badge(status: &str) -> Div {
     let normalized = status.to_ascii_lowercase();

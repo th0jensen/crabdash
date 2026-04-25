@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use plist::from_bytes;
 use serde::Deserialize;
 
+use crate::output::Output;
+
 #[derive(Clone, Debug, Default)]
 pub struct Disk {
     pub id: String,
@@ -23,52 +25,6 @@ pub struct DiskNode {
 impl Disk {
     pub fn is_healthy(&self) -> bool {
         matches!(self.status.as_str(), "healthy" | "mounted" | "swap")
-    }
-
-    pub fn convert_diskutil(stdout: &str, apfs_stdout: Option<&str>) -> Result<Vec<Disk>> {
-        let parsed: DiskutilList =
-            from_bytes(stdout.as_bytes()).context("failed to parse diskutil plist output")?;
-        let apfs_roles = apfs_stdout
-            .map(parse_diskutil_apfs_roles)
-            .transpose()?
-            .unwrap_or_default();
-
-        let containers = parsed
-            .all_disks_and_partitions
-            .iter()
-            .filter(|entry| !entry.apfs_physical_stores.is_empty())
-            .flat_map(|entry| {
-                entry
-                    .apfs_physical_stores
-                    .iter()
-                    .map(|store| (store.device_identifier.clone(), entry.clone()))
-            })
-            .collect::<std::collections::HashMap<_, _>>();
-
-        Ok(parsed
-            .all_disks_and_partitions
-            .into_iter()
-            .filter(|entry| entry.apfs_physical_stores.is_empty())
-            .map(|entry| {
-                let (nodes, active) = diskutil_nodes(&entry.partitions, &containers, &apfs_roles);
-                let name = preferred_diskutil_name(&nodes)
-                    .unwrap_or_else(|| entry.device_identifier.clone());
-                Disk {
-                    id: device_path(&entry.device_identifier),
-                    name,
-                    size: entry.size.map(format_bytes),
-                    status: if active {
-                        String::from("mounted")
-                    } else {
-                        String::from("healthy")
-                    },
-                    detail: entry
-                        .os_internal
-                        .and_then(|is_internal| is_internal.then_some(String::from("internal"))),
-                    nodes,
-                }
-            })
-            .collect())
     }
 
     pub fn apply_diskutil_info(&mut self, stdout: &str) -> Result<()> {
@@ -137,47 +93,6 @@ impl Disk {
             }
         }
     }
-
-    pub fn convert_lsblk(stdout: &str) -> Vec<Disk> {
-        let rows = stdout
-            .lines()
-            .filter_map(parse_lsblk_row)
-            .collect::<Vec<_>>();
-        let children = rows.iter().enumerate().fold(
-            std::collections::HashMap::<String, Vec<usize>>::new(),
-            |mut map, (index, row)| {
-                if let Some(parent) = row.pkname.clone() {
-                    map.entry(parent).or_default().push(index);
-                }
-                map
-            },
-        );
-
-        let mut disks = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| row.device_type == "disk")
-            .map(|(_, row)| {
-                let (nodes, active) = lsblk_children(&row.name, &rows, &children);
-                let (name, extra_detail) = linux_disk_name(row);
-                Disk {
-                    id: row.path.clone(),
-                    name,
-                    size: row.size.clone(),
-                    status: if active || mounted(&row.mount_points) {
-                        String::from("mounted")
-                    } else {
-                        String::from("healthy")
-                    },
-                    detail: linux_disk_detail(row, extra_detail, &nodes),
-                    nodes,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        disks.sort_by_key(|disk| linux_disk_sort_key(disk));
-        disks
-    }
 }
 
 pub trait Disks {
@@ -190,35 +105,35 @@ pub trait Disks {
 }
 
 #[derive(Debug, Deserialize)]
-struct DiskutilList {
+pub struct DiskutilList {
     #[serde(rename = "AllDisksAndPartitions")]
-    all_disks_and_partitions: Vec<DiskutilEntry>,
+    pub all_disks_and_partitions: Vec<DiskutilEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct DiskutilEntry {
+pub struct DiskutilEntry {
     #[serde(rename = "APFSPhysicalStores", default)]
-    apfs_physical_stores: Vec<DiskutilPhysicalStore>,
+    pub apfs_physical_stores: Vec<DiskutilPhysicalStore>,
     #[serde(rename = "APFSVolumes", default)]
-    apfs_volumes: Vec<DiskutilVolume>,
+    pub apfs_volumes: Vec<DiskutilVolume>,
     #[serde(rename = "DeviceIdentifier")]
-    device_identifier: String,
+    pub device_identifier: String,
     #[serde(rename = "OSInternal")]
-    os_internal: Option<bool>,
+    pub os_internal: Option<bool>,
     #[serde(rename = "Partitions", default)]
-    partitions: Vec<DiskutilPartition>,
+    pub partitions: Vec<DiskutilPartition>,
     #[serde(rename = "Size")]
-    size: Option<u64>,
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct DiskutilPhysicalStore {
+pub struct DiskutilPhysicalStore {
     #[serde(rename = "DeviceIdentifier")]
-    device_identifier: String,
+    pub device_identifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct DiskutilPartition {
+pub struct DiskutilPartition {
     #[serde(rename = "Content")]
     content: Option<String>,
     #[serde(rename = "DeviceIdentifier")]
@@ -230,7 +145,7 @@ struct DiskutilPartition {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct DiskutilVolume {
+pub struct DiskutilVolume {
     #[serde(rename = "CapacityInUse")]
     capacity_in_use: Option<u64>,
     #[serde(rename = "DeviceIdentifier")]
@@ -244,19 +159,19 @@ struct DiskutilVolume {
 }
 
 #[derive(Debug, Clone)]
-struct LsblkRow {
-    name: String,
-    path: String,
-    size: Option<String>,
-    device_type: String,
-    mount_points: Vec<String>,
-    model: Option<String>,
-    pkname: Option<String>,
-    fs_type: Option<String>,
-    label: Option<String>,
-    rm: bool,
-    hotplug: bool,
-    tran: Option<String>,
+pub struct LsblkRow {
+    pub name: String,
+    pub path: String,
+    pub size: Option<String>,
+    pub device_type: String,
+    pub mount_points: Vec<String>,
+    pub model: Option<String>,
+    pub pkname: Option<String>,
+    pub fs_type: Option<String>,
+    pub label: Option<String>,
+    pub rm: bool,
+    pub hotplug: bool,
+    pub tran: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,7 +208,7 @@ struct DiskutilInfo {
     removable_media_or_external_device: Option<bool>,
 }
 
-fn collect_mount_points(value: Option<&str>) -> Vec<String> {
+pub fn collect_mount_points(value: Option<&str>) -> Vec<String> {
     let mut mount_points = value
         .into_iter()
         .flat_map(|item| item.lines())
@@ -306,11 +221,11 @@ fn collect_mount_points(value: Option<&str>) -> Vec<String> {
     mount_points
 }
 
-fn device_path(identifier: &str) -> String {
+pub fn device_path(identifier: &str) -> String {
     format!("/dev/{identifier}")
 }
 
-fn diskutil_nodes(
+pub fn diskutil_nodes(
     partitions: &[DiskutilPartition],
     containers: &std::collections::HashMap<String, DiskutilEntry>,
     apfs_roles: &std::collections::HashMap<String, String>,
@@ -351,7 +266,7 @@ fn diskutil_nodes(
     (nodes, active)
 }
 
-fn diskutil_volume_nodes(
+pub fn diskutil_volume_nodes(
     volumes: &[DiskutilVolume],
     apfs_roles: &std::collections::HashMap<String, String>,
 ) -> (Vec<DiskNode>, bool) {
@@ -388,7 +303,7 @@ fn diskutil_volume_nodes(
         )
 }
 
-fn lsblk_children(
+pub fn lsblk_children(
     parent: &str,
     rows: &[LsblkRow],
     children: &std::collections::HashMap<String, Vec<usize>>,
@@ -425,7 +340,7 @@ fn lsblk_children(
         )
 }
 
-fn preferred_diskutil_name(nodes: &[DiskNode]) -> Option<String> {
+pub fn preferred_diskutil_name(nodes: &[DiskNode]) -> Option<String> {
     nodes.iter().find_map(|node| {
         preferred_diskutil_name(&node.nodes).or_else(|| {
             (!node.name.eq_ignore_ascii_case("container")
@@ -438,9 +353,11 @@ fn preferred_diskutil_name(nodes: &[DiskNode]) -> Option<String> {
     })
 }
 
-fn parse_diskutil_apfs_roles(stdout: &str) -> Result<std::collections::HashMap<String, String>> {
+pub fn parse_diskutil_apfs_roles(
+    stdout: Output,
+) -> Result<std::collections::HashMap<String, String>> {
     let parsed: DiskutilApfsList =
-        from_bytes(stdout.as_bytes()).context("failed to parse diskutil apfs plist output")?;
+        from_bytes(&stdout.0).context("failed to parse diskutil apfs plist output")?;
 
     Ok(parsed
         .containers
@@ -456,7 +373,7 @@ fn parse_diskutil_apfs_roles(stdout: &str) -> Result<std::collections::HashMap<S
         .collect())
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
 
     if bytes < 1000 {
@@ -474,7 +391,7 @@ fn format_bytes(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-fn lsblk_label(row: &LsblkRow) -> String {
+pub fn lsblk_label(row: &LsblkRow) -> String {
     row.label
         .clone()
         .filter(|value| !value.trim().is_empty())
@@ -487,7 +404,7 @@ fn lsblk_label(row: &LsblkRow) -> String {
         .unwrap_or_else(|| row.name.clone())
 }
 
-fn mounted(mount_points: &[String]) -> bool {
+pub fn mounted(mount_points: &[String]) -> bool {
     mount_points.iter().any(|value| !value.trim().is_empty())
 }
 
@@ -503,7 +420,7 @@ fn node_detail(row: &LsblkRow, is_swap: bool) -> Option<String> {
     row.fs_type.clone().filter(|value| !value.trim().is_empty())
 }
 
-fn parse_lsblk_row(line: &str) -> Option<LsblkRow> {
+pub fn parse_lsblk_row(line: &str) -> Option<LsblkRow> {
     let pairs = parse_lsblk_pairs(line);
     let name = pairs.get("NAME")?.trim().to_string();
 
@@ -698,7 +615,7 @@ fn macos_volume_detail(role: &str, mount_point: Option<&str>) -> String {
     }
 }
 
-fn linux_disk_name(row: &LsblkRow) -> (String, Option<String>) {
+pub fn linux_disk_name(row: &LsblkRow) -> (String, Option<String>) {
     let model = row
         .model
         .as_deref()
@@ -716,7 +633,7 @@ fn linux_disk_name(row: &LsblkRow) -> (String, Option<String>) {
     (row.name.clone(), None)
 }
 
-fn linux_disk_detail(
+pub fn linux_disk_detail(
     row: &LsblkRow,
     extra_detail: Option<String>,
     nodes: &[DiskNode],
@@ -751,7 +668,7 @@ fn linux_disk_detail(
     (!parts.is_empty()).then(|| parts.join(" • "))
 }
 
-fn linux_disk_sort_key(disk: &Disk) -> (u8, u8, String) {
+pub fn linux_disk_sort_key(disk: &Disk) -> (u8, u8, String) {
     let system_rank = if disk_nodes_have_mount(&disk.nodes, "/") {
         0
     } else {

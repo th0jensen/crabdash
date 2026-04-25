@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::shared::placeholder_card;
-use services::{Disk, DiskNode};
+use utils::disks::{Disk, DiskNode};
 
 const TREE_LINE: Hsla = Hsla {
     h: 0.0,

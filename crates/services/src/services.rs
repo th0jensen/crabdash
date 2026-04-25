@@ -1,7 +1,6 @@
 use anyhow::Result;
 use serde::Serialize;
-
-use crate::{disks::Disk, docker::Container};
+use utils::{container::Container, disks::Disk, service_item::ServiceItem};
 
 #[derive(Clone, Debug, Default)]
 pub struct MachineServices {
@@ -13,53 +12,11 @@ pub struct MachineServices {
     pub systemd_error: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ServiceItem {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub error: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ServiceFilter {
     #[default]
     Total,
     Running,
-}
-
-impl ServiceItem {
-    pub fn is_running(&self) -> bool {
-        if self.status.contains("0") || !self.status.to_ascii_lowercase().contains("inactive") {
-            return true;
-        }
-        false
-    }
-
-    pub fn parse_output(stdout: String) -> Vec<ServiceItem> {
-        stdout
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let mut parts = line.split('\t');
-
-                let pid = parts.next()?.to_string();
-                let status = parts.next()?.to_string();
-                let name = parts.next()?.to_string();
-
-                if name.contains("●") {
-                    return None;
-                }
-
-                Some(ServiceItem {
-                    id: pid,
-                    name: name,
-                    status,
-                    error: None,
-                })
-            })
-            .collect()
-    }
 }
 
 pub trait Services {

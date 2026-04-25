@@ -1,41 +1,6 @@
 use anyhow::Result;
 use lucide_icons::Icon;
-use utils::args::Args;
-
-#[derive(Clone, Debug, Default)]
-pub struct Container {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub error: Option<String>,
-}
-
-impl Container {
-    pub fn is_running_status(&self) -> bool {
-        let normalized = self.status.to_ascii_lowercase();
-        normalized.contains("running") || normalized.contains("healthy")
-    }
-
-    pub fn parse_output(stdout: String) -> Vec<Container> {
-        stdout
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split('\t');
-
-                let id = parts.next()?.to_string();
-                let name = parts.next()?.to_string();
-                let state = parts.next()?.to_string();
-
-                Some(Container {
-                    id,
-                    name,
-                    status: state,
-                    error: None,
-                })
-            })
-            .collect()
-    }
-}
+use utils::{args::Args, container::Container, output::Output};
 
 pub trait Docker {
     /// Finds the Docker executable
@@ -57,7 +22,16 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(String)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn run_container(&mut self, args: &Args) -> impl Future<Output = Result<String>>;
+    fn run_container(&mut self, args: &Args) -> impl Future<Output = Result<Output>>;
+    /// Removes a Docker container
+    ///
+    /// # Arguments
+    /// * `args`: The arguments to pass to the Docker command
+    ///
+    /// # Returns
+    /// * `Ok(Output)`: The ID of the container is returned
+    /// * `Err(anyhow::Error)`: Any errors that occurred
+    fn remove_container(&mut self, id: &str) -> impl Future<Output = Result<Output>>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments
@@ -65,9 +39,9 @@ pub trait Docker {
     /// * `action`: The action to perform ([`DockerAction`])
     ///
     /// # Returns
-    /// * `Ok(String)`: The ID of the container is returned
+    /// * `Ok(Output)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_action(&mut self, id: &str, action: &str) -> impl Future<Output = Result<String>>;
+    fn container_action(&mut self, id: &str, action: &str) -> impl Future<Output = Result<Output>>;
     /// Gets the logs of a Docker container
     ///
     /// # Arguments
@@ -76,7 +50,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(_)`: The container logs are returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_logs(&mut self, id: &str) -> impl Future<Output = Result<String>>;
+    fn container_logs(&mut self, id: &str) -> impl Future<Output = Result<Output>>;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

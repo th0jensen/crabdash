@@ -2,6 +2,7 @@ use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
+use utils::container::Container;
 
 use crate::{
     app::Crabdash,
@@ -12,7 +13,7 @@ use crate::{
 };
 
 use super::shared::placeholder_card;
-use services::docker::{Container, Docker, DockerAction, DockerFilter};
+use services::docker::{Docker, DockerAction, DockerFilter};
 
 fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> Div {
     let label = pending_action

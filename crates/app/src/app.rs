@@ -23,8 +23,9 @@ use crate::{
     ZoomWindow, show_about_dialog,
 };
 use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
-use services::{disks::Disks, docker::Docker};
+use services::docker::Docker;
 use std::path::PathBuf;
+use utils::disks::Disks;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
