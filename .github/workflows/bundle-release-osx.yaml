@@ -29,22 +29,21 @@ jobs:
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
           codesign --deep --force --sign - "$APP"
-      - name: Package ZIP
+      - name: Package DMG
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
-          STAGE="crabdash-macOS-arm"
-          mkdir -p "$STAGE"
+          STAGE="$(mktemp -d)"
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
-          ditto -c -k --sequesterRsrc --keepParent "$STAGE" "Crabdash-macOS-arm.zip"
+          hdiutil create -volname "Crabdash" -srcfolder "$STAGE" -ov -format UDZO "crabdash-macOS-applesilicon.dmg"
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: crabdash-macos
-          path: Crabdash-macOS-arm.zip
+          name: crabdash-macOS
+          path: crabdash-macOS-applesilicon.dmg
       - name: Publish GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          gh release create "$TAG" Crabdash-macOS-arm.zip --generate-notes
+          gh release create "$TAG" crabdash-macOS-applesilicon.dmg --generate-notes
