@@ -165,7 +165,7 @@ fn action_button(
                                         "Failed to {} {spawn_name}: {err}",
                                         action.command()
                                     );
-                                    eprintln!("{message}");
+                                    tracing::warn!(error = %err, action = action.command(), container = %spawn_name, "Docker action failed");
                                     this.set_status_error(message.clone());
                                     if let Some(m) =
                                         this.machine_store.machines.get_mut(machine_index)

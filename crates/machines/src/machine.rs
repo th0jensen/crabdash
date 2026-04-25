@@ -85,12 +85,13 @@ impl Machine {
                     } else {
                         format!("{cmd} exited with status {}", result.status)
                     };
-                    eprintln!(
-                        "Local command failed: cmd={cmd} args={:?} status={} stderr={} stdout={}",
-                        args,
-                        result.status,
-                        String::from_utf8_lossy(&result.stderr).trim(),
-                        String::from_utf8_lossy(&result.stdout).trim()
+                    tracing::error!(
+                        cmd = %cmd,
+                        args = ?args,
+                        status = %result.status,
+                        stderr = %String::from_utf8_lossy(&result.stderr).trim(),
+                        stdout = %String::from_utf8_lossy(&result.stdout).trim(),
+                        "Local command failed"
                     );
                     return Err(anyhow!(message));
                 }

@@ -105,6 +105,8 @@ fn open_window(cx: &mut App) {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let app = Application::new();
     app.on_reopen(|cx| open_window(cx));
     app.run(|cx: &mut App| {

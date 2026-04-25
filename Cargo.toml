@@ -29,6 +29,8 @@ libghostty-vt = "0.1.1"
 lucide-icons = { version = "0.575.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 smol = { version = "2.0.2" }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "0.3.19", features=["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.clippy]

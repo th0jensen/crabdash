@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 indoc.workspace = true
+tracing.workspace = true
 serde.workspace = true
 services.workspace = true
 smol.workspace = true

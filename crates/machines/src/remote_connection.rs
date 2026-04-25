@@ -70,7 +70,7 @@ impl RemoteConnection {
     ) -> Result<RemoteConnection> {
         let user = user.into();
         let host = host.into();
-        eprintln!("[SSH] new_connection: user={user} host={host}");
+        tracing::debug!(user = %user, host = %host, "new_connection");
         let rc = RemoteConnection {
             user,
             host,
@@ -82,7 +82,7 @@ impl RemoteConnection {
         let sess = rc.connect().await?;
         *rc.session.lock().await = Some(sess);
         rc.set_connected(true);
-        eprintln!("[SSH] new_connection: success");
+        tracing::debug!("new_connection: success");
         Ok(rc)
     }
 
@@ -95,11 +95,11 @@ impl RemoteConnection {
             .spawn(async move {
                 let tcp = match TokioTcpStream::connect(format!("{host}:22")).await {
                     Ok(s) => {
-                        eprintln!("[SSH] connect: TCP ok");
+                        tracing::debug!(host = %host, "TCP connected");
                         s
                     }
                     Err(e) => {
-                        eprintln!("[SSH] connect: TCP failed: {e}");
+                        tracing::warn!(error = %e, host = %host, "TCP connect failed");
                         return Err(e.into());
                     }
                 };
@@ -113,7 +113,7 @@ impl RemoteConnection {
                     if let Err(e) =
                         known_hosts.read_file(Path::new(&kh_path), KnownHostFileKind::OpenSSH)
                     {
-                        eprintln!("[SSH] connect: known_hosts read failed (non-fatal): {e}");
+                        tracing::warn!(error = %e, path = %kh_path, "known_hosts read failed (non-fatal)");
                     }
                 }
 

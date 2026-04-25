@@ -108,7 +108,7 @@ impl Crabdash {
             match load_store().await {
                 Ok(store) => (store, None),
                 Err(error) => {
-                    eprintln!("Failed to load MachineStore {error}");
+                    tracing::error!(%error, "Failed to load MachineStore");
                     (
                         MachineStore::default(),
                         Some(format!("Failed to load saved machines: {error}")),
@@ -201,7 +201,7 @@ impl Crabdash {
 
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             if let Err(e) = mc.sync_system_info().await {
-                eprintln!("[app] sync_system_info failed: {e}");
+                tracing::warn!(error = %e, "sync_system_info failed");
             }
 
             let store = load_store().await;
@@ -225,7 +225,7 @@ impl Crabdash {
                         }
                     }
                 }
-                Err(e) => eprintln!("[app] load_store failed: {e}"),
+                Err(e) => tracing::warn!(error = %e, "load_store failed"),
             })
             .ok();
         })
@@ -233,40 +233,41 @@ impl Crabdash {
     }
 
     pub(crate) fn start_update_loop(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| loop {
-            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            loop {
+                smol::Timer::after(std::time::Duration::from_secs(5)).await;
 
-            // Clone machines to check connection state outside the entity lock
-            let machines = match this.update(cx, |this, _cx| {
-                this.machine_store.machines.clone()
-            }) {
-                Ok(m) => m,
-                Err(_) => break,
-            };
+                // Clone machines to check connection state outside the entity lock
+                let machines =
+                    match this.update(cx, |this, _cx| this.machine_store.machines.clone()) {
+                        Ok(m) => m,
+                        Err(_) => break,
+                    };
 
-            // Check connected state for each remote machine asynchronously
-            let mut connected_states = Vec::with_capacity(machines.len());
-            for machine in &machines {
-                let state = match machine.remote.as_ref() {
-                    Some(rc) => rc.has_active_session().await,
-                    None => true,
-                };
-                connected_states.push(state);
-            }
+                // Check connected state for each remote machine asynchronously
+                let mut connected_states = Vec::with_capacity(machines.len());
+                for machine in &machines {
+                    let state = match machine.remote.as_ref() {
+                        Some(rc) => rc.has_active_session().await,
+                        None => true,
+                    };
+                    connected_states.push(state);
+                }
 
-            // Apply connected states (shared Arc, so clones see this too) and refresh
-            this.update(cx, |this, cx| {
-                for (i, connected) in connected_states.into_iter().enumerate() {
-                    if let Some(m) = this.machine_store.machines.get_mut(i) {
-                        if let Some(rc) = m.remote.as_ref() {
-                            rc.set_connected(connected);
+                // Apply connected states (shared Arc, so clones see this too) and refresh
+                this.update(cx, |this, cx| {
+                    for (i, connected) in connected_states.into_iter().enumerate() {
+                        if let Some(m) = this.machine_store.machines.get_mut(i) {
+                            if let Some(rc) = m.remote.as_ref() {
+                                rc.set_connected(connected);
+                            }
                         }
                     }
-                }
-                this.refresh_services(cx);
-                cx.notify();
-            })
-            .ok();
+                    this.refresh_services(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
         })
         .detach();
     }
@@ -379,7 +380,7 @@ impl Crabdash {
                                     }
                                 }
                                 Err(err) => {
-                                    eprintln!("Failed to refresh docker after run: {err}");
+                                    tracing::warn!(error = %err, "Failed to refresh docker after run");
                                 }
                             }
                             this.clear_status_message();
@@ -401,7 +402,7 @@ impl Crabdash {
     }
 
     pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
-        eprintln!("[delete] delete_machine called for uuid={uuid}");
+        tracing::debug!(%uuid, "delete_machine called");
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             if let Err(error) = MachineStore::remove_machine(uuid).await {
