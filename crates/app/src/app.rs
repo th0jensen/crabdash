@@ -150,6 +150,7 @@ impl Crabdash {
             focus_handle: cx.focus_handle(),
         };
         app.refresh_services(cx);
+        app.start_update_loop(cx);
         app
     }
 
@@ -225,6 +226,45 @@ impl Crabdash {
                     }
                 }
                 Err(e) => eprintln!("[app] load_store failed: {e}"),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn start_update_loop(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| loop {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+
+            // Clone machines to check connection state outside the entity lock
+            let machines = match this.update(cx, |this, _cx| {
+                this.machine_store.machines.clone()
+            }) {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+
+            // Check connected state for each remote machine asynchronously
+            let mut connected_states = Vec::with_capacity(machines.len());
+            for machine in &machines {
+                let state = match machine.remote.as_ref() {
+                    Some(rc) => rc.has_active_session().await,
+                    None => true,
+                };
+                connected_states.push(state);
+            }
+
+            // Apply connected states (shared Arc, so clones see this too) and refresh
+            this.update(cx, |this, cx| {
+                for (i, connected) in connected_states.into_iter().enumerate() {
+                    if let Some(m) = this.machine_store.machines.get_mut(i) {
+                        if let Some(rc) = m.remote.as_ref() {
+                            rc.set_connected(connected);
+                        }
+                    }
+                }
+                this.refresh_services(cx);
+                cx.notify();
             })
             .ok();
         })
