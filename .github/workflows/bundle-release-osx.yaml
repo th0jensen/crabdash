@@ -27,6 +27,13 @@ jobs:
           cp assets/icons/Assets.car "$APP/Contents/Resources/Assets.car"
           /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Contents/Info.plist" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Contents/Info.plist"
+      - name: Bundle libghostty-vt dylib
+        run: |
+          APP="target/release/bundle/osx/Crabdash.app"
+          DYLIB=$(find target/release -name "libghostty-vt.dylib" | head -1)
+          mkdir -p "$APP/Contents/Frameworks"
+          cp "$DYLIB" "$APP/Contents/Frameworks/"
+          install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/crabdash"
       - name: Codesign app
         run: |
           APP="target/release/bundle/osx/Crabdash.app"
