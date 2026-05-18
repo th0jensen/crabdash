@@ -7,10 +7,33 @@ pub struct ServiceItem {
 }
 
 impl ServiceItem {
-    pub fn is_running(&self) -> bool {
-        if self.status.contains("0") || !self.status.to_ascii_lowercase().contains("inactive") {
-            return true;
+    pub fn status_label(&self) -> &'static str {
+        let status = self.status.trim().to_ascii_lowercase();
+
+        if matches!(status.as_str(), "active" | "running") {
+            return "Active";
         }
-        false
+
+        if matches!(status.as_str(), "failed" | "crashed") {
+            return "Failed";
+        }
+
+        if matches!(status.as_str(), "inactive" | "dead" | "exited") {
+            return "Inactive";
+        }
+
+        if self.id.trim().parse::<u32>().is_ok_and(|pid| pid > 0) {
+            return "Active";
+        }
+
+        if status.parse::<i32>().is_ok_and(|code| code != 0) {
+            return "Failed";
+        }
+
+        "Inactive"
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.status_label() == "Active"
     }
 }

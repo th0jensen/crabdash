@@ -12,18 +12,23 @@ use crate::{
 use super::shared::{error_panel, placeholder_card};
 use services::ServiceFilter;
 
-fn status_badge(status: &str) -> Div {
-    let normalized = status.to_ascii_lowercase();
-    let is_running = normalized.contains("0") || !normalized.contains("inactive");
+fn status_badge(service: &ServiceItem) -> Div {
+    let label = service.status_label();
+    let is_running = service.is_running();
+    let is_failed = label == "Failed";
     let status_bg = if is_running {
         rgb(0x193D2A)
-    } else {
+    } else if is_failed {
         rgb(0x47232B)
+    } else {
+        rgb(0x2C2C2E)
     };
     let status_fg = if is_running {
         rgb(0x30D158)
-    } else {
+    } else if is_failed {
         rgb(0xFF453A)
+    } else {
+        rgb(0x8E8E93)
     };
 
     div()
@@ -33,7 +38,7 @@ fn status_badge(status: &str) -> Div {
         .bg(status_bg)
         .text_xs()
         .text_color(status_fg)
-        .child(status.to_string())
+        .child(label)
 }
 
 fn stats_chip(
@@ -212,7 +217,7 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
                         .items_center()
                         .gap(px(10.0))
                         .child(service_logs_button(app, cx, service))
-                        .child(status_badge(&service.status)),
+                        .child(status_badge(service).w(px(80.0)).text_center()),
                 ),
         )
         .when(logs_open, |this| {
