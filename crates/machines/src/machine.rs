@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
-use services::{MachineServices, Services, docker::Docker};
+use services::{MachineServices, ServiceAction, Services, docker::Docker};
 use smol::process::Command;
 use utils::{
     args,
@@ -206,6 +206,24 @@ impl Docker for Machine {
 }
 
 impl Services for Machine {
+    async fn service_action(&mut self, service: &str, action: ServiceAction) -> Result<Output> {
+        match self.kind {
+            MachineKind::MacOS => match action {
+                ServiceAction::Start => self.run("launchctl", &args!["start", service]).await,
+                ServiceAction::Stop => self.run("launchctl", &args!["stop", service]).await,
+                ServiceAction::Restart => {
+                    self.run("launchctl", &args!["stop", service]).await?;
+                    self.run("launchctl", &args!["start", service]).await
+                }
+            },
+            MachineKind::Linux => {
+                self.run("systemctl", &args![action.command(), service])
+                    .await
+            }
+            _ => bail!("System does not yet support the services feature"),
+        }
+    }
+
     async fn service_logs(&mut self, service: &str) -> Result<Output> {
         let (command, args): (&str, Args) = match self.kind {
             MachineKind::MacOS => (

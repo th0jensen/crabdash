@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
-use services::Services;
+use services::{ServiceAction, Services};
 use utils::service_item::ServiceItem;
 
 use crate::{
@@ -12,12 +12,17 @@ use crate::{
 use super::shared::{error_panel, placeholder_card};
 use services::ServiceFilter;
 
-fn status_badge(service: &ServiceItem) -> Div {
-    let label = service.status_label();
-    let is_running = service.is_running();
+fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) -> Div {
+    let label = pending_action
+        .map(|action| action.pending_label())
+        .unwrap_or_else(|| service.status_label());
+    let is_running = pending_action.is_none() && service.is_running();
+    let is_pending = pending_action.is_some();
     let is_failed = label == "Failed";
     let status_bg = if is_running {
         rgb(0x193D2A)
+    } else if is_pending {
+        rgb(0x473B1F)
     } else if is_failed {
         rgb(0x47232B)
     } else {
@@ -25,6 +30,8 @@ fn status_badge(service: &ServiceItem) -> Div {
     };
     let status_fg = if is_running {
         rgb(0x30D158)
+    } else if is_pending {
+        rgb(0xFFD60A)
     } else if is_failed {
         rgb(0xFF453A)
     } else {
@@ -78,6 +85,110 @@ fn stats_chip(
             this.service_filter = filter;
             cx.notify();
         }))
+}
+
+fn service_action_button(
+    cx: &mut Context<Crabdash>,
+    service: &ServiceItem,
+    action: ServiceAction,
+    disabled: bool,
+) -> impl IntoElement {
+    let bg = rgb(0x242426);
+    let disabled_bg = rgb(0x202022);
+    let disabled_fg = rgb(0x6C6C70);
+    let hover_bg = rgb(0x2F2F31);
+
+    let name = service.name.clone();
+    let button_id = SharedString::from(format!("{}-service-{name}", action.command()));
+
+    let button = div()
+        .id(button_id)
+        .h(px(34.0))
+        .w(px(34.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if disabled { disabled_bg } else { bg })
+        .border_1()
+        .border_color(if disabled { disabled_bg } else { rgb(0x2F2F31) })
+        .rounded(px(8.0))
+        .text_color(if disabled { disabled_fg } else { rgb(0xFFFFFF) })
+        .child(lucide_icon(action.icon(), 14.0));
+
+    if disabled {
+        button.cursor_default()
+    } else {
+        button
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let machine_index = this.selected_machine;
+                let mut machine = this.selected_machine().clone();
+
+                if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
+                    this.pending_service_actions.insert(name.clone(), action);
+                    if let Some(service) = machine.services.systemd.iter_mut().find(|service| service.name == name) {
+                        service.error = None;
+                    }
+                }
+
+                cx.notify();
+
+                let spawn_name = name.clone();
+                let update_name = name.clone();
+
+                cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let result = cx
+                            .background_spawn({
+                                let service_name = spawn_name.clone();
+                                async move {
+                                    machine.service_action(&service_name, action).await?;
+                                    machine.list_services().await
+                                }
+                            })
+                            .await;
+
+                        this.update(&mut cx, move |this, cx| {
+                            this.pending_service_actions.remove(&update_name);
+                            match result {
+                                Ok(services) => {
+                                    if let Some(machine) =
+                                        this.machine_store.machines.get_mut(machine_index)
+                                    {
+                                        machine.services.systemd = services;
+                                        machine.services.systemd_error = None;
+                                    }
+                                    this.clear_status_message();
+                                }
+                                Err(err) => {
+                                    let message =
+                                        format!("Failed to {} {update_name}: {err}", action.command());
+                                    tracing::warn!(error = %err, action = action.command(), service = %update_name, "Service action failed");
+                                    this.set_status_error(message.clone());
+                                    if let Some(machine) =
+                                        this.machine_store.machines.get_mut(machine_index)
+                                    {
+                                        if let Some(service) = machine
+                                            .services
+                                            .systemd
+                                            .iter_mut()
+                                            .find(|service| service.name == update_name)
+                                        {
+                                            service.error = Some(message);
+                                        }
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+            }))
+    }
 }
 
 fn service_logs_button(
@@ -168,6 +279,8 @@ fn service_logs_button(
 
 fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &ServiceItem) -> Div {
     let service_name = service.name.clone();
+    let pending_action = app.pending_service_actions.get(&service_name).copied();
+    let actions_disabled = pending_action.is_some();
     let logs_open = app.logs_open_services.contains(&service_name);
     let state = app.expanded_service_logs.get(&service_name);
     let scroll_handle = state
@@ -217,7 +330,32 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
                         .items_center()
                         .gap(px(10.0))
                         .child(service_logs_button(app, cx, service))
-                        .child(status_badge(service).w(px(80.0)).text_center()),
+                        .child(if !service.is_running() {
+                            service_action_button(
+                                cx,
+                                service,
+                                ServiceAction::Start,
+                                actions_disabled,
+                            )
+                        } else {
+                            service_action_button(
+                                cx,
+                                service,
+                                ServiceAction::Stop,
+                                actions_disabled,
+                            )
+                        })
+                        .child(service_action_button(
+                            cx,
+                            service,
+                            ServiceAction::Restart,
+                            actions_disabled,
+                        ))
+                        .child(
+                            status_badge(service, pending_action)
+                                .w(px(80.0))
+                                .text_center(),
+                        ),
                 ),
         )
         .when(logs_open, |this| {

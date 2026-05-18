@@ -1,4 +1,5 @@
 use anyhow::Result;
+use lucide_icons::Icon;
 use serde::Serialize;
 use utils::{container::Container, disks::Disk, output::Output, service_item::ServiceItem};
 
@@ -29,6 +30,46 @@ pub trait Services {
 
     /// Returns recent logs for a system service.
     fn service_logs(&mut self, service: &str) -> impl Future<Output = Result<Output>>;
+
+    /// Performs an action on a system service.
+    fn service_action(
+        &mut self,
+        service: &str,
+        action: ServiceAction,
+    ) -> impl Future<Output = Result<Output>>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl ServiceAction {
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+
+    pub fn icon(self) -> Icon {
+        match self {
+            Self::Start => Icon::Play,
+            Self::Stop => Icon::X,
+            Self::Restart => Icon::RefreshCw,
+        }
+    }
+
+    pub fn pending_label(self) -> &'static str {
+        match self {
+            Self::Start => "Starting",
+            Self::Stop => "Stopping",
+            Self::Restart => "Restarting",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

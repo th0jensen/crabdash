@@ -6,7 +6,7 @@ use gpui::*;
 use lucide_icons::Icon;
 use machines::store::load_store;
 use services::docker::{DockerAction, DockerFilter};
-use services::{ServiceFilter, Services};
+use services::{ServiceAction, ServiceFilter, Services};
 
 use crate::components::common::LucideIcon;
 use crate::components::text_field::{
@@ -61,6 +61,7 @@ pub struct Crabdash {
     pub(crate) docker_filter: DockerFilter,
     pub(crate) service_filter: ServiceFilter,
     pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
+    pub(crate) pending_service_actions: HashMap<String, ServiceAction>,
     pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
@@ -126,6 +127,7 @@ impl Crabdash {
             docker_filter: DockerFilter::default(),
             service_filter: ServiceFilter::default(),
             pending_docker_actions: HashMap::default(),
+            pending_service_actions: HashMap::default(),
             expanded_disk_rows: HashSet::default(),
             sidebar_collapsed: false,
             sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
