@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Serialize;
-use utils::{container::Container, disks::Disk, service_item::ServiceItem};
+use utils::{container::Container, disks::Disk, output::Output, service_item::ServiceItem};
 
 #[derive(Clone, Debug, Default)]
 pub struct MachineServices {
@@ -26,6 +26,9 @@ pub trait Services {
     /// * `Ok(Vec<Disk>)`: The disks connected to the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn list_services(&mut self) -> impl Future<Output = Result<Vec<ServiceItem>>>;
+
+    /// Returns recent logs for a system service.
+    fn service_logs(&mut self, service: &str) -> impl Future<Output = Result<Output>>;
 }
 
 #[derive(Debug, Clone, Serialize)]

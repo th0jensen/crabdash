@@ -231,7 +231,7 @@ fn logs_button(
             }
 
             if !this.expanded_docker_logs.contains_key(&id) {
-                let state = match super::docker_logs::DockerLogState::new(500) {
+                let state = match super::terminal_logs::TerminalLogState::new(500) {
                     Ok(s) => s,
                     Err(err) => {
                         this.set_status_error(format!("Failed to init terminal: {err}"));
@@ -338,10 +338,13 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
     let modal_open = app.logs_open_containers.contains(&container_id);
 
     let state = app.expanded_docker_logs.get(&container_id);
-    let scroll_handle = state.map(|s| s.scroll_handle.clone()).unwrap_or_default();
+    let scroll_handle = state
+        .map(|state| state.scroll_handle.clone())
+        .unwrap_or_default();
     let wheel_handle = scroll_handle.clone();
-    let rendered = state.map(|s| s.rendered.clone()).unwrap_or_default();
-    let loaded = state.map_or(false, |s| s.loaded);
+    let log_height = state
+        .map(|state| super::terminal_logs::viewport_height(&state.rendered))
+        .unwrap_or_else(super::terminal_logs::minimum_viewport_height);
 
     div()
         .w_full()
@@ -350,25 +353,29 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
         .gap(px(4.0))
         .child(container_row_card(app, cx, container, modal_open))
         .when(modal_open, |d| {
-            let logs_content = if !loaded {
-                div()
+            let logs_content = match state {
+                Some(state) if !state.loaded => div()
                     .w_full()
                     .text_xs()
                     .text_color(rgb(0x8E8E93))
                     .child("Loading logs...")
-                    .into_any_element()
-            } else if rendered.is_empty() {
-                div()
+                    .into_any_element(),
+                Some(state) if state.rendered.is_empty() => div()
                     .w_full()
                     .text_xs()
                     .text_color(rgb(0x8E8E93))
                     .child("No logs available.")
-                    .into_any_element()
-            } else {
-                div()
+                    .into_any_element(),
+                Some(state) => div()
                     .w_full()
-                    .child(super::docker_logs::render_view(&rendered))
-                    .into_any_element()
+                    .child(super::terminal_logs::render_view(&state.rendered))
+                    .into_any_element(),
+                None => div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(rgb(0x8E8E93))
+                    .child("Loading logs...")
+                    .into_any_element(),
             };
 
             d.child(
@@ -376,7 +383,7 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
                     div()
                         .id(SharedString::from(format!("logs-scroll-{}", container_id)))
                         .w_full()
-                        .h(px(300.0))
+                        .h(log_height)
                         .track_scroll(&scroll_handle)
                         .overflow_scroll()
                         .on_scroll_wheel(cx.listener(

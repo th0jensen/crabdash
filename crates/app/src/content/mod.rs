@@ -1,10 +1,10 @@
 mod disks;
 mod docker;
-pub mod docker_logs;
 mod docker_run_modal;
 mod header;
 mod services;
 mod shared;
+pub mod terminal_logs;
 mod title_bar;
 
 use gpui::prelude::*;

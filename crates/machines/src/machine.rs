@@ -206,6 +206,38 @@ impl Docker for Machine {
 }
 
 impl Services for Machine {
+    async fn service_logs(&mut self, service: &str) -> Result<Output> {
+        let (command, args): (&str, Args) = match self.kind {
+            MachineKind::MacOS => (
+                "log",
+                args![
+                    "show",
+                    "--style",
+                    "compact",
+                    "--last",
+                    "1h",
+                    "--predicate",
+                    &format!("process == '{service}' OR subsystem == '{service}'")
+                ],
+            ),
+            MachineKind::Linux => (
+                "journalctl",
+                args![
+                    "--unit",
+                    service,
+                    "--no-pager",
+                    "--lines",
+                    "500",
+                    "--output",
+                    "short-iso"
+                ],
+            ),
+            _ => bail!("System does not yet support the services feature"),
+        };
+
+        self.run(command, &args).await
+    }
+
     async fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
         let (command, args): (&str, Args) = match self.kind {
             MachineKind::MacOS => ("launchctl", args!["list"]),
