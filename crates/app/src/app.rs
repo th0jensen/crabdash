@@ -279,59 +279,86 @@ impl Crabdash {
     }
 
     pub(crate) fn refresh_services(&mut self, cx: &mut Context<Self>) {
-        let mut machine = self.selected_machine_mut().clone();
+        let machine = self.selected_machine_mut().clone();
         let machine_index = self.selected_machine;
-        let active_tab = self.active_tab;
 
+        self.clear_status_message();
         self.sync_state(cx);
 
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let result: Result<(), anyhow::Error> = async {
-                match active_tab {
-                    MainTab::Docker => {
-                        let containers = machine.list_docker().await?;
-                        this.update(cx, move |this, cx| {
-                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
-                                m.services.docker = containers;
-                                m.services.docker_error = None;
-                            }
-                            this.clear_status_message();
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                    MainTab::Disks => {
-                        let disks = machine.list_disks().await?;
-                        this.update(cx, move |this, cx| {
-                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
-                                m.services.disks = disks;
-                                m.services.disks_error = None;
-                            }
-                            this.clear_status_message();
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                    MainTab::Services => {
-                        let services = machine.list_services().await?;
-                        this.update(cx, move |this, cx| {
-                            if let Some(m) = this.machine_store.machines.get_mut(machine_index) {
-                                m.services.systemd = services;
-                                m.services.systemd_error = None;
-                            }
-                            this.clear_status_message();
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                }
-                Ok(())
-            }
-            .await;
-
-            if let Err(error) = result {
+        cx.spawn({
+            let mut machine = machine.clone();
+            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+                let result = cx
+                    .background_spawn(async move { machine.list_docker().await })
+                    .await;
                 this.update(cx, move |this, cx| {
-                    this.set_status_error(format!("Unable to load {active_tab:?}: {error}"));
+                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
+                        match result {
+                            Ok(containers) => {
+                                machine.services.docker = containers;
+                                machine.services.docker_error = None;
+                            }
+                            Err(error) => {
+                                let message = format!("Unable to load Docker: {error}");
+                                machine.services.docker_error = Some(message.clone());
+                                this.set_status_error(message);
+                            }
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        cx.spawn({
+            let mut machine = machine.clone();
+            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+                let result = cx
+                    .background_spawn(async move { machine.list_disks().await })
+                    .await;
+                this.update(cx, move |this, cx| {
+                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
+                        match result {
+                            Ok(disks) => {
+                                machine.services.disks = disks;
+                                machine.services.disks_error = None;
+                            }
+                            Err(error) => {
+                                let message = format!("Unable to load Disks: {error}");
+                                machine.services.disks_error = Some(message.clone());
+                                this.set_status_error(message);
+                            }
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        cx.spawn({
+            let mut machine = machine.clone();
+            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+                let result = cx
+                    .background_spawn(async move { machine.list_services().await })
+                    .await;
+                this.update(cx, move |this, cx| {
+                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
+                        match result {
+                            Ok(services) => {
+                                machine.services.systemd = services;
+                                machine.services.systemd_error = None;
+                            }
+                            Err(error) => {
+                                let message = format!("Unable to load Services: {error}");
+                                machine.services.systemd_error = Some(message.clone());
+                                this.set_status_error(message);
+                            }
+                        }
+                    }
                     cx.notify();
                 })
                 .ok();
