@@ -5,6 +5,11 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+
+    if env::var_os("DOCS_RS").is_some() {
+        println!("cargo:rustc-link-lib=dylib=ghostty-vt");
+    }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let workspace_root = manifest_dir

@@ -5,7 +5,6 @@ use lucide_icons::Icon;
 use crate::app::{AddMachineAuthMode, Crabdash};
 use crate::components::common::{button, lucide_icon};
 
-
 fn auth_mode_button(
     app: &Crabdash,
     mode: AddMachineAuthMode,
@@ -15,24 +14,24 @@ fn auth_mode_button(
 
     div()
         .id(SharedString::from(format!("auth-mode-{}", mode.label())))
-        .h(px(34.0))
-        .px(px(12.0))
+        .h(px(30.0))
+        .px(px(10.0))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(8.0))
+        .rounded(px(4.0))
         .border_1()
         .border_color(if selected {
-            rgb(0x0A84FF)
+            rgb(0x555555)
         } else {
-            rgb(0x2F2F31)
+            rgb(0x303030)
         })
         .bg(if selected {
-            rgb(0x1F3656)
+            rgb(0x363636)
         } else {
-            rgb(0x2C2C2E)
+            rgb(0x242424)
         })
-        .text_sm()
+        .text_xs()
         .text_color(if selected {
             rgb(0xFFFFFF)
         } else {

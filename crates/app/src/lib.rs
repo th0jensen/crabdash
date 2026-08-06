@@ -48,6 +48,7 @@ actions!(
         SubmitAddMachineModal,
         ToggleFullScreen,
         ToggleSidebar,
+        ToggleTerminal,
         ZoomWindow
     ]
 );

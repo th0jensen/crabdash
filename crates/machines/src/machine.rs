@@ -244,6 +244,7 @@ impl Services for Machine {
                     "--unit",
                     service,
                     "--no-pager",
+                    "--quiet",
                     "--lines",
                     "500",
                     "--output",
@@ -257,27 +258,32 @@ impl Services for Machine {
     }
 
     async fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
-        let (command, args): (&str, Args) = match self.kind {
-            MachineKind::MacOS => ("launchctl", args!["list"]),
-            MachineKind::Linux => (
-                "sh",
-                args![
-                    "-c",
-                    indoc! {r#"
-                        systemctl list-units --type=service --all --no-legend --no-pager \
-                        | awk '{print $1}' \
-                        | while read -r unit; do
-                            status=$(systemctl show -p ActiveState --value "$unit")
-                            pid=$(systemctl show -p MainPID --value "$unit")
-                            printf "%s\t%s\t%s\n" "$pid" "$status" "$unit"
-                        done
-                    "#}
-                ],
-            ),
+        match self.kind {
+            MachineKind::MacOS => Ok(self
+                .run("launchctl", &args!["list"])
+                .await?
+                .parse_launchctl_service_items()),
+            MachineKind::Linux => Ok(self
+                .run(
+                    "sh",
+                    &args![
+                        "-c",
+                        indoc! {r#"
+                            units=$(LC_ALL=C systemctl list-units --type=service --all --no-legend --no-pager --plain) || exit $?
+                            if [ -n "$units" ]; then
+                                printf '%s\n' "$units" | while read -r unit load active sub description; do
+                                    pid=$(systemctl show --property=MainPID --value "$unit") || exit $?
+                                    unit_file_state=$(systemctl show --property=UnitFileState --value "$unit") || exit $?
+                                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$load" "$active" "$sub" "$unit_file_state" "$unit" "$description"
+                                done
+                            fi
+                        "#}
+                    ],
+                )
+                .await?
+                .parse_systemd_service_items()),
             _ => bail!("System does not yet support the services feature"),
-        };
-
-        Ok(self.run(command, &args).await?.parse_service_item())
+        }
     }
 }
 

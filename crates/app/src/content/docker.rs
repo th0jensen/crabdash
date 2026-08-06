@@ -3,6 +3,7 @@ use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
 use utils::container::Container;
+use uuid::Uuid;
 
 use crate::{
     app::Crabdash,
@@ -21,13 +22,6 @@ fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> 
         .unwrap_or(&container.status);
     let is_running = pending_action.is_none() && container.is_running_status();
     let is_pending = pending_action.is_some();
-    let status_bg = if is_running {
-        rgb(0x193D2A)
-    } else if is_pending {
-        rgb(0x473B1F)
-    } else {
-        rgb(0x47232B)
-    };
     let status_fg = if is_running {
         rgb(0x30D158)
     } else if is_pending {
@@ -37,12 +31,13 @@ fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> 
     };
 
     div()
-        .px(px(10.0))
-        .py(px(5.0))
-        .rounded(px(999.0))
-        .bg(status_bg)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(5.0))
         .text_xs()
         .text_color(status_fg)
+        .child(div().size(px(6.0)).rounded_full().bg(status_fg))
         .child(label.to_string().capitalize())
 }
 
@@ -54,22 +49,19 @@ fn stats_chip(
     filter: DockerFilter,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
-    let bg = if active { rgb(0x2C2C2E) } else { rgb(0x1C1C1E) };
+    let bg = if active { rgb(0x2A2A2A) } else { rgb(0x181818) };
     let label_color = if active { rgb(0xAEAEB2) } else { rgb(0x8E8E93) };
     let value_color = if active { rgb(0xFFFFFF) } else { rgb(0xAEAEB2) };
 
     div()
         .id(id)
-        .h(px(34.0))
-        .px(px(12.0))
-        .py(px(7.0))
+        .h(px(32.0))
+        .px(px(11.0))
         .bg(bg)
-        .border_1()
-        .border_color(rgb(0x2F2F31))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .rounded(px(8.0))
+        .gap(px(7.0))
+        .rounded(px(3.0))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x2A2A2C)))
         .child(
@@ -91,10 +83,10 @@ fn action_button(
     action: DockerAction,
     disabled: bool,
 ) -> impl IntoElement {
-    let bg = rgb(0x242426);
-    let disabled_bg = rgb(0x202022);
-    let disabled_fg = rgb(0x6C6C70);
-    let hover_bg = rgb(0x2F2F31);
+    let bg = rgba(0x00000000);
+    let disabled_bg = rgba(0x00000000);
+    let disabled_fg = rgb(0x606060);
+    let hover_bg = rgb(0x303030);
 
     let id = container.id.clone();
     let name = container.name.clone();
@@ -102,15 +94,13 @@ fn action_button(
 
     let button = div()
         .id(button_id)
-        .h(px(34.0))
-        .w(px(34.0))
+        .h(px(30.0))
+        .w(px(30.0))
         .flex()
         .items_center()
         .justify_center()
         .bg(if disabled { disabled_bg } else { bg })
-        .border_1()
-        .border_color(if disabled { disabled_bg } else { rgb(0x2F2F31) })
-        .rounded(px(8.0))
+        .rounded(px(3.0))
         .text_color(if disabled { disabled_fg } else { rgb(0xFFFFFF) })
         .child(lucide_icon(action.icon(), 14.0));
 
@@ -190,48 +180,43 @@ fn action_button(
 
 fn logs_button(
     cx: &mut Context<Crabdash>,
+    machine_uuid: Uuid,
     container: &Container,
     modal_open: bool,
 ) -> impl IntoElement {
     let id = container.id.clone();
+    let log_key = (machine_uuid, id.clone());
     let button_id = SharedString::from(format!("logs-container-{id}"));
     let bg = if modal_open {
-        rgb(0x1F3656)
+        rgb(0x303030)
     } else {
-        rgb(0x242426)
-    };
-    let border_color = if modal_open {
-        rgb(0x0A84FF)
-    } else {
-        rgb(0x2F2F31)
+        rgba(0x00000000)
     };
 
     div()
         .id(button_id)
-        .h(px(34.0))
-        .w(px(34.0))
+        .h(px(30.0))
+        .w(px(30.0))
         .flex()
         .items_center()
         .justify_center()
         .bg(bg)
-        .border_1()
-        .border_color(border_color)
-        .rounded(px(8.0))
+        .rounded(px(3.0))
         .text_color(rgb(0xFFFFFF))
         .cursor_pointer()
         .hover(move |style| style.bg(rgb(0x2F2F31)))
         .child(lucide_icon(Icon::ChartNoAxesGantt, 14.0))
         .on_click(cx.listener(move |this, _, _, cx| {
-            if this.logs_open_containers.contains(&id) {
-                this.logs_open_containers.remove(&id);
+            if this.logs_open_containers.contains(&log_key) {
+                this.logs_open_containers.remove(&log_key);
                 cx.notify();
                 return;
             } else {
-                this.logs_open_containers.insert(id.clone());
+                this.logs_open_containers.insert(log_key.clone());
             }
 
-            if !this.expanded_docker_logs.contains_key(&id) {
-                let state = match super::terminal_logs::TerminalLogState::new(500) {
+            {
+                let state = match super::terminal::TerminalState::new_log(500) {
                     Ok(s) => s,
                     Err(err) => {
                         this.set_status_error(format!("Failed to init terminal: {err}"));
@@ -239,10 +224,11 @@ fn logs_button(
                         return;
                     }
                 };
-                this.expanded_docker_logs.insert(id.clone(), state);
+                this.expanded_docker_logs.insert(log_key.clone(), state);
 
                 let mut machine = this.selected_machine().clone();
                 let fetch_id = id.clone();
+                let fetch_key = log_key.clone();
                 cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
@@ -251,7 +237,7 @@ fn logs_button(
                             .background_spawn(async move { machine.container_logs(&bg_id).await })
                             .await;
                         this.update(&mut cx, move |this, cx| {
-                            if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_id) {
+                            if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_key) {
                                 match result {
                                     Ok(logs) => state.feed(logs),
                                     Err(err) => state.feed_string(format!("Error: {err}")),
@@ -280,11 +266,10 @@ fn container_row_card(
 
     div()
         .w_full()
-        .bg(rgb(0x2C2C2E))
-        .border_1()
-        .border_color(rgb(0x2F2F31))
-        .rounded(px(8.0))
-        .px(px(14.0))
+        .bg(rgb(0x181818))
+        .border_b_1()
+        .border_color(rgb(0x2B2B2B))
+        .px(px(12.0))
         .py(px(12.0))
         .flex()
         .justify_between()
@@ -292,28 +277,40 @@ fn container_row_card(
         .gap(px(12.0))
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .flex()
-                .flex_col()
-                .gap(px(4.0))
+                .items_center()
+                .gap(px(12.0))
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(white())
+                        .flex_1()
+                        .text_size(px(14.0))
+                        .text_color(rgb(0xD4D4D4))
                         .child(container.name.clone()),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(rgb(0x8E8E93))
-                        .child(format!("ID: {}", container.id)),
+                        .w(px(180.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(12.0))
+                        .text_color(rgb(0x737373))
+                        .child(container.id.clone()),
                 ),
         )
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(10.0))
-                .child(logs_button(cx, container, modal_open))
+                .gap(px(5.0))
+                .child(logs_button(
+                    cx,
+                    app.selected_machine().uuid,
+                    container,
+                    modal_open,
+                ))
                 .child(if !container.is_running_status() {
                     action_button(cx, container, DockerAction::Start, actions_disabled)
                 } else {
@@ -327,7 +324,7 @@ fn container_row_card(
                 ))
                 .child(
                     status_badge(&container, pending_action)
-                        .w(px(80.0))
+                        .w(px(72.0))
                         .text_center(),
                 ),
         )
@@ -335,22 +332,22 @@ fn container_row_card(
 
 fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Container) -> Div {
     let container_id = container.id.clone();
-    let modal_open = app.logs_open_containers.contains(&container_id);
+    let log_key = (app.selected_machine().uuid, container_id.clone());
+    let modal_open = app.logs_open_containers.contains(&log_key);
 
-    let state = app.expanded_docker_logs.get(&container_id);
+    let state = app.expanded_docker_logs.get(&log_key);
     let scroll_handle = state
         .map(|state| state.scroll_handle.clone())
         .unwrap_or_default();
     let wheel_handle = scroll_handle.clone();
     let log_height = state
-        .map(|state| super::terminal_logs::viewport_height(&state.rendered))
-        .unwrap_or_else(super::terminal_logs::minimum_viewport_height);
+        .map(|state| super::terminal::viewport_height(&state.rendered))
+        .unwrap_or_else(super::terminal::minimum_viewport_height);
 
     div()
         .w_full()
         .flex()
         .flex_col()
-        .gap(px(4.0))
         .child(container_row_card(app, cx, container, modal_open))
         .when(modal_open, |d| {
             let logs_content = match state {
@@ -368,7 +365,7 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
                     .into_any_element(),
                 Some(state) => div()
                     .w_full()
-                    .child(super::terminal_logs::render_view(&state.rendered))
+                    .child(super::terminal::render_view(&state.rendered))
                     .into_any_element(),
                 None => div()
                     .w_full()
@@ -379,7 +376,7 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
             };
 
             d.child(
-                div().w_full().p(px(12.0)).child(
+                div().w_full().bg(rgb(0x111111)).p(px(10.0)).child(
                     div()
                         .id(SharedString::from(format!("logs-scroll-{}", container_id)))
                         .w_full()
@@ -402,6 +399,23 @@ fn container_row(app: &Crabdash, cx: &mut Context<Crabdash>, container: &Contain
                 ),
             )
         })
+}
+
+fn table_header() -> Div {
+    div()
+        .h(px(34.0))
+        .px(px(12.0))
+        .bg(rgb(0x1B1B1B))
+        .border_b_1()
+        .border_color(rgb(0x2B2B2B))
+        .flex()
+        .items_center()
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(0x737373))
+        .child(div().flex_1().child("CONTAINER"))
+        .child(div().w(px(180.0)).child("ID"))
+        .child(div().w(px(182.0)).text_right().child("ACTIONS  ·  STATE"))
 }
 
 pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
@@ -462,7 +476,6 @@ pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) 
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
             .when(total_count == 0, |this| {
                 this.child(placeholder_card(
                     "No Containers Found",
@@ -476,10 +489,19 @@ pub fn render(app: &Crabdash, _window: &mut Window, cx: &mut Context<Crabdash>) 
                 ))
             })
             .when(!visible_services.is_empty(), |this| {
-                this.children(
-                    visible_services
-                        .iter()
-                        .map(|service| container_row(app, cx, service)),
+                this.child(
+                    div()
+                        .w_full()
+                        .overflow_hidden()
+                        .bg(rgb(0x181818))
+                        .border_1()
+                        .border_color(rgb(0x2B2B2B))
+                        .child(table_header())
+                        .children(
+                            visible_services
+                                .iter()
+                                .map(|service| container_row(app, cx, service)),
+                        ),
                 )
             }),
         cx,

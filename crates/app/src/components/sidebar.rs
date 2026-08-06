@@ -10,7 +10,7 @@ use crate::components::{
 };
 use machines::machine::Machine;
 
-pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 250.0;
+pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 240.0;
 const MIN_SIDEBAR_WIDTH: f32 = 180.0;
 const MAX_SIDEBAR_WIDTH: f32 = 420.0;
 const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 8.0;
@@ -31,44 +31,48 @@ fn machine_item(
     let connection_active = machine.connected();
     let icon = machine_icon(machine.kind);
     let name_color = if selected {
-        rgb(0xFFFFFF)
+        rgb(0xF0F0F0)
     } else {
-        rgb(0xD1D1D6)
+        rgb(0xC8C8C8)
     };
     let meta_color = if selected {
-        rgb(0x0A84FF)
+        rgb(0xA0A0A0)
     } else {
-        rgb(0x8E8E93)
+        rgb(0x858585)
     };
     let bg = if selected {
-        rgb(0x2C2C2E)
+        rgb(0x2A2D2E)
     } else {
-        rgb(0x1C1C1E)
+        rgb(0x1B1B1B)
     };
     let icon_bg = if selected {
-        rgb(0x1F3656)
+        rgb(0x383838)
     } else {
-        rgb(0x232326)
+        rgb(0x242424)
     };
-    let border = rgb(0x2F2F31);
     let dot = if connection_active {
         rgb(0x30D158)
     } else {
         rgb(0xFF453A)
     };
+    let credentials_key = machine
+        .remote
+        .as_ref()
+        .filter(|remote| remote.auth.is_some())
+        .map(|remote| format!("com.thojensen.crabdash.ssh.{}@{}", remote.user, remote.host));
 
     div()
         .id(SharedString::from(format!("machine-{}", machine.id)))
         .w_full()
-        .h(px(58.0))
+        .h(px(52.0))
         .px(px(10.0))
+        .mx(px(4.0))
         .bg(bg)
-        .border_b_1()
-        .border_color(border)
+        .rounded(px(5.0))
         .flex()
         .items_center()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x2A2A2C)))
+        .hover(|style| style.bg(rgb(0x2A2D2E)))
         .child(
             div()
                 .w_full()
@@ -80,71 +84,74 @@ fn machine_item(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.0))
+                        .gap(px(8.0))
                         .child(
                             div()
-                                .w(px(32.0))
-                                .h(px(32.0))
-                                .rounded(px(10.0))
+                                .w(px(28.0))
+                                .h(px(28.0))
+                                .rounded(px(4.0))
                                 .bg(icon_bg)
                                 .text_color(meta_color)
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(lucide_icon(icon, 16.0)),
+                                .child(lucide_icon(icon, 14.0)),
                         )
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(4.0))
+                                .gap(px(1.0))
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_size(px(14.0))
+                                        .font_weight(FontWeight::MEDIUM)
                                         .text_color(name_color)
                                         .child(machine.system_info.machine_name.clone()),
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(px(12.0))
                                         .text_color(meta_color)
                                         .child(machine.system_info.os_version.clone()),
                                 ),
                         ),
                 )
-                .child(div().w(px(8.0)).h(px(8.0)).rounded(px(999.0)).bg(dot)),
+                .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot)),
         )
-        .on_click(cx.listener(move |_, _, _, cx| {
-            cx.spawn(async move |this: WeakEntity<Crabdash>, cx| {
-                let creds_key = this
-                    .update(cx, |this, _| {
-                        this.selected_machine = index;
-                        this.selected_machine_mut()
-                            .remote
-                            .as_ref()
-                            .filter(|rc| rc.auth.is_some())
-                            .map(|rc| format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host))
-                    })
-                    .ok()
-                    .flatten();
-                if let Some(key) = creds_key {
-                    let creds = cx.update(|app| app.read_credentials(&key)).ok();
-                    if let Some(creds_future) = creds {
-                        if let Ok(Some((_, bytes))) = creds_future.await {
-                            this.update(cx, |this, _| {
-                                if let Some(rc) = this.selected_machine_mut().remote.as_mut() {
-                                    if let Some(auth) = rc.auth.as_mut() {
-                                        auth.apply_secret(String::from_utf8_lossy(&bytes).into());
-                                    }
-                                }
-                            })
-                            .ok();
-                        }
+        .on_click(cx.listener(move |_this, _, window, cx| {
+            window.activate_window();
+            let credentials_key = credentials_key.clone();
+            cx.spawn_in(window, async move |this: WeakEntity<Crabdash>, cx| {
+                let credentials = if let Some(key) = credentials_key {
+                    match cx.update(|_, app| app.read_credentials(&key)) {
+                        Ok(credentials) => credentials.await.ok().flatten(),
+                        Err(_) => None,
                     }
-                }
-                this.update(cx, |this, cx| {
+                } else {
+                    None
+                };
+
+                this.update_in(cx, |this, window, cx| {
+                    if let Some((_, bytes)) = credentials
+                        && let Some(remote) = this
+                            .machine_store
+                            .machines
+                            .get_mut(index)
+                            .and_then(|machine| machine.remote.as_mut())
+                        && let Some(auth) = remote.auth.as_mut()
+                    {
+                        auth.apply_secret(String::from_utf8_lossy(&bytes).into());
+                    }
+
+                    this.selected_machine = index;
                     this.refresh_services(cx);
-                    cx.notify();
+                    if this.quake_terminal_open {
+                        this.open_quake_terminal(window, cx);
+                    } else {
+                        window.focus(&this.focus_handle);
+                        cx.notify();
+                    }
                 })
                 .ok();
             })
@@ -153,22 +160,21 @@ fn machine_item(
 }
 
 fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
-    let bg = rgb(0x1C1C1E);
-    let border = rgb(0x2F2F31);
-    let meta_color = rgb(0x8E8E93);
+    let bg = rgb(0x1B1B1B);
+    let meta_color = rgb(0x858585);
 
     div()
         .id("open-add-machine-modal")
         .w_full()
-        .h(px(58.0))
+        .h(px(38.0))
         .px(px(10.0))
+        .mx(px(4.0))
         .bg(bg)
-        .border_t_1()
-        .border_color(border)
+        .rounded(px(5.0))
         .flex()
         .items_center()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x2A2A2C)))
+        .hover(|style| style.bg(rgb(0x2A2D2E)))
         .child(
             div()
                 .w_full()
@@ -180,23 +186,22 @@ fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.0))
+                        .gap(px(8.0))
                         .child(
                             div()
-                                .w(px(32.0))
-                                .h(px(32.0))
-                                .rounded(px(10.0))
+                                .w(px(20.0))
+                                .h(px(20.0))
                                 .text_color(meta_color)
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(lucide_icon(Icon::Plus, 16.0)),
+                                .child(lucide_icon(Icon::Plus, 12.0)),
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(px(12.0))
                                 .text_color(meta_color)
-                                .child("Add New Machine"),
+                                .child("Add machine"),
                         ),
                 ),
         )
@@ -256,9 +261,9 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .w(app.sidebar_width)
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(0x1C1C1E))
+        .bg(rgb(0x1B1B1B))
         .border_r_1()
-        .border_color(rgb(0x2F2F31))
+        .border_color(rgb(0x2B2B2B))
         .flex()
         .flex_col()
         .child(
@@ -268,8 +273,22 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .overflow_y_scroll()
                 .child(
                     div()
+                        .h(px(34.0))
+                        .px(px(12.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x777777))
+                        .child("MACHINES")
+                        .child(app.machine_store.machines.len().to_string()),
+                )
+                .child(
+                    div()
                         .flex()
                         .flex_col()
+                        .gap(px(2.0))
                         .children(machine_entries)
                         .child(add_machine_item(cx)),
                 ),

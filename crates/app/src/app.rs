@@ -9,6 +9,12 @@ use services::docker::{DockerAction, DockerFilter};
 use services::{ServiceAction, ServiceFilter, Services};
 
 use crate::components::common::LucideIcon;
+use crate::components::terminal_input::{
+    TerminalBackspace, TerminalClear, TerminalDelete, TerminalDown, TerminalEnd, TerminalEnter,
+    TerminalEof, TerminalEscape, TerminalHome, TerminalInput, TerminalInterrupt, TerminalLeft,
+    TerminalPageDown, TerminalPageUp, TerminalRight, TerminalShiftTab, TerminalSuspend,
+    TerminalTab, TerminalUp,
+};
 use crate::components::text_field::{
     FieldBackspace, FieldCopy, FieldCut, FieldDelete, FieldEnd, FieldHome, FieldLeft, FieldPaste,
     FieldRight, FieldSelectAll, FieldSelectLeft, FieldSelectRight, FieldTab, FieldTabPrev,
@@ -18,11 +24,16 @@ use crate::components::{modal, sidebar, toast};
 use crate::content;
 use crate::docker_run::DockerRunConfig;
 use crate::{
-    AboutCrabdash, CloseWindow, DismissAddMachineModal, DismissDockerLogModal, MinimizeWindow,
-    OpenAddMachine, RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar,
+    AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
+    RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
     ZoomWindow, show_about_dialog,
 };
-use machines::{machine::Machine, remote_connection::AuthMethod, store::MachineStore};
+use machines::{
+    machine::Machine,
+    remote_connection::AuthMethod,
+    store::MachineStore,
+    terminal::{TerminalEvent, TerminalSize},
+};
 use services::docker::Docker;
 use std::path::PathBuf;
 use utils::disks::Disks;
@@ -67,13 +78,15 @@ pub struct Crabdash {
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
-    pub(crate) expanded_docker_logs: HashMap<String, content::terminal_logs::TerminalLogState>,
-    pub(crate) logs_open_containers: HashSet<String>,
-    pub(crate) expanded_service_logs: HashMap<String, content::terminal_logs::TerminalLogState>,
-    pub(crate) logs_open_services: HashSet<String>,
+    pub(crate) expanded_docker_logs: HashMap<(Uuid, String), content::terminal::TerminalState>,
+    pub(crate) logs_open_containers: HashSet<(Uuid, String)>,
+    pub(crate) expanded_service_logs: HashMap<(Uuid, String), content::terminal::TerminalState>,
+    pub(crate) logs_open_services: HashSet<(Uuid, String)>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
+    pub(crate) quake_terminals: HashMap<Uuid, content::terminal::QuakeTerminal>,
+    pub(crate) quake_terminal_open: bool,
     pub(crate) docker_run_config: DockerRunConfig,
     pub(crate) docker_run_modal_open: bool,
     pub(crate) remote_host_field: Entity<TextField>,
@@ -140,6 +153,8 @@ impl Crabdash {
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
             services_scroll_handle: ScrollHandle::new(),
+            quake_terminals: HashMap::default(),
+            quake_terminal_open: false,
             docker_run_config: DockerRunConfig::new(cx),
             docker_run_modal_open: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
@@ -165,32 +180,52 @@ impl Crabdash {
             KeyBinding::new("cmd-s", ToggleSidebar, None),
             KeyBinding::new("cmd-n", OpenAddMachine, None),
             KeyBinding::new("cmd-r", RefreshServices, None),
+            KeyBinding::new("cmd-j", ToggleTerminal, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("cmd-m", MinimizeWindow, None),
             KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
             KeyBinding::new("escape", DismissAddMachineModal, None),
             KeyBinding::new("escape", DismissAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("escape", DismissDockerLogModal, None),
-            KeyBinding::new("enter", DismissDockerLogModal, None),
-            KeyBinding::new("return", DismissDockerLogModal, None),
-            KeyBinding::new("enter", SubmitAddMachineModal, None),
             KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("return", SubmitAddMachineModal, None),
             KeyBinding::new("return", SubmitAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("backspace", FieldBackspace, None),
-            KeyBinding::new("delete", FieldDelete, None),
-            KeyBinding::new("left", FieldLeft, None),
-            KeyBinding::new("right", FieldRight, None),
-            KeyBinding::new("shift-left", FieldSelectLeft, None),
-            KeyBinding::new("shift-right", FieldSelectRight, None),
-            KeyBinding::new("cmd-a", FieldSelectAll, None),
-            KeyBinding::new("cmd-v", FieldPaste, None),
-            KeyBinding::new("cmd-c", FieldCopy, None),
-            KeyBinding::new("cmd-x", FieldCut, None),
-            KeyBinding::new("home", FieldHome, None),
-            KeyBinding::new("end", FieldEnd, None),
-            KeyBinding::new("tab", FieldTab, None),
-            KeyBinding::new("shift-tab", FieldTabPrev, None),
+            KeyBinding::new("backspace", FieldBackspace, Some("CrabdashTextField")),
+            KeyBinding::new("delete", FieldDelete, Some("CrabdashTextField")),
+            KeyBinding::new("left", FieldLeft, Some("CrabdashTextField")),
+            KeyBinding::new("right", FieldRight, Some("CrabdashTextField")),
+            KeyBinding::new("shift-left", FieldSelectLeft, Some("CrabdashTextField")),
+            KeyBinding::new("shift-right", FieldSelectRight, Some("CrabdashTextField")),
+            KeyBinding::new("cmd-a", FieldSelectAll, Some("CrabdashTextField")),
+            KeyBinding::new("cmd-v", FieldPaste, Some("CrabdashTextField")),
+            KeyBinding::new("cmd-c", FieldCopy, Some("CrabdashTextField")),
+            KeyBinding::new("cmd-x", FieldCut, Some("CrabdashTextField")),
+            KeyBinding::new("home", FieldHome, Some("CrabdashTextField")),
+            KeyBinding::new("end", FieldEnd, Some("CrabdashTextField")),
+            KeyBinding::new("tab", FieldTab, Some("CrabdashTextField")),
+            KeyBinding::new("shift-tab", FieldTabPrev, Some("CrabdashTextField")),
+            KeyBinding::new(
+                "backspace",
+                TerminalBackspace,
+                Some("CrabdashTerminalInput"),
+            ),
+            KeyBinding::new("delete", TerminalDelete, Some("CrabdashTerminalInput")),
+            KeyBinding::new("enter", TerminalEnter, Some("CrabdashTerminalInput")),
+            KeyBinding::new("return", TerminalEnter, Some("CrabdashTerminalInput")),
+            KeyBinding::new("escape", TerminalEscape, Some("CrabdashTerminalInput")),
+            KeyBinding::new("tab", TerminalTab, Some("CrabdashTerminalInput")),
+            KeyBinding::new("shift-tab", TerminalShiftTab, Some("CrabdashTerminalInput")),
+            KeyBinding::new("up", TerminalUp, Some("CrabdashTerminalInput")),
+            KeyBinding::new("down", TerminalDown, Some("CrabdashTerminalInput")),
+            KeyBinding::new("left", TerminalLeft, Some("CrabdashTerminalInput")),
+            KeyBinding::new("right", TerminalRight, Some("CrabdashTerminalInput")),
+            KeyBinding::new("home", TerminalHome, Some("CrabdashTerminalInput")),
+            KeyBinding::new("end", TerminalEnd, Some("CrabdashTerminalInput")),
+            KeyBinding::new("pageup", TerminalPageUp, Some("CrabdashTerminalInput")),
+            KeyBinding::new("pagedown", TerminalPageDown, Some("CrabdashTerminalInput")),
+            KeyBinding::new("ctrl-c", TerminalInterrupt, Some("CrabdashTerminalInput")),
+            KeyBinding::new("ctrl-d", TerminalEof, Some("CrabdashTerminalInput")),
+            KeyBinding::new("ctrl-z", TerminalSuspend, Some("CrabdashTerminalInput")),
+            KeyBinding::new("ctrl-l", TerminalClear, Some("CrabdashTerminalInput")),
+            KeyBinding::new("cmd-v", FieldPaste, Some("CrabdashTerminalInput")),
         ]);
     }
 
@@ -449,6 +484,12 @@ impl Crabdash {
             match load_store().await {
                 Ok(store) => {
                     this.update(&mut cx, |this, cx| {
+                        if let Some(quake) = this.quake_terminals.remove(&uuid)
+                            && let Some(controller) = quake.controller
+                            && let Err(error) = controller.shutdown()
+                        {
+                            tracing::debug!(%error, "Failed to shut down deleted machine terminal");
+                        }
                         this.machine_store = store;
                         this.selected_machine = this
                             .selected_machine
@@ -510,6 +551,238 @@ impl Crabdash {
 
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    pub(crate) fn active_quake_terminal(&self) -> Option<&content::terminal::QuakeTerminal> {
+        self.quake_terminals.get(&self.selected_machine().uuid)
+    }
+
+    fn active_quake_terminal_mut(&mut self) -> Option<&mut content::terminal::QuakeTerminal> {
+        let machine_uuid = self.selected_machine().uuid;
+        self.quake_terminals.get_mut(&machine_uuid)
+    }
+
+    pub(crate) fn toggle_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quake_terminal_open {
+            self.close_quake_terminal(window, cx);
+        } else {
+            self.open_quake_terminal(window, cx);
+        }
+    }
+
+    fn quake_terminal_size(window: &Window) -> TerminalSize {
+        let available_width = (window.viewport_size().width - px(20.0)).max(px(80.0));
+        let columns = (available_width / px(content::terminal::INTERACTIVE_CELL_WIDTH_PX))
+            .floor()
+            .clamp(20.0, u16::MAX as f32) as u16;
+        let rows = content::terminal::INTERACTIVE_ROWS;
+        TerminalSize {
+            columns,
+            rows,
+            pixel_width: columns
+                .saturating_mul(content::terminal::INTERACTIVE_CELL_WIDTH_PX as u16),
+            pixel_height: rows.saturating_mul(content::terminal::INTERACTIVE_CELL_HEIGHT_PX as u16),
+        }
+    }
+
+    fn resize_quake_terminal(&mut self, window: &Window) {
+        if !self.quake_terminal_open {
+            return;
+        }
+
+        let size = Self::quake_terminal_size(window);
+        let Some(quake) = self
+            .active_quake_terminal_mut()
+            .filter(|quake| quake.size != size)
+        else {
+            return;
+        };
+
+        if let Err(error) = quake.terminal.resize(
+            size.columns,
+            size.rows,
+            content::terminal::INTERACTIVE_CELL_WIDTH_PX as u32,
+            content::terminal::INTERACTIVE_CELL_HEIGHT_PX as u32,
+        ) {
+            quake.status = content::terminal::QuakeTerminalStatus::Failed;
+            tracing::warn!(%error, "Failed to resize Ghostty terminal");
+            return;
+        }
+        if let Some(controller) = quake.controller.as_ref()
+            && let Err(error) = controller.resize(size)
+        {
+            quake.status = content::terminal::QuakeTerminalStatus::Failed;
+            tracing::warn!(%error, "Failed to resize terminal PTY");
+            return;
+        }
+        quake.size = size;
+    }
+
+    pub(crate) fn open_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        self.quake_terminal_open = true;
+        let machine = self.selected_machine().clone();
+        let machine_uuid = machine.uuid;
+
+        if let Some(quake) = self.quake_terminals.get(&machine_uuid) {
+            window.focus(&quake.input.focus_handle(cx));
+            self.resize_quake_terminal(window);
+            cx.notify();
+            return;
+        }
+
+        let endpoint = machine
+            .remote
+            .as_ref()
+            .map(|remote| format!("{}@{}", remote.user, remote.host))
+            .unwrap_or_else(|| "Local shell".to_string());
+        let size = Self::quake_terminal_size(window);
+        let terminal =
+            match content::terminal::TerminalState::new_interactive(size.columns, size.rows) {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    self.set_status_error(format!(
+                        "Failed to initialise Ghostty terminal: {error}"
+                    ));
+                    cx.notify();
+                    return;
+                }
+            };
+        let input = cx.new(TerminalInput::new);
+        self.quake_terminals.insert(
+            machine_uuid,
+            content::terminal::QuakeTerminal {
+                machine_name: machine.system_info.machine_name.clone(),
+                endpoint,
+                terminal,
+                controller: None,
+                size,
+                status: content::terminal::QuakeTerminalStatus::Connecting,
+                input: input.clone(),
+            },
+        );
+        window.focus(&input.focus_handle(cx));
+        cx.notify();
+
+        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                let result = cx
+                    .background_spawn({
+                        let mut machine = machine;
+                        async move { machine.open_terminal(size).await }
+                    })
+                    .await;
+
+                let session = match result {
+                    Ok(session) => session,
+                    Err(error) => {
+                        this.update(&mut cx, move |this, cx| {
+                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) {
+                                quake.status = content::terminal::QuakeTerminalStatus::Failed;
+                                quake.terminal.feed_string(format!(
+                                    "\r\n[crabdash] Failed to open terminal: {error}\r\n"
+                                ));
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                };
+
+                let controller = session.controller;
+                let events = session.events;
+                let accepted = this
+                    .update(&mut cx, |this, cx| {
+                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
+                            return false;
+                        };
+                        quake.controller = Some(controller.clone());
+                        quake.input.update(cx, |input, cx| {
+                            input.set_controller(Some(controller.clone()), cx);
+                        });
+                        if quake.size != size
+                            && let Err(error) = controller.resize(quake.size)
+                        {
+                            quake.status = content::terminal::QuakeTerminalStatus::Failed;
+                            tracing::warn!(%error, "Failed to apply current terminal size");
+                            return false;
+                        }
+                        quake.status = content::terminal::QuakeTerminalStatus::Connected;
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+
+                if !accepted {
+                    if let Err(error) = controller.shutdown() {
+                        tracing::debug!(%error, "Failed to shut down unclaimed terminal");
+                    }
+                    return;
+                }
+
+                while let Ok(event) = events.recv().await {
+                    let should_continue = this
+                        .update(&mut cx, |this, cx| {
+                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
+                                return false;
+                            };
+
+                            match event {
+                                TerminalEvent::Output(output) => {
+                                    quake.terminal.feed(output);
+                                    for response in quake.terminal.take_pty_writes() {
+                                        if let Err(error) = controller.write(response) {
+                                            quake.status =
+                                                content::terminal::QuakeTerminalStatus::Failed;
+                                            tracing::warn!(%error, "Failed to send Ghostty PTY response");
+                                        }
+                                    }
+                                }
+                                TerminalEvent::Exited(status) => {
+                                    quake.controller = None;
+                                    quake.input.update(cx, |input, cx| {
+                                        input.set_controller(None, cx);
+                                    });
+                                    quake.status = content::terminal::QuakeTerminalStatus::Exited;
+                                    quake.terminal.feed_string(format!(
+                                        "\r\n[process exited{}]\r\n",
+                                        status
+                                            .map(|status| format!(" with status {status}"))
+                                            .unwrap_or_default()
+                                    ));
+                                }
+                                TerminalEvent::Error(error) => {
+                                    quake.controller = None;
+                                    quake.input.update(cx, |input, cx| {
+                                        input.set_controller(None, cx);
+                                    });
+                                    quake.status = content::terminal::QuakeTerminalStatus::Failed;
+                                    quake.terminal.feed_string(format!(
+                                        "\r\n[crabdash] {error}\r\n"
+                                    ));
+                                }
+                            }
+                            cx.notify();
+                            quake.controller.is_some()
+                        })
+                        .unwrap_or(false);
+
+                    if !should_continue {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn close_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        self.quake_terminal_open = false;
+        window.focus(&self.focus_handle);
         cx.notify();
     }
 
@@ -704,6 +977,7 @@ impl Crabdash {
 impl Render for Crabdash {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Crabdash");
+        self.resize_quake_terminal(window);
 
         div()
             .track_focus(&self.focus_handle)
@@ -719,6 +993,9 @@ impl Render for Crabdash {
             .on_action(cx.listener(|this, _: &RefreshServices, _window, cx| {
                 this.refresh_services(cx);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                this.toggle_quake_terminal(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
                 this.open_add_machine_modal(window, cx);
@@ -745,7 +1022,7 @@ impl Render for Crabdash {
             })
             .relative()
             .size_full()
-            .bg(rgb(0x18181A))
+            .bg(rgb(0x181818))
             .text_color(white())
             .child(
                 div()
@@ -786,6 +1063,9 @@ impl Render for Crabdash {
                        //         .items_center(),
                        // ),
             )
+            .when(self.quake_terminal_open, |this| {
+                this.child(content::terminal::render_quake(self, window, cx))
+            })
             .when_some(self.status_message.as_ref(), |this, message| {
                 this.child(
                     div()

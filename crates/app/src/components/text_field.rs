@@ -519,7 +519,7 @@ impl Element for TextFieldElement {
                         point(bounds.left() + cursor_x, bounds.top() + px(1.0)),
                         size(px(2.0), bounds.bottom() - bounds.top() - px(2.0)),
                     ),
-                    rgb(0x0A84FF),
+                    rgb(0xD4D4D4),
                 )),
             )
         } else {
@@ -535,7 +535,7 @@ impl Element for TextFieldElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x0A84FF44),
+                    rgba(0xFFFFFF24),
                 )),
                 None,
             )
@@ -628,14 +628,14 @@ impl Render for TextField {
                     .px(px(10.0))
                     .flex()
                     .items_center()
-                    .bg(rgb(0x232326))
+                    .bg(rgb(0x1E1E1E))
                     .border_1()
                     .border_color(if focused {
-                        rgb(0x0A84FF)
+                        rgb(0x565656)
                     } else {
-                        rgb(0x2F2F31)
+                        rgb(0x303030)
                     })
-                    .rounded(px(8.0))
+                    .rounded(px(4.0))
                     .line_height(px(18.0))
                     .text_size(px(14.0))
                     .child(TextFieldElement { input: cx.entity() }),

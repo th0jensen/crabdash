@@ -80,6 +80,6 @@ pub fn render(
                     ))
                 })
                 .when(!is_scrollable, |this| this.overflow_hidden())
-                .child(div().w_full().pb(px(50.0)).child(body)),
+                .child(div().w_full().pb(px(32.0)).child(body)),
         )
 }

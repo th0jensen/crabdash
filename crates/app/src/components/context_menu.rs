@@ -115,10 +115,13 @@ impl Render for ContextMenu {
                     .text_color(color)
                     .child(lucide_icon(entry.icon, 12.0))
                     .child(entry.label)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, _: &MouseDownEvent, window, cx| {
-                        (handler)(window, cx);
-                        cx.emit(DismissEvent);
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_, _: &MouseDownEvent, window, cx| {
+                            (handler)(window, cx);
+                            cx.emit(DismissEvent);
+                        }),
+                    )
                     .into_any_element()
             }))
     }

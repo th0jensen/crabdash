@@ -5,7 +5,7 @@ use app::components::text_field::{FieldCopy, FieldCut, FieldPaste, FieldSelectAl
 use app::{
     AboutCrabdash, CloseWindow, Crabdash, Hide, HideOthers, MinimizeWindow, NewWindow,
     OpenAddMachine, OpenRepository, Quit, RefreshServices, ReportIssue, ShowAll, ToggleSidebar,
-    ZoomWindow,
+    ToggleTerminal, ZoomWindow,
 };
 
 const MIN_WINDOW_WIDTH: f32 = 680.0;
@@ -62,6 +62,7 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Refresh", RefreshServices),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action("Toggle Terminal", ToggleTerminal),
             ],
         },
         Menu {

@@ -19,15 +19,6 @@ fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) ->
     let is_running = pending_action.is_none() && service.is_running();
     let is_pending = pending_action.is_some();
     let is_failed = label == "Failed";
-    let status_bg = if is_running {
-        rgb(0x193D2A)
-    } else if is_pending {
-        rgb(0x473B1F)
-    } else if is_failed {
-        rgb(0x47232B)
-    } else {
-        rgb(0x2C2C2E)
-    };
     let status_fg = if is_running {
         rgb(0x30D158)
     } else if is_pending {
@@ -39,13 +30,41 @@ fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) ->
     };
 
     div()
-        .px(px(10.0))
-        .py(px(5.0))
-        .rounded(px(999.0))
-        .bg(status_bg)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(5.0))
         .text_xs()
         .text_color(status_fg)
+        .child(div().size(px(6.0)).rounded_full().bg(status_fg))
         .child(label)
+}
+
+fn service_metadata(service: &ServiceItem) -> String {
+    let mut metadata = Vec::new();
+
+    if let Some(load_state) = service.load_state.as_ref() {
+        metadata.push(load_state.clone());
+    }
+
+    let state = service
+        .sub_state
+        .as_ref()
+        .map(|sub_state| format!("{} ({sub_state})", service.status))
+        .unwrap_or_else(|| service.status.clone());
+    if !state.trim().is_empty() {
+        metadata.push(state);
+    }
+
+    if let Some(unit_file_state) = service.unit_file_state.as_ref() {
+        metadata.push(unit_file_state.clone());
+    }
+
+    if !matches!(service.id.trim(), "" | "-" | "0") {
+        metadata.push(format!("PID {}", service.id));
+    }
+
+    metadata.join("  ·  ")
 }
 
 fn stats_chip(
@@ -56,22 +75,19 @@ fn stats_chip(
     filter: ServiceFilter,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
-    let bg = if active { rgb(0x2C2C2E) } else { rgb(0x1C1C1E) };
+    let bg = if active { rgb(0x2A2A2A) } else { rgb(0x181818) };
     let label_color = if active { rgb(0xAEAEB2) } else { rgb(0x8E8E93) };
     let value_color = if active { rgb(0xFFFFFF) } else { rgb(0xAEAEB2) };
 
     div()
         .id(id)
-        .h(px(34.0))
-        .px(px(12.0))
-        .py(px(7.0))
+        .h(px(32.0))
+        .px(px(11.0))
         .bg(bg)
-        .border_1()
-        .border_color(rgb(0x2F2F31))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .rounded(px(8.0))
+        .gap(px(7.0))
+        .rounded(px(3.0))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x2A2A2C)))
         .child(
@@ -87,31 +103,62 @@ fn stats_chip(
         }))
 }
 
+fn summary_metric(label: &str, value: usize, color: Rgba) -> Div {
+    div()
+        .h(px(32.0))
+        .px(px(11.0))
+        .bg(rgb(0x181818))
+        .rounded(px(3.0))
+        .flex()
+        .items_center()
+        .gap(px(7.0))
+        .text_xs()
+        .text_color(rgb(0x8E8E93))
+        .child(label.to_string())
+        .child(div().text_color(color).child(value.to_string()))
+}
+
+fn table_header() -> Div {
+    div()
+        .h(px(34.0))
+        .px(px(12.0))
+        .bg(rgb(0x1B1B1B))
+        .border_b_1()
+        .border_color(rgb(0x2B2B2B))
+        .flex()
+        .items_center()
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(0x737373))
+        .child(div().w(px(220.0)).child("UNIT"))
+        .child(div().flex_1().child("DESCRIPTION"))
+        .child(div().w(px(260.0)).child("STATE"))
+        .child(div().w(px(182.0)).text_right().child("ACTIONS  ·  STATUS"))
+}
+
 fn service_action_button(
     cx: &mut Context<Crabdash>,
     service: &ServiceItem,
     action: ServiceAction,
     disabled: bool,
 ) -> impl IntoElement {
-    let bg = rgb(0x242426);
-    let disabled_bg = rgb(0x202022);
-    let disabled_fg = rgb(0x6C6C70);
-    let hover_bg = rgb(0x2F2F31);
+    let bg = rgba(0x00000000);
+    let disabled_bg = rgba(0x00000000);
+    let disabled_fg = rgb(0x606060);
+    let hover_bg = rgb(0x303030);
 
     let name = service.name.clone();
     let button_id = SharedString::from(format!("{}-service-{name}", action.command()));
 
     let button = div()
         .id(button_id)
-        .h(px(34.0))
-        .w(px(34.0))
+        .h(px(30.0))
+        .w(px(30.0))
         .flex()
         .items_center()
         .justify_center()
         .bg(if disabled { disabled_bg } else { bg })
-        .border_1()
-        .border_color(if disabled { disabled_bg } else { rgb(0x2F2F31) })
-        .rounded(px(8.0))
+        .rounded(px(3.0))
         .text_color(if disabled { disabled_fg } else { rgb(0xFFFFFF) })
         .child(lucide_icon(action.icon(), 14.0));
 
@@ -197,44 +244,38 @@ fn service_logs_button(
     service: &ServiceItem,
 ) -> impl IntoElement {
     let service_name = service.name.clone();
-    let logs_open = app.logs_open_services.contains(&service_name);
+    let log_key = (app.selected_machine().uuid, service_name.clone());
+    let logs_open = app.logs_open_services.contains(&log_key);
     let bg = if logs_open {
-        rgb(0x1F3656)
+        rgb(0x303030)
     } else {
-        rgb(0x242426)
-    };
-    let border_color = if logs_open {
-        rgb(0x0A84FF)
-    } else {
-        rgb(0x2F2F31)
+        rgba(0x00000000)
     };
 
     div()
         .id(SharedString::from(format!("logs-service-{service_name}")))
-        .h(px(34.0))
-        .w(px(34.0))
+        .h(px(30.0))
+        .w(px(30.0))
         .flex()
         .items_center()
         .justify_center()
         .bg(bg)
-        .border_1()
-        .border_color(border_color)
-        .rounded(px(8.0))
+        .rounded(px(3.0))
         .text_color(rgb(0xFFFFFF))
         .cursor_pointer()
         .hover(move |style| style.bg(rgb(0x2F2F31)))
         .child(lucide_icon(Icon::ChartNoAxesGantt, 14.0))
         .on_click(cx.listener(move |this, _, _, cx| {
-            if this.logs_open_services.contains(&service_name) {
-                this.logs_open_services.remove(&service_name);
+            if this.logs_open_services.contains(&log_key) {
+                this.logs_open_services.remove(&log_key);
                 cx.notify();
                 return;
             }
 
-            this.logs_open_services.insert(service_name.clone());
+            this.logs_open_services.insert(log_key.clone());
 
-            if !this.expanded_service_logs.contains_key(&service_name) {
-                let state = match super::terminal_logs::TerminalLogState::new(500) {
+            {
+                let state = match super::terminal::TerminalState::new_log(500) {
                     Ok(state) => state,
                     Err(err) => {
                         this.set_status_error(format!("Failed to init terminal: {err}"));
@@ -242,11 +283,11 @@ fn service_logs_button(
                         return;
                     }
                 };
-                this.expanded_service_logs
-                    .insert(service_name.clone(), state);
+                this.expanded_service_logs.insert(log_key.clone(), state);
 
                 let mut machine = this.selected_machine().clone();
                 let fetch_service_name = service_name.clone();
+                let fetch_key = log_key.clone();
                 cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
@@ -257,9 +298,7 @@ fn service_logs_button(
                             })
                             .await;
                         this.update(&mut cx, move |this, cx| {
-                            if let Some(state) =
-                                this.expanded_service_logs.get_mut(&fetch_service_name)
-                            {
+                            if let Some(state) = this.expanded_service_logs.get_mut(&fetch_key) {
                                 match result {
                                     Ok(logs) => state.feed(logs),
                                     Err(err) => state.feed_string(format!("Error: {err}")),
@@ -281,15 +320,16 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
     let service_name = service.name.clone();
     let pending_action = app.pending_service_actions.get(&service_name).copied();
     let actions_disabled = pending_action.is_some();
-    let logs_open = app.logs_open_services.contains(&service_name);
-    let state = app.expanded_service_logs.get(&service_name);
+    let log_key = (app.selected_machine().uuid, service_name.clone());
+    let logs_open = app.logs_open_services.contains(&log_key);
+    let state = app.expanded_service_logs.get(&log_key);
     let scroll_handle = state
         .map(|state| state.scroll_handle.clone())
         .unwrap_or_default();
     let wheel_handle = scroll_handle.clone();
     let log_height = state
-        .map(|state| super::terminal_logs::viewport_height(&state.rendered))
-        .unwrap_or_else(super::terminal_logs::minimum_viewport_height);
+        .map(|state| super::terminal::viewport_height(&state.rendered))
+        .unwrap_or_else(super::terminal::minimum_viewport_height);
 
     div()
         .w_full()
@@ -298,37 +338,57 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
         .child(
             div()
                 .w_full()
-                .px(px(14.0))
-                .py(px(12.0))
+                .px(px(12.0))
+                .py(px(10.0))
                 .border_b_1()
-                .border_color(rgb(0x2F2F31))
+                .border_color(rgb(0x2B2B2B))
                 .flex()
                 .justify_between()
                 .items_center()
                 .gap(px(12.0))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
-                        .flex_col()
-                        .gap(px(4.0))
+                        .items_center()
                         .child(
                             div()
-                                .text_sm()
-                                .text_color(white())
+                                .w(px(220.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(13.0))
+                                .text_color(rgb(0xD4D4D4))
                                 .child(service.name.clone()),
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(rgb(0x8E8E93))
-                                .child(format!("{}", service.id)),
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(13.0))
+                                .text_color(rgb(0xA0A0A0))
+                                .child(service.description.clone().unwrap_or_default()),
+                        )
+                        .child(
+                            div()
+                                .w(px(260.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0x777777))
+                                .child(service_metadata(service)),
                         ),
                 )
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.0))
+                        .gap(px(5.0))
                         .child(service_logs_button(app, cx, service))
                         .child(if !service.is_running() {
                             service_action_button(
@@ -353,7 +413,7 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
                         ))
                         .child(
                             status_badge(service, pending_action)
-                                .w(px(80.0))
+                                .w(px(72.0))
                                 .text_center(),
                         ),
                 ),
@@ -374,7 +434,7 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
                     .into_any_element(),
                 Some(state) => div()
                     .w_full()
-                    .child(super::terminal_logs::render_view(&state.rendered))
+                    .child(super::terminal::render_view(&state.rendered))
                     .into_any_element(),
                 None => div()
                     .w_full()
@@ -385,29 +445,42 @@ fn system_service_row(app: &Crabdash, cx: &mut Context<Crabdash>, service: &Serv
             };
 
             this.child(
-                div().w_full().px(px(14.0)).pb(px(12.0)).child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "service-logs-scroll-{service_name}"
-                        )))
-                        .w_full()
-                        .h(log_height)
-                        .track_scroll(&scroll_handle)
-                        .overflow_scroll()
-                        .on_scroll_wheel(cx.listener(
-                            move |_, event: &ScrollWheelEvent, window, cx| {
-                                let delta = event.delta.pixel_delta(window.line_height());
-                                let current = wheel_handle.offset();
-                                let max = wheel_handle.max_offset();
-                                let next_x = (current.x + delta.x).max(-max.width).min(px(0.0));
-                                let next_y = (current.y + delta.y).max(-max.height).min(px(0.0));
-                                wheel_handle.set_offset(point(next_x, next_y));
-                                cx.notify();
-                                cx.stop_propagation();
-                            },
-                        ))
-                        .child(logs_content),
-                ),
+                div()
+                    .w_full()
+                    .px(px(10.0))
+                    .pb(px(10.0))
+                    .bg(rgb(0x111111))
+                    .child(
+                        div()
+                            .pb(px(8.0))
+                            .text_xs()
+                            .text_color(rgb(0x8E8E93))
+                            .child("Recent logs"),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "service-logs-scroll-{service_name}"
+                            )))
+                            .w_full()
+                            .h(log_height)
+                            .track_scroll(&scroll_handle)
+                            .overflow_scroll()
+                            .on_scroll_wheel(cx.listener(
+                                move |_, event: &ScrollWheelEvent, window, cx| {
+                                    let delta = event.delta.pixel_delta(window.line_height());
+                                    let current = wheel_handle.offset();
+                                    let max = wheel_handle.max_offset();
+                                    let next_x = (current.x + delta.x).max(-max.width).min(px(0.0));
+                                    let next_y =
+                                        (current.y + delta.y).max(-max.height).min(px(0.0));
+                                    wheel_handle.set_offset(point(next_x, next_y));
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                },
+                            ))
+                            .child(logs_content),
+                    ),
             )
         })
 }
@@ -429,6 +502,10 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
 
     let total_count = services.len();
     let running_count = services.iter().filter(|item| item.is_running()).count();
+    let failed_count = services
+        .iter()
+        .filter(|item| item.status_label() == "Failed")
+        .count();
     let visible_services: Vec<ServiceItem> = match app.service_filter {
         ServiceFilter::Total => services,
         ServiceFilter::Running => services
@@ -461,16 +538,18 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                     ServiceFilter::Running,
                     cx,
                 ))
+                .child(summary_metric("Failed", failed_count, rgb(0xF14C4C)))
                 .into_any_element(),
         ),
         div()
             .flex()
             .flex_col()
             .gap(px(0.0))
-            .bg(rgb(0x2C2C2E))
+            .overflow_hidden()
+            .bg(rgb(0x181818))
             .border_1()
-            .border_color(rgb(0x2F2F31))
-            .rounded(px(8.0))
+            .border_color(rgb(0x2B2B2B))
+            .child(table_header())
             .children(
                 visible_services
                     .iter()

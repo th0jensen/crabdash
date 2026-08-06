@@ -11,7 +11,7 @@ default-members = ["crates/crabdash"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.3"
+version = "0.1.4"
 license = "MIT"
 authors = ["Thomas Jensen"]
 description = "Crabdash desktop app built with Rust and GPUI"
@@ -25,13 +25,17 @@ utils = { path = "crates/utils" }
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
 gpui = { version = "*" }
 indoc = { version = "2.0.7" }
-libghostty-vt = "0.1.1"
+libghostty-vt = "0.2.1"
 lucide-icons = { version = "0.575.0" }
+portable-pty = "0.9.0"
 serde = { version = "1.0.228", features = ["derive"] }
 smol = { version = "2.0.2" }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "0.3.19", features=["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
+
+[profile.release.build-override]
+strip = "none"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

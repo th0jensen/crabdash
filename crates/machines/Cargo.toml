@@ -8,17 +8,18 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 indoc.workspace = true
+portable-pty.workspace = true
 tracing.workspace = true
 serde.workspace = true
 services.workspace = true
 smol.workspace = true
 utils.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 async-ssh2-lite = { version = "0.5.0", features = ["tokio"] }
 dirs = "6.0.0"
 serde_json = "1.0.149"
-tokio = { version = "=1.44.2", features = ["rt-multi-thread", "net", "macros"] }
+tokio = { version = "=1.44.2", features = ["rt-multi-thread", "net", "macros", "io-util", "sync"] }
 
 [lints]
 workspace = true

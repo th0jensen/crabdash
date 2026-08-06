@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow, bail};
 use async_ssh2_lite::{
-    AsyncSession, TokioTcpStream, ssh2::KnownHostFileKind, tokio::io::AsyncReadExt,
+    AsyncSession, TokioTcpStream,
+    ssh2::{ExtendedData, KnownHostFileKind},
+    tokio::io::AsyncReadExt,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -19,7 +21,7 @@ use utils::{args::Args, output::Output};
 
 static SSH_RT: OnceLock<Runtime> = OnceLock::new();
 
-fn ssh_rt() -> &'static Runtime {
+pub(crate) fn ssh_runtime() -> &'static Runtime {
     SSH_RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -91,7 +93,7 @@ impl RemoteConnection {
         let user = self.user.clone();
         let auth = self.auth.clone();
 
-        ssh_rt()
+        ssh_runtime()
             .spawn(async move {
                 let tcp = match TokioTcpStream::connect(format!("{host}:22")).await {
                     Ok(s) => {
@@ -160,30 +162,42 @@ impl RemoteConnection {
 
     pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<Output> {
         self.ensure_connected().await?;
-        ssh_rt()
+        let result = ssh_runtime()
             .spawn({
                 let session = self.session.clone();
                 let full_cmd = self.build_command(cmd, args);
                 async move {
                     let session = session.lock().await;
-                    let Some(ref session) = *session else {
+                    let Some(session) = session.as_ref() else {
                         bail!("Not connected!");
                     };
                     let mut channel = session.channel_session().await?;
+                    channel.handle_extended_data(ExtendedData::Merge).await?;
                     channel.exec(&full_cmd).await?;
-                    let mut stdout = Vec::new();
-                    channel.read_to_end(&mut stdout).await?;
+                    let mut output = Vec::new();
+                    channel.read_to_end(&mut output).await?;
                     channel.wait_close().await?;
                     let exit_status = channel.exit_status()?;
                     if exit_status != 0 {
-                        bail!("{full_cmd} failed with exit status: {exit_status}");
+                        let message = String::from_utf8_lossy(&output).trim().to_string();
+                        if message.is_empty() {
+                            bail!("{full_cmd} failed with exit status: {exit_status}");
+                        }
+                        bail!("{full_cmd} failed with exit status {exit_status}: {message}");
                     }
-                    Ok(Output::from(stdout))
+                    Ok(Output::from(output))
                 }
             })
             .await
             .map_err(|e| anyhow!("SSH task panicked: {e}"))
-            .and_then(|r| r)
+            .and_then(|result| result);
+
+        if result.is_err() {
+            self.session.lock().await.take();
+            self.set_connected(false);
+        }
+
+        result
     }
 
     fn build_command(&self, cmd: &str, args: &Args) -> String {

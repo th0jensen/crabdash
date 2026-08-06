@@ -1,0 +1,4 @@
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"
+# Build libghostty-vt from ghostty tip (submodule) instead of the pinned commit.
+GHOSTTY_SOURCE_DIR = { value = "vendor/ghostty", relative = true }

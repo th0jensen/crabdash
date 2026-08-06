@@ -25,36 +25,32 @@ fn status_badge(disk: &Disk) -> Div {
     let normalized = disk.status.to_ascii_lowercase();
     let healthy = matches!(normalized.as_str(), "mounted" | "healthy" | "swap");
 
+    let color = if healthy {
+        rgb(0x4EC9B0)
+    } else {
+        rgb(0xF14C4C)
+    };
+
     div()
-        .px(px(10.0))
-        .py(px(5.0))
-        .rounded(px(999.0))
-        .bg(if healthy {
-            rgb(0x193D2A)
-        } else {
-            rgb(0x47232B)
-        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(5.0))
         .text_xs()
-        .text_color(if healthy {
-            rgb(0x30D158)
-        } else {
-            rgb(0xFF453A)
-        })
+        .text_color(color)
+        .child(div().size(px(6.0)).rounded_full().bg(color))
         .child(normalized.capitalize())
 }
 
 fn stats_chip(label: &str, value: String) -> Div {
     div()
-        .h(px(34.0))
-        .px(px(12.0))
-        .py(px(7.0))
-        .bg(rgb(0x2C2C2E))
-        .border_1()
-        .border_color(rgb(0x2F2F31))
+        .h(px(32.0))
+        .px(px(11.0))
+        .bg(rgb(0x181818))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .rounded(px(8.0))
+        .gap(px(7.0))
+        .rounded(px(3.0))
         .child(
             div()
                 .text_xs()
@@ -232,12 +228,11 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
 
     div()
         .w_full()
-        .bg(rgb(0x2C2C2E))
-        .border_1()
-        .border_color(rgb(0x2F2F31))
-        .rounded(px(8.0))
-        .px(px(14.0))
-        .py(px(12.0))
+        .bg(rgb(0x181818))
+        .border_b_1()
+        .border_color(rgb(0x2B2B2B))
+        .px(px(12.0))
+        .py(px(10.0))
         .flex()
         .flex_col()
         .gap(px(12.0))
@@ -252,28 +247,38 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                         .flex()
                         .flex_1()
                         .items_center()
-                        .gap(px(12.0))
+                        .gap(px(8.0))
                         .child(tree_toggle_button(cx, &disk_key, has_nodes, expanded))
                         .child(
                             div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(div().text_sm().text_color(white()).child(disk.name.clone()))
-                                .when(!disk_meta(disk).is_empty(), |this| {
-                                    this.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(0x8E8E93))
-                                            .child(disk_meta(disk)),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0x636366))
-                                        .child(format!("ID: {}", disk.id)),
-                                ),
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(13.0))
+                                .text_color(rgb(0xD4D4D4))
+                                .child(disk.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .w(px(220.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(12.0))
+                                .text_color(rgb(0x8E8E93))
+                                .child(disk_meta(disk)),
+                        )
+                        .child(
+                            div()
+                                .w(px(180.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0x636366))
+                                .child(disk.id.clone()),
                         ),
                 )
                 .child(
@@ -281,25 +286,32 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                         .h_full()
                         .flex()
                         .items_center()
-                        .gap(px(10.0))
-                        // .child(if !container.is_running_status() {
-                        //     action_button(cx, container, DockerAction::Start, actions_disabled)
-                        // } else {
-                        //     action_button(cx, container, DockerAction::Stop, actions_disabled)
-                        // })
-                        // .child(action_button(
-                        //     cx,
-                        //     container,
-                        //     DockerAction::Restart,
-                        //     actions_disabled,
-                        // ))
-                        .child(status_badge(&disk).w(px(80.0)).text_center()),
+                        .child(status_badge(disk).w(px(72.0)).text_center()),
                 ),
         )
         .when(expanded && !rows.is_empty(), |this| {
-            this.child(div().h(px(1.0)).bg(rgb(0x2F2F31)))
+            this.child(div().h(px(1.0)).bg(rgb(0x2B2B2B)))
                 .child(div().flex().flex_col().children(rows))
         })
+}
+
+fn table_header() -> Div {
+    div()
+        .h(px(34.0))
+        .px(px(12.0))
+        .bg(rgb(0x1B1B1B))
+        .border_b_1()
+        .border_color(rgb(0x2B2B2B))
+        .flex()
+        .items_center()
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(0x737373))
+        .child(div().w(px(32.0)))
+        .child(div().flex_1().child("DEVICE"))
+        .child(div().w(px(220.0)).child("SIZE  ·  MOUNT"))
+        .child(div().w(px(180.0)).child("ID"))
+        .child(div().w(px(72.0)).text_center().child("STATUS"))
 }
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
@@ -322,7 +334,6 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
             .when(disks.is_empty(), |this| {
                 this.child(placeholder_card(
                     "No Disks Found",
@@ -330,7 +341,16 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                 ))
             })
             .when(!disks.is_empty(), |this| {
-                this.children(disks.iter().map(|disk| disk_row(disk, app, cx)))
+                this.child(
+                    div()
+                        .w_full()
+                        .overflow_hidden()
+                        .bg(rgb(0x181818))
+                        .border_1()
+                        .border_color(rgb(0x2B2B2B))
+                        .child(table_header())
+                        .children(disks.iter().map(|disk| disk_row(disk, app, cx))),
+                )
             }),
         cx,
     )

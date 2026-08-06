@@ -4,7 +4,7 @@ mod docker_run_modal;
 mod header;
 mod services;
 mod shared;
-pub mod terminal_logs;
+pub mod terminal;
 mod title_bar;
 
 use gpui::prelude::*;
@@ -37,24 +37,15 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
         .flex_1()
         .flex()
         .flex_col()
-        .bg(rgb(0x1C1C1E))
+        .bg(rgb(0x181818))
         .child(header::render(app, cx))
         .child(
             div()
                 .flex_1()
                 .w_full()
-                .bg(rgb(0x1C1C1E))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex_1()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .px(px(20.0))
-                        .pt(px(20.0))
-                        .child(div().flex_1().w_full().child(active_panel(app, window, cx))),
-                ),
+                .min_h_0()
+                .px(px(16.0))
+                .pt(px(16.0))
+                .child(active_panel(app, window, cx)),
         )
 }

@@ -34,24 +34,45 @@ impl Output {
             .collect()
     }
 
-    pub fn parse_service_item(&self) -> Vec<ServiceItem> {
+    pub fn parse_launchctl_service_items(&self) -> Vec<ServiceItem> {
         self.lines()
             .skip(1)
             .filter_map(|line| {
                 let mut parts = line.split('\t');
+                Some(ServiceItem {
+                    id: parts.next()?.to_string(),
+                    status: parts.next()?.to_string(),
+                    name: parts.next()?.to_string(),
+                    description: None,
+                    load_state: None,
+                    sub_state: None,
+                    unit_file_state: None,
+                    error: None,
+                })
+            })
+            .collect()
+    }
 
-                let pid = parts.next()?.to_string();
+    pub fn parse_systemd_service_items(&self) -> Vec<ServiceItem> {
+        self.lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(7, '\t');
+                let id = parts.next()?.to_string();
+                let load_state = non_empty(parts.next()?);
                 let status = parts.next()?.to_string();
+                let sub_state = non_empty(parts.next()?);
+                let unit_file_state = non_empty(parts.next()?);
                 let name = parts.next()?.to_string();
-
-                if name.contains("●") {
-                    return None;
-                }
+                let description = non_empty(parts.next()?);
 
                 Some(ServiceItem {
-                    id: pid,
-                    name: name,
+                    id,
+                    name,
                     status,
+                    description,
+                    load_state,
+                    sub_state,
+                    unit_file_state,
                     error: None,
                 })
             })
@@ -142,6 +163,11 @@ impl Output {
     }
 }
 
+fn non_empty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 impl Default for Output {
     fn default() -> Self {
         Self::new()
@@ -188,5 +214,52 @@ impl std::ops::Deref for Output {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         std::str::from_utf8(&self.0).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Output;
+
+    #[test]
+    fn parses_all_systemd_rows_and_preserves_descriptions() {
+        let output = Output::from(
+            "101\tloaded\tactive\trunning\tenabled\tsshd.service\tOpenBSD Secure Shell server\n0\tloaded\tinactive\tdead\tdisabled\tcron.service\tRegular background program processing daemon\n"
+                .to_string(),
+        );
+
+        let services = output.parse_systemd_service_items();
+
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].name, "sshd.service");
+        assert_eq!(
+            services[0].description.as_deref(),
+            Some("OpenBSD Secure Shell server")
+        );
+        assert_eq!(services[1].name, "cron.service");
+        assert_eq!(services[1].sub_state.as_deref(), Some("dead"));
+    }
+
+    #[test]
+    fn retains_failed_systemd_service() {
+        let output = Output::from(
+            "0\tloaded\tfailed\tfailed\tenabled\tbroken.service\tBroken service\n".to_string(),
+        );
+
+        let services = output.parse_systemd_service_items();
+
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].status_label(), "Failed");
+    }
+
+    #[test]
+    fn launchctl_parser_skips_header_only() {
+        let output = Output::from("PID\tStatus\tLabel\n123\t0\tcom.example.service\n".to_string());
+
+        let services = output.parse_launchctl_service_items();
+
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].name, "com.example.service");
+        assert!(services[0].description.is_none());
     }
 }

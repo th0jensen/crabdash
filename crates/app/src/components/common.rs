@@ -38,37 +38,37 @@ where
     let icon = icon.map(Into::into);
 
     let bg = if primary {
-        rgb(0x0A84FF)
+        rgb(0x3A3A3A)
     } else {
-        rgb(0x2C2C2E)
+        rgb(0x242424)
     };
     let hover = if primary {
-        rgb(0x3B9CFF)
+        rgb(0x484848)
     } else {
-        rgb(0x3A3A3C)
+        rgb(0x323232)
     };
     let border = if primary {
-        rgb(0x0A84FF)
+        rgb(0x4A4A4A)
     } else {
-        rgb(0x2F2F31)
+        rgb(0x303030)
     };
 
     div()
         .id(id)
-        .h(px(34.0))
-        .px(px(14.0))
+        .h(px(32.0))
+        .px(px(12.0))
         .flex()
         .items_center()
         .justify_center()
         .bg(bg)
         .border_1()
         .border_color(border)
-        .rounded(px(8.0))
-        .text_sm()
+        .rounded(px(4.0))
+        .text_size(px(13.0))
         .text_color(white())
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .when(has_label, |this| this.gap(px(8.0)))
-        .when_some(icon, |this, icon| this.child(lucide_icon(icon, 14.0)))
+        .when(has_label, |this| this.gap(px(6.0)))
+        .when_some(icon, |this, icon| this.child(lucide_icon(icon, 13.0)))
         .when_some(label, |this, label| this.child(div().child(label)))
 }

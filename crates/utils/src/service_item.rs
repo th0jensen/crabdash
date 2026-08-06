@@ -3,6 +3,10 @@ pub struct ServiceItem {
     pub id: String,
     pub name: String,
     pub status: String,
+    pub description: Option<String>,
+    pub load_state: Option<String>,
+    pub sub_state: Option<String>,
+    pub unit_file_state: Option<String>,
     pub error: Option<String>,
 }
 
