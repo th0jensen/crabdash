@@ -21,6 +21,76 @@ impl Crabdash {
         &mut self.machine_store.machines[self.selected_machine]
     }
 
+    pub(crate) fn select_machine(
+        &mut self,
+        uuid: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(machine) = self
+            .machine_store
+            .machines
+            .iter()
+            .find(|machine| machine.uuid == uuid)
+        else {
+            return;
+        };
+        let credentials_key = machine
+            .remote
+            .as_ref()
+            .filter(|remote| remote.auth.is_some())
+            .map(|remote| format!("com.thojensen.crabdash.ssh.{}@{}", remote.user, remote.host));
+
+        self.machine_selection_generation = self.machine_selection_generation.wrapping_add(1);
+        let generation = self.machine_selection_generation;
+        window.activate_window();
+        cx.spawn_in(window, async move |this: WeakEntity<Crabdash>, cx| {
+            let credentials = if let Some(key) = credentials_key {
+                match cx.update(|_, app| app.read_credentials(&key)) {
+                    Ok(credentials) => credentials.await.ok().flatten(),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
+            this.update_in(cx, |this, window, cx| {
+                if this.machine_selection_generation != generation {
+                    return;
+                }
+                let Some(index) = this
+                    .machine_store
+                    .machines
+                    .iter()
+                    .position(|m| m.uuid == uuid)
+                else {
+                    return;
+                };
+                if let Some((_, bytes)) = credentials
+                    && let Some(remote) = this
+                        .machine_store
+                        .machines
+                        .get_mut(index)
+                        .and_then(|machine| machine.remote.as_mut())
+                    && let Some(auth) = remote.auth.as_mut()
+                {
+                    auth.apply_secret(String::from_utf8_lossy(&bytes).into());
+                }
+
+                this.selected_machine = index;
+                this.refresh_services(cx);
+                if this.quake_terminal_open {
+                    this.open_quake_terminal(window, cx);
+                } else {
+                    window.focus(&this.focus_handle);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn sync_state_for(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
         let Some(mut machine) = self
             .machine_store

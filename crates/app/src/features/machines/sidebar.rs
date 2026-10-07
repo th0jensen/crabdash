@@ -128,11 +128,6 @@ fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -
     } else {
         rgb(style::TEXT_MUTED)
     };
-    let credentials_key = machine
-        .remote
-        .as_ref()
-        .filter(|remote| remote.auth.is_some())
-        .map(|remote| format!("com.thojensen.crabdash.ssh.{}@{}", remote.user, remote.host));
 
     div()
         .id(SharedString::from(format!("machine-{}", machine.uuid)))
@@ -199,55 +194,7 @@ fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -
                 ),
         )
         .on_click(cx.listener(move |app, _, window, cx| {
-            app.machine_selection_generation = app.machine_selection_generation.wrapping_add(1);
-            let generation = app.machine_selection_generation;
-            window.activate_window();
-            let credentials_key = credentials_key.clone();
-            cx.spawn_in(window, async move |this: WeakEntity<Crabdash>, cx| {
-                let credentials = if let Some(key) = credentials_key {
-                    match cx.update(|_, app| app.read_credentials(&key)) {
-                        Ok(credentials) => credentials.await.ok().flatten(),
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                };
-
-                this.update_in(cx, |this, window, cx| {
-                    if this.machine_selection_generation != generation {
-                        return;
-                    }
-                    let Some(index) = this
-                        .machine_store
-                        .machines
-                        .iter()
-                        .position(|m| m.uuid == machine_uuid)
-                    else {
-                        return;
-                    };
-                    if let Some((_, bytes)) = credentials
-                        && let Some(remote) = this
-                            .machine_store
-                            .machines
-                            .get_mut(index)
-                            .and_then(|machine| machine.remote.as_mut())
-                        && let Some(auth) = remote.auth.as_mut()
-                    {
-                        auth.apply_secret(String::from_utf8_lossy(&bytes).into());
-                    }
-
-                    this.selected_machine = index;
-                    this.refresh_services(cx);
-                    if this.quake_terminal_open {
-                        this.open_quake_terminal(window, cx);
-                    } else {
-                        window.focus(&this.focus_handle);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            app.select_machine(machine_uuid, window, cx);
         }))
 }
 
