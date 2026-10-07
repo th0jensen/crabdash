@@ -1,6 +1,7 @@
 //! Feature modules own domain controllers, state types, and views.
 pub(crate) mod disks;
 pub(crate) mod docker;
+pub(crate) mod logs;
 pub(crate) mod machines;
 pub(crate) mod notifications;
 pub mod preferences;

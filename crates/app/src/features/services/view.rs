@@ -267,21 +267,14 @@ fn system_service_row(
                 .child(fixed_column(STATUS_WIDTH).child(status_badge(service, pending_action))),
         )
         .when(logs_open, |this| {
-            this.child(
-                div()
-                    .w_full()
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .bg(rgb(0x181818))
-                    .child(match state {
-                        Some(state) if state.loaded => {
-                            crate::features::terminal::render_view(&state.rendered, cx)
-                        }
-                        _ => div()
-                            .text_size(rems(style::META / 16.0))
-                            .child("Loading logs..."),
-                    }),
-            )
+            this.child(crate::features::logs::render(
+                format!(
+                    "service-logs-{}-{service_name}",
+                    app.selected_machine().uuid
+                ),
+                state,
+                cx,
+            ))
         })
 }
 

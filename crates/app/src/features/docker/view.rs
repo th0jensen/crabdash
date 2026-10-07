@@ -272,21 +272,11 @@ fn container_row(
         .flex_col()
         .child(container_row_card(app, cx, container, logs_open, show_id))
         .when(logs_open, |d| {
-            d.child(
-                div()
-                    .w_full()
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .bg(rgb(0x181818))
-                    .child(match state {
-                        Some(state) if state.loaded => {
-                            crate::features::terminal::render_view(&state.rendered, cx)
-                        }
-                        _ => div()
-                            .text_size(rems(style::META / 16.0))
-                            .child("Loading logs..."),
-                    }),
-            )
+            d.child(crate::features::logs::render(
+                format!("docker-logs-{}-{container_id}", app.selected_machine().uuid),
+                state,
+                cx,
+            ))
         })
 }
 

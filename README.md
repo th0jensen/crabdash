@@ -139,6 +139,11 @@ the list to the top. Filters and sorting survive refreshes within the session.
 Disk searches include partition names and mount paths while retaining the parent
 device tree. Inactive or stopped items use neutral status labels; failures use red.
 
+Container and service logs share an inline viewer on the same surface as their
+table rows, with consistent spacing, a recent-log header, line count, and Copy
+logs control. Log text respects terminal font settings and ANSI colours, and
+long output scrolls in both directions inside a bounded panel.
+
 Use **Apply** to save, **Cancel** to discard edits, or **Restore defaults** to prepare the default settings. Start at login is saved immediately. Preferences use the JSON path above on Linux and `~/Library/Application Support/Crabdash/preferences.json` on macOS. Old startup-only preferences gain defaults automatically. Errors remain visible until dismissed.
 
 The compatibility default is `TERM=xterm-256color` with the bundled JetBrains Mono font. The terminal-type chooser also offers `xterm` and `vt100` for older hosts, and `xterm-ghostty` for hosts with Ghostty's terminfo installed. The selected TERM is sent to both local and SSH pseudo-terminals; Crabdash does not install terminfo on remote machines. See [Ghostty's terminfo guidance](https://ghostty.org/docs/help/terminfo).
