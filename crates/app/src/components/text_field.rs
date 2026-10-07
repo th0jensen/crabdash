@@ -2,11 +2,11 @@ use crate::components::style;
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
-    point, prelude::*, px, relative, rgb, rgba, size,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
+    fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -40,6 +40,7 @@ pub struct TextField {
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    horizontal_scroll: Pixels,
     is_selecting: bool,
     compact: bool,
 }
@@ -61,6 +62,7 @@ impl TextField {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            horizontal_scroll: px(0.0),
             is_selecting: false,
             compact: false,
         }
@@ -80,7 +82,7 @@ impl TextField {
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.content = text.to_string().into();
+        self.content = single_line(text).into();
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
@@ -191,6 +193,7 @@ impl TextField {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.selection_reversed = false;
         cx.notify();
     }
 
@@ -212,15 +215,7 @@ impl TextField {
             return 0;
         };
 
-        if position.y < bounds.top() {
-            return 0;
-        }
-
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-
-        line.closest_index_for_x(position.x - bounds.left())
+        line.closest_index_for_x(line_x(position.x, bounds.left(), self.horizontal_scroll))
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -239,19 +234,7 @@ impl TextField {
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
+        utf16_offset(&self.content, offset)
     }
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
@@ -291,6 +274,51 @@ impl TextField {
             .grapheme_indices(true)
             .find_map(|(index, _)| (index > offset).then_some(index))
             .unwrap_or(self.content.len())
+    }
+}
+
+fn single_line(text: &str) -> String {
+    text.replace(['\r', '\n'], " ")
+}
+
+fn utf16_offset(text: &str, offset: usize) -> usize {
+    let mut bytes = 0;
+    let mut units = 0;
+    for ch in text.chars() {
+        if units >= offset {
+            break;
+        }
+        units += ch.len_utf16();
+        bytes += ch.len_utf8();
+    }
+    bytes
+}
+
+fn composed_selection(text: &str, selected: &Range<usize>, insertion: usize) -> Range<usize> {
+    let start = utf16_offset(text, selected.start);
+    let end = utf16_offset(text, selected.end).max(start);
+    insertion + start..insertion + end
+}
+
+fn line_x(screen: Pixels, left: Pixels, scroll: Pixels) -> Pixels {
+    screen - left + scroll
+}
+fn screen_x(line: Pixels, left: Pixels, scroll: Pixels) -> Pixels {
+    left + line - scroll
+}
+
+/// Reserve the two-pixel caret inside the viewport, and discard obsolete scroll
+/// after edits or resizing. Selection follows its moving endpoint in either direction.
+fn caret_scroll(previous: Pixels, caret: Pixels, text_width: Pixels, viewport: Pixels) -> Pixels {
+    let visible = (viewport - px(2.0)).max(px(0.0));
+    let max_scroll = (text_width - visible).max(px(0.0));
+    let scroll = previous.max(px(0.0)).min(max_scroll);
+    if caret < scroll {
+        caret.max(px(0.0)).min(max_scroll)
+    } else if caret > scroll + visible {
+        (caret - visible).min(max_scroll)
+    } else {
+        scroll
     }
 }
 
@@ -346,11 +374,13 @@ impl EntityInputHandler for TextField {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        let new_text = single_line(new_text);
         self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+            (self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..])
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.selection_reversed = false;
         cx.notify();
     }
 
@@ -368,32 +398,52 @@ impl EntityInputHandler for TextField {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        let new_text = single_line(new_text);
         self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+            (self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..])
                 .into();
         self.marked_range =
             (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|selected| composed_selection(&new_text, selected, range.start))
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.selection_reversed = false;
         cx.notify();
     }
 
     fn bounds_for_range(
         &mut self,
         range_utf16: Range<usize>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        let bounds = self.last_bounds?;
         let line = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
 
         Some(Bounds::from_corners(
-            point(bounds.left() + line.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + line.x_for_index(range.end), bounds.bottom()),
+            point(
+                screen_x(
+                    line.x_for_index(range.start),
+                    bounds.left(),
+                    self.horizontal_scroll,
+                )
+                .max(bounds.left())
+                .min(bounds.right()),
+                bounds.top(),
+            ),
+            point(
+                screen_x(
+                    line.x_for_index(range.end),
+                    bounds.left(),
+                    self.horizontal_scroll,
+                )
+                .max(bounds.left())
+                .min(bounds.right()),
+                bounds.bottom(),
+            ),
         ))
     }
 
@@ -405,7 +455,11 @@ impl EntityInputHandler for TextField {
     ) -> Option<usize> {
         let line_point = self.last_bounds?.localize(&point)?;
         let line = self.last_layout.as_ref()?;
-        let utf8_index = line.index_for_x(point.x - line_point.x)?;
+        let utf8_index = if self.content.is_empty() {
+            0
+        } else {
+            line.closest_index_for_x(line_point.x + self.horizontal_scroll)
+        };
 
         Some(self.offset_to_utf16(utf8_index))
     }
@@ -419,6 +473,7 @@ struct PrepaintState {
     line: ShapedLine,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    horizontal_scroll: Pixels,
 }
 
 impl IntoElement for TextFieldElement {
@@ -467,6 +522,7 @@ impl Element for TextFieldElement {
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
+        let previous_scroll = input.horizontal_scroll;
 
         let display_text = if content.is_empty() {
             input.placeholder.clone()
@@ -519,12 +575,15 @@ impl Element for TextFieldElement {
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
         let cursor_x = line.x_for_index(cursor);
+        let horizontal_scroll =
+            caret_scroll(previous_scroll, cursor_x, line.width, bounds.size.width);
+        let origin_x = bounds.left() - horizontal_scroll;
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + cursor_x, bounds.top() + px(1.0)),
+                        point(origin_x + cursor_x, bounds.top() + px(1.0)),
                         size(px(2.0), bounds.bottom() - bounds.top() - px(2.0)),
                     ),
                     rgb(0xD4D4D4),
@@ -535,11 +594,11 @@ impl Element for TextFieldElement {
                 Some(fill(
                     Bounds::from_corners(
                         point(
-                            bounds.left() + line.x_for_index(selected_range.start),
+                            origin_x + line.x_for_index(selected_range.start),
                             bounds.top(),
                         ),
                         point(
-                            bounds.left() + line.x_for_index(selected_range.end),
+                            origin_x + line.x_for_index(selected_range.end),
                             bounds.bottom(),
                         ),
                     ),
@@ -553,6 +612,7 @@ impl Element for TextFieldElement {
             line,
             cursor,
             selection,
+            horizontal_scroll,
         }
     }
 
@@ -573,24 +633,26 @@ impl Element for TextFieldElement {
             cx,
         );
 
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
-        }
-
         let line = &prepaint.line;
-        if let Err(error) = line.paint(bounds.origin, window.line_height(), window, cx) {
-            tracing::error!(%error, "Failed to paint text field text");
-        }
-
-        if focus_handle.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(selection) = prepaint.selection.take() {
+                window.paint_quad(selection);
+            }
+            let origin = point(bounds.left() - prepaint.horizontal_scroll, bounds.top());
+            if let Err(error) = line.paint(origin, window.line_height(), window, cx) {
+                tracing::error!(%error, "Failed to paint text field text");
+            }
+            if focus_handle.is_focused(window)
+                && let Some(cursor) = prepaint.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
 
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(line.clone());
             input.last_bounds = Some(bounds);
+            input.horizontal_scroll = prepaint.horizontal_scroll;
         });
     }
 }
@@ -661,5 +723,41 @@ impl Render for TextField {
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{caret_scroll, composed_selection, line_x, screen_x, single_line};
+    use gpui::px;
+    use std::prelude::v1::test;
+
+    #[test]
+    fn caret_scroll_reveals_pasted_end_and_home_then_clamps_after_resize_or_delete() {
+        let end = caret_scroll(px(0.0), px(640.0), px(640.0), px(120.0));
+        assert_eq!(end, px(522.0));
+        assert_eq!(screen_x(px(640.0), px(10.0), end), px(128.0));
+        assert_eq!(caret_scroll(end, px(0.0), px(640.0), px(120.0)), px(0.0));
+        assert_eq!(caret_scroll(end, px(40.0), px(40.0), px(120.0)), px(0.0));
+        assert_eq!(caret_scroll(end, px(640.0), px(640.0), px(700.0)), px(0.0));
+        assert_eq!(caret_scroll(end, px(640.0), px(640.0), px(0.0)), px(640.0));
+    }
+
+    #[test]
+    fn scrolled_mouse_and_ime_coordinates_are_inverse_and_selection_endpoint_visible() {
+        let left = px(50.0);
+        let scroll = caret_scroll(px(0.0), px(300.0), px(640.0), px(120.0));
+        let mouse = px(90.0);
+        assert_eq!(screen_x(line_x(mouse, left, scroll), left, scroll), mouse);
+        assert_eq!(line_x(mouse, left, scroll), px(222.0));
+        let reversed = caret_scroll(scroll, px(100.0), px(640.0), px(120.0));
+        assert_eq!(screen_x(px(100.0), left, reversed), left);
+    }
+
+    #[test]
+    fn ime_selection_is_relative_to_inserted_unicode_not_replaced_range_end() {
+        assert_eq!(composed_selection("é😀z", &(1..3), 5), 7..11);
+        assert_eq!(composed_selection("é😀z", &(99..99), 5), 12..12);
+        assert_eq!(single_line("a\r\nb\nc"), "a  b c");
     }
 }
