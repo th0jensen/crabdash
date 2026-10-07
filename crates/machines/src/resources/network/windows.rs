@@ -1,6 +1,6 @@
 //! Raw CIM byte counters, never localized formatted performance-counter paths.
 use super::super::NetworkCounter;
-use crate::{machine::Machine, powershell};
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 const SCRIPT: &str = r#"
@@ -10,8 +10,8 @@ $rows = @(Get-CimInstance -ClassName Win32_PerfRawData_Tcpip_NetworkInterface -E
 })
 ConvertTo-Json -InputObject $rows -Depth 3 -Compress
 "#;
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<NetworkCounter>> {
-    parse(&powershell::run(machine, SCRIPT).await?)
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<NetworkCounter>> {
+    parse(&machine.powershell(SCRIPT).await?)
 }
 #[derive(Deserialize)]
 struct Row {

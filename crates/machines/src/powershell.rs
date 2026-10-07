@@ -147,6 +147,41 @@ pub(crate) async fn run(machine: &mut Machine, script: &str) -> Result<Output> {
     }
 }
 
+/// Resource-only variant: encoded transport uses the same sample deadline as
+/// every preceding platform subquery, including Windows OpenSSH shell limits.
+pub(crate) async fn run_until(
+    machine: &mut Machine,
+    script: &str,
+    deadline: std::time::Instant,
+) -> Result<Output> {
+    let encoded = encoded(script);
+    if let Some(remote) = machine.remote.as_mut() {
+        let command =
+            format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
+        ensure!(
+            command.len() <= 8191,
+            "Windows SSH command is too long for the default command shell; shorten the command or its parameters"
+        );
+        remote
+            .run_ssh_command_until(&command, &Args::new(), deadline)
+            .await
+    } else {
+        machine
+            .run_until(
+                "powershell.exe",
+                &args![
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    &encoded
+                ],
+                deadline,
+            )
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

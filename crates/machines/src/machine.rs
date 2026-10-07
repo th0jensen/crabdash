@@ -1,9 +1,8 @@
 use crate::remote_connection::{AuthMethod, RemoteConnection};
 pub use crate::system_info::{LinuxDistribution, MachineKind, SystemInfo};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use services::MachineServices;
-use smol::process::Command;
 use utils::{args::Args, output::Output};
 use uuid::Uuid;
 
@@ -82,36 +81,21 @@ impl Machine {
                 let stdout = rc.run_ssh_command(cmd, args).await?;
                 Ok(stdout)
             }
-            None => {
-                let mut command = std::process::Command::new(cmd);
-                command.args(args);
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt as _;
-                    // Discovery/actions are background operations. Interactive
-                    // terminals use ConPTY separately and keep their console.
-                    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                }
-                let result = Command::from(command).output().await?;
-                if !result.status.success() {
-                    let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                    let message = if !stderr.is_empty() {
-                        stderr
-                    } else {
-                        format!("{cmd} exited with status {}", result.status)
-                    };
-                    tracing::error!(
-                        cmd = %cmd,
-                        args = ?args,
-                        status = %result.status,
-                        stderr = %String::from_utf8_lossy(&result.stderr).trim(),
-                        stdout = %String::from_utf8_lossy(&result.stdout).trim(),
-                        "Local command failed"
-                    );
-                    return Err(anyhow!(message));
-                }
-                Ok(Output::from(result.stdout))
-            }
+            None => crate::command::run(cmd, args).await,
+        }
+    }
+
+    /// Execute within an absolute budget, including SSH connection and queue
+    /// wait. Resource collection opts in; user actions keep using `run`.
+    pub(crate) async fn run_until(
+        &mut self,
+        cmd: &str,
+        args: &Args,
+        deadline: std::time::Instant,
+    ) -> Result<Output> {
+        match self.remote.as_mut() {
+            Some(remote) => remote.run_ssh_command_until(cmd, args, deadline).await,
+            None => crate::command::run_until(cmd, args, deadline).await,
         }
     }
     /// Returns whether the machine has an active connection.
@@ -148,6 +132,7 @@ impl Default for Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use std::path::PathBuf;
     use utils::{container::Container, disks::Disk, services::ServiceItem};
 

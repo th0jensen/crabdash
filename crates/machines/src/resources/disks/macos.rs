@@ -1,11 +1,11 @@
 //! IOBlockStorageDriver's documented cumulative bytes are exact physical I/O counters.
 use super::super::DiskCounter;
-use crate::machine::Machine;
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result};
 use plist::Value;
 use utils::{args, args::Args};
 
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<DiskCounter>> {
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<DiskCounter>> {
     let output = machine
         .run(
             "ioreg",

@@ -1,6 +1,6 @@
 //! Built-in macOS commands; also compiled on Linux/Windows for SSH targets.
+use super::collector::ResourceCollector;
 use super::{CpuSample, MemorySample, ResourceSample, SwapSample, section};
-use crate::machine::Machine;
 use anyhow::{Context as _, Result, ensure};
 use std::collections::HashMap;
 use utils::{args, args::Args};
@@ -18,7 +18,7 @@ printf '\n[time]\n'; /bin/date +%s
 printf '\n[swap]\n'; /usr/sbin/sysctl -n vm.swapusage 2>/dev/null || true
 "#;
 
-pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
+pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
     let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
     let mut sample = parse(&output)?;

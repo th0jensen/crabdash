@@ -1,11 +1,11 @@
 //! BSD ps exposes cumulative CPU time and a stable start timestamp; %cpu does not.
+use super::super::collector::ResourceCollector;
 use super::super::{ProcessCpu, ProcessSample, ProcessesSample};
-use crate::machine::Machine;
 use anyhow::{Context as _, Result, ensure};
 use utils::{args, args::Args};
 
 const LIMIT: usize = 8192;
-pub(crate) async fn sample(machine: &mut Machine) -> Result<ProcessesSample> {
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ProcessesSample> {
     let output = machine
         .run(
             "sh",

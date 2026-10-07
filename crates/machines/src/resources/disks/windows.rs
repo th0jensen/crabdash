@@ -1,6 +1,6 @@
 //! Physical disks expose cumulative byte counts despite their PerSec names.
 use super::super::DiskCounter;
-use crate::{machine::Machine, powershell};
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 const SCRIPT: &str = r#"
@@ -10,8 +10,8 @@ $rows = @(Get-CimInstance -ClassName Win32_PerfRawData_PerfDisk_PhysicalDisk -Er
 })
 ConvertTo-Json -InputObject $rows -Depth 3 -Compress
 "#;
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<DiskCounter>> {
-    parse(&powershell::run(machine, SCRIPT).await?)
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<DiskCounter>> {
+    parse(&machine.powershell(SCRIPT).await?)
 }
 #[derive(Deserialize)]
 struct Row {

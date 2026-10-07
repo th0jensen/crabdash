@@ -1,6 +1,6 @@
 //! Windows CIM data through the existing encoded PowerShell local/SSH transport.
+use super::collector::ResourceCollector;
 use super::{CpuCoreCounter, CpuCounter, CpuSample, MemorySample, ResourceSample, SwapSample};
-use crate::{machine::Machine, powershell};
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
 
@@ -26,9 +26,9 @@ try {
 } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
+pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
-    let output = powershell::run(machine, SCRIPT).await?;
+    let output = machine.powershell(SCRIPT).await?;
     let mut sample = parse(&output)?;
     sample.processes = super::processes::windows::sample(machine).await.ok();
     sample.network = super::network::windows::sample(machine).await.ok();

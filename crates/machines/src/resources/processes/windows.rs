@@ -1,6 +1,6 @@
 //! Cumulative 100ns process time; creation timestamps guard against PID reuse.
+use super::super::collector::ResourceCollector;
 use super::super::{ProcessCpu, ProcessSample, ProcessesSample};
-use crate::{machine::Machine, powershell};
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
 
@@ -17,8 +17,8 @@ $rows = @($all | Select-Object -First 8192 | ForEach-Object {
 [pscustomobject]@{ count = $all.Count; rows = $rows } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(crate) async fn sample(machine: &mut Machine) -> Result<ProcessesSample> {
-    parse(&powershell::run(machine, SCRIPT).await?)
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ProcessesSample> {
+    parse(&machine.powershell(SCRIPT).await?)
 }
 #[derive(Deserialize)]
 struct Row {

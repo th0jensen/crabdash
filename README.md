@@ -185,7 +185,12 @@ or replacement connection. Hiding System or a sleep/clock interruption breaks th
 history and rebaselines cumulative counters before live rates resume. Delayed
 samples change the status to **Waiting** after three sample intervals, including
 while a collector is still running. Failures retain the last readings with an
-explicit failed-sample status; successful samples restore **Live**. Existing workspaces gain System in the focused pane
+explicit failed-sample status; successful samples restore **Live**. Each complete
+sample shares a 30-second deadline across all queries, including SSH connection
+and session queue waits. A timeout retains the last readings and retries on the
+next scheduled or manual refresh. Cancellation targets the owned direct local
+child or failed SSH session; it does not guarantee termination of descendants.
+Existing workspaces gain System in the focused pane
 without changing their selection or split sizes.
 
 Resource collectors live beside each other in `machines/src/resources/`: Linux

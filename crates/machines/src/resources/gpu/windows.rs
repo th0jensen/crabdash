@@ -2,7 +2,7 @@
 //! Different engines can execute concurrently: overall activity is the busiest
 //! engine, not the sum of the 3D/copy/video percentages.
 use super::super::GpuSample;
-use crate::{machine::Machine, powershell};
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
 use std::{
@@ -38,8 +38,8 @@ try {
 [pscustomobject]@{ supported = $supported; inventory_available = $inventory_available; engines = $engines; memory = $memory; inventory = $inventory } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<GpuSample>> {
-    let first = parse(&powershell::run(machine, SCRIPT).await?)?;
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<GpuSample>> {
+    let first = parse(&machine.powershell(SCRIPT).await?)?;
     if !first.supported {
         ensure!(
             first.inventory_available,
@@ -47,8 +47,8 @@ pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<GpuSample>> {
         );
         return Ok(inventory(first.inventory));
     }
-    smol::Timer::after(Duration::from_secs(1)).await;
-    let second = parse(&powershell::run(machine, SCRIPT).await?)?;
+    machine.delay(Duration::from_secs(1)).await?;
+    let second = parse(&machine.powershell(SCRIPT).await?)?;
     if !second.supported {
         ensure!(
             second.inventory_available,

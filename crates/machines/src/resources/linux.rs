@@ -1,8 +1,8 @@
 //! Linux procfs snapshots work unchanged for localhost, SSH, and WSL targets.
+use super::collector::ResourceCollector;
 use super::{
     CpuCoreCounter, CpuCounter, CpuSample, MemorySample, ResourceSample, SwapSample, section,
 };
-use crate::machine::Machine;
 use anyhow::{Context as _, Result, ensure};
 use std::collections::HashMap;
 use utils::{args, args::Args};
@@ -16,7 +16,7 @@ printf '\n[load]\n'; cat /proc/loadavg 2>/dev/null || true
 printf '\n[boot]\n'; cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
 "#;
 
-pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
+pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
     let script = [
         SCRIPT,
         super::processes::linux::SCRIPT,

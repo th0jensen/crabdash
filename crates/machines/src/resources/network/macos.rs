@@ -1,11 +1,11 @@
 //! Link-layer byte counters: address aliases must not count an interface twice.
 use super::super::NetworkCounter;
-use crate::machine::Machine;
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result, ensure};
 use std::collections::HashSet;
 use utils::{args, args::Args};
 
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<NetworkCounter>> {
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<NetworkCounter>> {
     let output = machine
         .run("sh", &args!["-c", "LC_ALL=C /usr/sbin/netstat -ibn"])
         .await?;

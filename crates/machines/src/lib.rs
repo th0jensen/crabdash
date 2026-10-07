@@ -1,4 +1,5 @@
 //! Machine identity/transport and feature-specific operations.
+mod command;
 mod disks;
 mod docker;
 pub mod machine;

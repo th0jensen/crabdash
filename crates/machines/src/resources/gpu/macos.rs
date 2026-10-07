@@ -1,12 +1,12 @@
 //! IORegistry identities and optional, explicitly labelled driver statistics.
 //! These statistics are not a portable macOS API: missing values stay unknown.
 use super::super::GpuSample;
-use crate::machine::Machine;
+use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result, ensure};
 use plist::Value;
 use utils::{args, args::Args};
 
-pub(crate) async fn sample(machine: &mut Machine) -> Result<Vec<GpuSample>> {
+pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<GpuSample>> {
     let first = machine
         .run(
             "/usr/sbin/ioreg",
