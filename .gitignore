@@ -1,3 +1,7 @@
 /target
 /.DS_Store
 *.DS_Store
+
+# Standalone checks for the patched upstream dependency use the root target.
+/vendor/gpui/Cargo.lock
+/vendor/gpui/target

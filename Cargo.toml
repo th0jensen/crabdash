@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/gpui"]
 members = [
     "crates/app",
     "crates/crabdash",
@@ -23,7 +24,7 @@ services = { path = "crates/services" }
 utils = { path = "crates/utils" }
 
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
-gpui = { version = "*" }
+gpui = { version = "=0.2.2" }
 indoc = { version = "2.0.7" }
 libghostty-vt = "0.2.1"
 lucide-icons = { version = "0.575.0" }
@@ -43,4 +44,5 @@ todo = "deny"
 unwrap_used = "deny"
 
 [patch.crates-io]
+gpui = { path = "vendor/gpui" }
 libghostty-vt = { path = "vendor/libghostty-vt" }
