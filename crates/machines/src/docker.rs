@@ -186,7 +186,7 @@ impl Docker for Machine {
         let path = path.ok_or(DockerNotInstalled)?;
         if self.docker_path.as_ref() != Some(&path) {
             self.docker_path = Some(path.clone());
-            if let Err(error) = MachineStore::update_machine(self.clone()).await {
+            if let Err(error) = MachineStore::cache_docker_path(self.uuid, path.clone()).await {
                 tracing::debug!(%error, "Could not cache the Docker executable path");
             }
         }

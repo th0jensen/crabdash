@@ -13,7 +13,7 @@ impl Machine {
     ///
     /// If the newly retrieved info differs from the current state, the machine
     /// kind is re-evaluated and the updated machine is persisted via
-    /// [`MachineStore::save_machine`]. Persistence failures are silently ignored.
+    /// [`MachineStore::update_system_info`], preserving other saved fields.
     ///
     /// # Returns
     /// * `Ok(true)`: System info has changed and state was updated
@@ -29,7 +29,7 @@ impl Machine {
         self.kind = MachineKind::get_kind_from_info(&system_info);
         self.system_info = system_info;
 
-        MachineStore::update_machine(self.clone()).await?;
+        MachineStore::update_system_info(self.uuid, self.system_info.clone(), self.kind).await?;
         Ok(true)
     }
 
