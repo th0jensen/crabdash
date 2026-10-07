@@ -12,7 +12,7 @@ It provides a single interface for inspecting and controlling:
 - local system services
 - Docker containers
 - disks and mounts
-- remote Linux machines over SSH
+- remote Linux, macOS, and Windows machines over SSH
 
 The goal is to replace scattered terminal commands with a focused control panel while still allowing quick fallbacks to the terminal when needed.
 
@@ -29,24 +29,25 @@ The workspace has five crates:
 - `utils`: shared data models, arguments, raw command output, and domain parsers.
 
 Inside `app`, `features/` declares Docker, disks, system services, shared logs, machines, terminals,
-preferences, and notifications. Each feature owns its controller, view/editor, and
+preferences, workspaces, and notifications. Each feature owns its controller, view/editor, and
 feature-specific types, including table filtering and ordering in `table.rs`. `components/` contains reusable UI primitives; `content/`
 only composes the main panels and navigation. `app.rs` owns the root entity and
 connects these modules, and `desktop/runtime.rs` owns application lifecycle.
 
-Local desktop features live in `app/src/desktop/{about,menus,startup,tray,window}/`.
-Each declares adjacent `linux.rs` and `macos.rs` implementations behind a common
-interface. Platform selection stays at the module boundary. macOS uses native
-AppKit menus, window controls, and its About panel; Linux uses the GPUI menu bar,
-client window controls, systemd login service, and StatusNotifier tray. Unavailable
-startup/tray capabilities are explicit in the macOS backends.
+Local desktop features live in `app/src/desktop/{about,appearance,menus,startup,tray,window}/`.
+Each declares adjacent `linux.rs`, `macos.rs`, and `windows.rs` implementations behind a common
+interface, selected with host `cfg` at the module boundary. Linux uses the GPUI menu bar,
+client window controls, systemd login service, and StatusNotifier tray. macOS backends use
+AppKit menus, a persistent status item, native window material, and login registration.
+Windows backends use caption hit areas, the notification area, and per-user login startup.
+Unavailable startup/tray capabilities remain visible in Preferences.
 
 Selected-machine operations live in `machines/src/{docker,disks,services,terminal}`.
-Disk and system-service modules dispatch to sibling Linux/macOS backends using the
-**selected machine's platform**, so both backends are compiled on either host for
+Disk and system-service modules dispatch to sibling Linux/macOS/Windows backends using the
+**selected machine's platform**, so machine backends are compiled on every host for
 SSH management. Terminal sessions share one API with `local.rs` (portable PTY on
-both hosts) and `ssh.rs` transports. Corresponding output parsers live in
-`utils/src/{disks,services}/{linux,macos}.rs`; raw `Output` has no domain parsing.
+Unix hosts, ConPTY on Windows) and `ssh.rs` transports. Corresponding output parsers live in
+`utils/src/{disks,services}/{linux,macos,windows}.rs`; raw `Output` has no domain parsing.
 
 GPUI is pinned to 0.2.2 with a local text-measurement patch in `vendor/gpui`.
 Each truncation measurement starts from the original UTF-8 text runs, preventing
@@ -60,7 +61,7 @@ machine-platform dispatch for remote operations. Preferences and saved machine
 formats are independent of this source layout.
 
 Machine identity discovery lives in `machines/src/system_info/`, with adjacent
-Linux/macOS backends selected by the machine's platform. Linux reads `os-release`
+Linux/macOS/Windows backends selected by the machine's platform. Linux reads `os-release`
 over the existing local/SSH transport. Distro logos and display labels live in
 `app/src/features/machines/logos.rs`; their attributed SVGs are embedded from
 `app/assets/machine-logos/` and work offline in installed builds. Unknown Linux
@@ -74,7 +75,7 @@ distributions use Tux, and saved machines without distro metadata migrate on ref
 - [x] Disk and mount inspection
 - [x] System keychain integration for credential storage
 - [ ] System health and stats
-- [ ] System service management (`systemd`)
+- [x] System service management (`systemd`, `launchd`, Windows services)
 - [ ] Docker inspect and logs
 - [ ] Quick command execution and logs
 
@@ -106,7 +107,7 @@ menus and their underlined access keys in the same bar; Alt+C/F/E/V/W/H opens a
 menu directly. The menus remain visible while a menu is open, and include
 shortcuts for editing actions even when no text field is focused. Hold Alt to
 reveal tab shortcuts. The icon-only Terminal button keeps its shortcut in the
-tooltip and stays anchored beside the window controls. Ctrl+1/2/3
+tooltip and stays anchored beside the workspace switcher and window controls. Ctrl+1/2/3
 selects Docker/Disks/Services; Ctrl+Shift+M maximizes or restores the window. Use
 Ctrl+N to add a machine, Ctrl+R to refresh, Ctrl+J for the terminal, F10 for the
 menus, and F11 for full screen. Error notifications stay visible until dismissed
@@ -123,8 +124,18 @@ at a stable path before enabling the preference; it does not affect remote machi
 by the login service. This preference is saved in
 `$XDG_CONFIG_HOME/crabdash/preferences.json` (or `~/.config/crabdash/preferences.json`).
 The Linux tray icon opens the existing window and offers **Show Crabdash** and
-**Quit**. Closing a window keeps its sessions running when a tray is available;
+**Preferences**, and **Quit**. Closing a window keeps its sessions running when a tray is available;
 use Quit to exit. Without tray support, closing the last window exits normally.
+
+The **Workspaces** button beside Terminal saves and switches named workspaces.
+Drag tabs along the single tab strip to reorder them. The insertion marker shows
+where the tab will go. **Save as** creates a named workspace; edit its name in place
+with the pencil control.
+
+Workspaces save tab order, the active tab, sidebar width and visibility, and terminal
+visibility in `workspaces.json` beside Preferences. Changes save automatically.
+Older saved layouts migrate to a single tab strip while preserving their feature
+tabs and selection. Invalid saved files are preserved until explicit recovery.
 
 Preferences has **General**, **Terminal**, and **Interface** sections:
 
@@ -159,6 +170,30 @@ GNOME requires AppIndicator support to display tray icons. On Fedora, install
 `gnome-shell-extension-appindicator` and enable
 `appindicatorsupport@rgcjonas.gmail.com` with `gnome-extensions enable`. If the
 extension was newly installed, a new desktop login may be needed to load it.
+
+## Windows builds
+
+Native Windows support is experimental until the Windows validation job and device checks
+have run. WSL uses the Linux backend; tray and graphical login startup depend on the WSL
+session's desktop and systemd capabilities.
+
+Build native `.exe` files on Windows with Rust's `x86_64-pc-windows-msvc` target,
+Visual Studio C++ build tools, the Windows SDK's `fxc.exe`, and Zig **0.16.0**. Set
+`GPUI_FXC_PATH` to the SDK shader compiler and initialize the Ghostty submodule before
+building:
+
+```powershell
+git submodule update --init --recursive
+cargo build --locked --release --target x86_64-pc-windows-msvc -p crabdash
+cargo test --locked --workspace --target x86_64-pc-windows-msvc -- --test-threads=1
+```
+
+The manually dispatched **Build and Test - Windows** workflow configures these tools,
+builds release shaders and the executable, runs workspace tests, and uploads the `.exe`.
+It has not yet been executed. Windows Preferences use `%APPDATA%/Crabdash/preferences.json`.
+Windows service logs show recent Service Control Manager events; they are distinct from
+an application's own log files. Docker over Windows SSH uses encoded PowerShell transport
+and direct native argument handling.
 
 ## Motivation
 
