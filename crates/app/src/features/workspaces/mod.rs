@@ -48,6 +48,7 @@ pub(crate) struct State {
     pub rename: Option<Uuid>,
     pub drag_target: Option<(u32, model::Drop)>,
     pub resizing_split: Option<u32>,
+    pub tab_reveal: Option<(Tab, u64)>,
     pub name: Entity<TextField>,
     pub scroll: ScrollHandle,
     pub error: Option<String>,
@@ -93,6 +94,7 @@ impl State {
             rename: None,
             drag_target: None,
             resizing_split: None,
+            tab_reveal: None,
             name: cx.new(|cx| TextField::new("", "Workspace name", 1, cx).compact()),
             scroll: ScrollHandle::new(),
             error: shared.error,
@@ -219,9 +221,17 @@ impl Crabdash {
 
     pub(crate) fn select_workspace_tab(&mut self, tab: MainTab, cx: &mut Context<Self>) {
         self.sync_workspace_store(cx);
+        // Selecting an already active tab should reveal it after manual scrolling.
+        let sequence = self
+            .workspaces
+            .tab_reveal
+            .map_or(1, |(_, sequence)| sequence.wrapping_add(1));
+        self.workspaces.tab_reveal = Some((tab.into(), sequence));
         if self.workspaces.layout_mut().show(tab.into()) {
             self.active_tab = tab;
             self.persist_workspace(cx);
+        } else {
+            cx.notify();
         }
     }
 

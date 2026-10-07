@@ -151,6 +151,10 @@ collapse automatically. Tabs stay inside the dashboard window. **Save as** creat
 a named workspace with an inline name editor. Use the pencil control to rename an
 existing workspace, then the check control or Enter to save its name.
 
+Narrow tab strips scroll horizontally. Selecting a tab, resizing its pane, or
+changing font size reveals the active tab; regular dashboard updates preserve
+manual scrolling. Revealing waits until a drag finishes so the drop target stays put.
+
 Workspaces save pane arrangement, tab order and selection, split sizes, sidebar
 width and visibility, and terminal visibility in `workspaces.json` beside
 Preferences. Changes save automatically. Existing flat layouts retain their tab

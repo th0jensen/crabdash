@@ -1,4 +1,6 @@
 //! Pane tabs reorder within their strip and drag into content to split or join.
+mod scroll;
+
 use crate::app::{Crabdash, MainTab};
 use crate::components::{
     common::{control_tooltip, lucide_icon},
@@ -253,13 +255,14 @@ pub(super) fn render(
     pane: u32,
     tabs: &[Tab],
     active: Tab,
-    window: &Window,
-    _width: Pixels,
+    window: &mut Window,
+    viewport: Pixels,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
     let hints =
         app.preferences.always_show_shortcuts || window.modifiers().alt || app.open_menu.is_some();
     let width = tab_width(app, window);
+    let scroll = scroll::handle(app, pane, tabs, active, width, viewport, window, cx);
     div()
         .id(SharedString::from(format!("pane-{pane}-tab-strip")))
         .h(rems(style::BAR / 16.0))
@@ -268,6 +271,7 @@ pub(super) fn render(
         .flex()
         .items_center()
         .overflow_x_scroll()
+        .track_scroll(&scroll)
         .on_drag_move(
             cx.listener(|app, event: &DragMoveEvent<DraggedTab>, _, cx| {
                 if event.bounds.contains(&event.event.position)
