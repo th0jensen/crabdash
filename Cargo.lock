@@ -103,6 +103,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols 0.32.13",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

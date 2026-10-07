@@ -217,7 +217,7 @@ impl Render for Crabdash {
         window.set_rem_size(px(16.0 * self.preferences.interface_font_size / 13.0));
         self.resize_quake_terminal(window, cx);
 
-        div()
+        let root = div()
             .font_family(if self.preferences.interface_font.is_empty() {
                 SharedString::from(".SystemUIFont")
             } else {
@@ -311,7 +311,7 @@ impl Render for Crabdash {
             })
             .relative()
             .size_full()
-            .bg(rgb(0x181818))
+            .bg(crate::desktop::appearance::root_background())
             .text_color(white())
             .child(
                 div()
@@ -376,9 +376,7 @@ impl Render for Crabdash {
             })
             .when(self.docker_removal.is_some(), |this| {
                 this.child(features::docker::remove_modal::render(self, cx))
-            })
-        // .when(self.docker_log_modal.is_some(), |this| {
-        //     this.child(content::render_logs_modal(self, cx))
-        // })
+            });
+        crate::desktop::appearance::frame(root, window)
     }
 }

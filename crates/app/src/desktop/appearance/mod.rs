@@ -1,3 +1,4 @@
+//! Desktop materials and outer chrome, independent of feature presentation.
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -8,14 +9,8 @@ mod windows;
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
+#[cfg(target_os = "macos")]
+pub(super) use macos::prepare;
+pub(crate) use platform::{frame, root_background, titlebar_background};
 #[cfg(target_os = "windows")]
 use windows as platform;
-#[derive(Clone)]
-pub enum TrayCommand {
-    Show(Option<String>),
-    Preferences,
-    Quit,
-}
-
-pub(crate) const SUPPORTED: bool = platform::SUPPORTED;
-pub(crate) use platform::{should_close, start};

@@ -13,7 +13,10 @@ use crate::APP_ICON_PATH;
 use crate::{APP_LICENSE, APP_NAME, APP_VERSION, app_authors_display, short_git_commit_hash};
 
 pub(crate) fn show_about_dialog(_window: &mut gpui::Window, _cx: &mut gpui::App) {
-    let mtm = MainThreadMarker::new().expect("About panel must open on the main thread");
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("The native About panel requires the main thread");
+        return;
+    };
     let app = NSApplication::sharedApplication(mtm);
 
     let app_name = NSString::from_str(APP_NAME);

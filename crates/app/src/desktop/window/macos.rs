@@ -1,6 +1,11 @@
 use gpui::{prelude::*, *};
-pub(super) fn configure(_: &mut WindowOptions) {}
-pub(super) fn prepare(_: &mut Window, _: &mut App) {}
+pub(super) fn configure(options: &mut WindowOptions) {
+    options.window_background = WindowBackgroundAppearance::Transparent;
+}
+pub(super) fn prepare(window: &mut Window, cx: &mut App) {
+    crate::desktop::appearance::prepare(window);
+    window.on_window_should_close(cx, crate::desktop::tray::should_close);
+}
 pub(super) fn register_lifecycle(_: &mut App) {}
 pub(super) fn activate_window(window: &mut Window, _: Option<&str>) {
     window.activate_window();

@@ -3,11 +3,15 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 use anyhow::Result;
 #[cfg(target_os = "linux")]
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
+#[cfg(target_os = "windows")]
+use windows as platform;
 pub(crate) const SUPPORTED: bool = platform::SUPPORTED;
 #[derive(Clone, Default)]
 pub(crate) struct LoginStartup {
@@ -26,7 +30,10 @@ impl LoginStartup {
             Ok(enabled) => Self {
                 enabled,
                 start_minimised,
-                error: preference_error,
+                error: preference_error.or_else(|| match platform::startup_warning() {
+                    Ok(warning) => warning,
+                    Err(error) => Some(error.to_string()),
+                }),
             },
             Err(error) => Self {
                 enabled: false,

@@ -64,6 +64,12 @@ impl ksni::Tray for CrabdashTray {
                 ..Default::default()
             }
             .into(),
+            ksni::menu::StandardItem::<Self> {
+                label: "Preferences…".into(),
+                activate: Box::new(|tray| tray.send(TrayCommand::Preferences)),
+                ..Default::default()
+            }
+            .into(),
             ksni::MenuItem::Separator,
             ksni::menu::StandardItem::<Self> {
                 label: "Quit".into(),
@@ -188,7 +194,12 @@ mod tests {
         tray.activate(0, 0);
         assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Show(None))));
         let menu = tray.menu();
-        let ksni::MenuItem::Standard(quit) = &menu[2] else {
+        let ksni::MenuItem::Standard(preferences) = &menu[1] else {
+            panic!("expected preferences item");
+        };
+        (preferences.activate)(&mut tray);
+        assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Preferences)));
+        let ksni::MenuItem::Standard(quit) = &menu[3] else {
             panic!("expected quit item");
         };
         (quit.activate)(&mut tray);

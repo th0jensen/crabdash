@@ -1,5 +1,6 @@
 //! Integration with the local desktop, independent of the selected SSH machine.
 pub(crate) mod about;
+pub(crate) mod appearance;
 pub(crate) mod menus;
 mod runtime;
 pub(crate) mod startup;

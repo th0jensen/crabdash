@@ -2,16 +2,20 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 #[cfg(target_os = "linux")]
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
+#[cfg(target_os = "windows")]
+use windows as platform;
 #[cfg(target_os = "linux")]
 mod activation;
 mod title_bar;
 use gpui::*;
 pub(crate) use platform::resize_handles;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) use title_bar::platform_title_bar_height;
 pub(crate) use title_bar::render;
 pub(crate) fn options(cx: &mut App, minimised: bool) -> WindowOptions {

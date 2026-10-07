@@ -114,3 +114,7 @@ mod tests {
 }
 
 pub(super) const SUPPORTED: bool = true;
+
+pub(super) fn startup_warning() -> Result<Option<String>> {
+    Ok(None)
+}

@@ -33,9 +33,14 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = { version = "0.6", features = ["std"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSImage", "NSResponder"] }
 objc2-foundation = { version = "0.3.2", features = ["NSDictionary", "NSString"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = { version = "0.6", features = ["std"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [lints]
 workspace = true

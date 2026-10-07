@@ -33,8 +33,8 @@ pub(crate) fn render(
         .h(platform_title_bar_height(window))
         .px(px(10.0))
         .border_b_1()
-        .border_color(rgb(0x2B2B2B))
-        .bg(rgb(0x181818))
+        .border_color(rgb(style::BORDER))
+        .bg(crate::desktop::appearance::titlebar_background())
         .flex()
         .items_center()
         .justify_between()
@@ -147,7 +147,9 @@ pub(crate) fn render(
                         } else {
                             rgb(0xA0A0A0)
                         })
-                        .when(app.quake_terminal_open, |this| this.bg(rgb(0x2A2A2A)))
+                        .when(app.quake_terminal_open, |this| {
+                            this.bg(rgb(0x2A2A2A))
+                        })
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(0x2A2A2A)).text_color(rgb(0xD4D4D4)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {

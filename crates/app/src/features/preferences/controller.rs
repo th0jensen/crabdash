@@ -11,15 +11,17 @@ impl Crabdash {
         let enabled = !self.login_startup.enabled;
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let result = cx
-                .background_spawn(
-                    async move { crate::desktop::startup::set_login_startup(enabled) },
-                )
+                .background_spawn(async move {
+                    let result = crate::desktop::startup::set_login_startup(enabled);
+                    (result, crate::desktop::startup::LoginStartup::load())
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.startup_busy = false;
-                match result {
-                    Ok(()) => this.login_startup.enabled = enabled,
-                    Err(error) => this.login_startup.error = Some(error.to_string()),
+                let (result, startup) = result;
+                this.login_startup = startup;
+                if let Err(error) = result {
+                    this.login_startup.error = Some(error.to_string());
                 }
                 cx.notify();
             })

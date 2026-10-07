@@ -1,4 +1,4 @@
-//! Linux application menus use the shared compact in-window surface.
+//! Windows application menus use the shared compact in-window surface.
 pub(crate) use super::in_window::{popup, render, visible};
 use crate::app::Crabdash;
 use gpui::*;
@@ -22,5 +22,5 @@ pub(super) fn intercept(cx: &mut Context<Crabdash>) -> Option<Subscription> {
 }
 
 pub(super) fn platform_key() -> &'static str {
-    "Super"
+    "Win"
 }
