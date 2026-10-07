@@ -35,3 +35,22 @@ by compiling and launching Crabdash on macOS 27.2.
 The read-only query is intended for the Element paint phase, after tooltip and
 deferred popup prepaint. Crabdash hides AppKit button overlays and paints their
 GPUI fallbacks whenever GPUI displays a prompt, tooltip, or deferred overlay.
+
+`src/platform/mac/window.rs` and `mac/view_coordinates.rs`: measure the drawable
+viewport from GPUI's renderer NSView, and convert mouse, scroll, file-drop and IME
+coordinates through that view. This supports hosting the renderer in the detail
+pane of a native split-view controller without assuming it fills the NSWindow.
+Screen-space IME rectangles use public view/window conversion methods. Outer
+window bounds, native delegates, traffic-light placement and display-link policy
+remain unchanged. Two pure geometry tests cover nonzero view bounds, both view
+orientations, outside hit-test points and caret rectangle conversion.
+
+`src/window.rs`: expose macOS-only `refresh_native_viewport` for synchronizing
+the cached viewport immediately after a native host's initial layout, before
+the first frame. Normal renderer-view resize callbacks continue to update it.
+Hosts must retain the GPUI NSView across reparenting, keep its layer and the
+existing NSWindow delegate, and lay it out before calling this helper.
+Embedded renderer resize notifications are coalesced onto the foreground
+executor: native Auto Layout may resize its NSView during an existing GPUI app
+update, where a synchronous resize callback would reborrow that app. The
+original direct child of the window content view keeps synchronous callbacks.

@@ -1,4 +1,4 @@
-use super::{BoolExt, MacDisplay, NSRange, NSStringExt, ns_string, renderer};
+use super::{BoolExt, MacDisplay, NSRange, NSStringExt, ns_string, renderer, view_coordinates};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, DisplayLink, ExternalPaths, FileDropEvent,
     ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
@@ -269,14 +269,6 @@ unsafe fn build_classes() {
     }
 }
 
-pub(crate) fn convert_mouse_position(position: NSPoint, window_height: Pixels) -> Point<Pixels> {
-    point(
-        px(position.x as f32),
-        // macOS screen coordinates are relative to bottom left
-        window_height - px(position.y as f32),
-    )
-}
-
 unsafe fn build_window_class(name: &'static str, superclass: &Class) -> *const Class {
     unsafe {
         let mut decl = ClassDecl::new(name, superclass).unwrap();
@@ -397,6 +389,7 @@ struct MacWindowState {
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
+    resize_callback_pending: bool,
     moved_callback: Option<Box<dyn FnMut()>>,
     should_close_callback: Option<Box<dyn FnMut() -> bool>>,
     close_callback: Option<Box<dyn FnOnce()>>,
@@ -538,8 +531,62 @@ impl MacWindowState {
 
     fn content_size(&self) -> Size<Pixels> {
         let NSSize { width, height, .. } =
-            unsafe { NSView::frame(self.native_window.contentView()) }.size;
+            unsafe { NSView::bounds(self.native_view.as_ptr() as id) }.size;
         size(px(width as f32), px(height as f32))
+    }
+
+    fn point_from_window(&self, position: NSPoint) -> Point<Pixels> {
+        // SAFETY: GPUI owns the live view and callers execute on the main thread.
+        unsafe {
+            let view = self.native_view.as_ptr() as id;
+            let local = view.convertPoint_fromView_(position, nil);
+            let flipped: BOOL = msg_send![view, isFlipped];
+            view_coordinates::local_point(local, NSView::bounds(view), flipped == YES)
+        }
+    }
+
+    fn point_from_screen(&self, position: NSPoint) -> Point<Pixels> {
+        // SAFETY: Public NSWindow conversion accounts for the display/window origin.
+        let position = unsafe { msg_send![self.native_window, convertPointFromScreen: position] };
+        self.point_from_window(position)
+    }
+
+    fn rect_to_screen(&self, bounds: Bounds<Pixels>) -> NSRect {
+        // SAFETY: Public view/window conversions account for embedding and toolbar offsets.
+        unsafe {
+            let view = self.native_view.as_ptr() as id;
+            let flipped: BOOL = msg_send![view, isFlipped];
+            let local = view_coordinates::local_rect(bounds, NSView::bounds(view), flipped == YES);
+            let window_rect: NSRect = msg_send![view, convertRect: local toView: nil];
+            self.native_window.convertRectToScreen_(window_rect)
+        }
+    }
+
+    fn input_from_native(&self, native_event: id) -> Option<PlatformInput> {
+        // Parse keys/modifiers/scroll deltas as before; replace only mouse locations.
+        let mut event =
+            unsafe { PlatformInput::from_native(native_event, Some(self.content_size().height)) }?;
+        let position = match &mut event {
+            PlatformInput::MouseDown(event) => Some(&mut event.position),
+            PlatformInput::MouseUp(event) => Some(&mut event.position),
+            PlatformInput::MouseMove(event) => Some(&mut event.position),
+            PlatformInput::MouseExited(event) => Some(&mut event.position),
+            PlatformInput::ScrollWheel(event) => Some(&mut event.position),
+            _ => None,
+        };
+        if let Some(position) = position {
+            // A windowless mouse event uses screen coordinates, per NSEvent's contract.
+            unsafe {
+                let native_position = native_event.locationInWindow();
+                let event_window: id = msg_send![native_event, window];
+                *position = if event_window == nil {
+                    self.point_from_screen(native_position)
+                } else {
+                    self.point_from_window(native_position)
+                };
+            }
+        }
+        Some(event)
     }
 
     fn scale_factor(&self) -> f32 {
@@ -700,6 +747,7 @@ impl MacWindow {
                 event_callback: None,
                 activate_callback: None,
                 resize_callback: None,
+                resize_callback_pending: false,
                 moved_callback: None,
                 should_close_callback: None,
                 close_callback: None,
@@ -939,6 +987,8 @@ impl Drop for MacWindow {
             this.native_window.setDelegate_(nil);
         }
         this.input_handler.take();
+        // A queued embedded resize must not update a removed GPUI window.
+        this.resize_callback.take();
         this.executor
             .spawn(async move {
                 unsafe {
@@ -1071,13 +1121,9 @@ impl PlatformWindow for MacWindow {
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
-        let position = unsafe {
-            self.0
-                .lock()
-                .native_window
-                .mouseLocationOutsideOfEventStream()
-        };
-        convert_mouse_position(position, self.content_size().height)
+        let state = self.0.lock();
+        let position = unsafe { state.native_window.mouseLocationOutsideOfEventStream() };
+        state.point_from_window(position)
     }
 
     fn modifiers(&self) -> Modifiers {
@@ -1661,8 +1707,7 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.as_ref().lock();
 
-    let window_height = lock.content_size().height;
-    let event = unsafe { PlatformInput::from_native(native_event, Some(window_height)) };
+    let event = lock.input_from_native(native_event);
 
     let Some(event) = event else {
         return NO;
@@ -1778,8 +1823,7 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
     let window_state = unsafe { get_window_state(this) };
     let weak_window_state = Arc::downgrade(&window_state);
     let mut lock = window_state.as_ref().lock();
-    let window_height = lock.content_size().height;
-    let event = unsafe { PlatformInput::from_native(native_event, Some(window_height)) };
+    let event = lock.input_from_native(native_event);
 
     if let Some(mut event) = event {
         match &mut event {
@@ -2093,13 +2137,8 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel) {
 
     lock.renderer.update_drawable_size(drawable_size);
 
-    if let Some(mut callback) = lock.resize_callback.take() {
-        let content_size = lock.content_size();
-        let scale_factor = lock.scale_factor();
-        drop(lock);
-        callback(content_size, scale_factor);
-        window_state.as_ref().lock().resize_callback = Some(callback);
-    };
+    drop(lock);
+    notify_renderer_resize(&window_state);
 }
 
 extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
@@ -2124,13 +2163,56 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
     let drawable_size = new_size.to_device_pixels(scale_factor);
     lock.renderer.update_drawable_size(drawable_size);
 
-    if let Some(mut callback) = lock.resize_callback.take() {
-        let content_size = lock.content_size();
-        let scale_factor = lock.scale_factor();
-        drop(lock);
-        callback(content_size, scale_factor);
-        window_state.lock().resize_callback = Some(callback);
+    drop(lock);
+    notify_renderer_resize(&window_state);
+}
+
+fn notify_renderer_resize(window_state: &Arc<Mutex<MacWindowState>>) {
+    let mut state = window_state.lock();
+    // An embedded host can lay out the renderer while GPUI's App is borrowed.
+    // The original direct-content child keeps its synchronous resize behavior.
+    let embedded = unsafe {
+        let parent: id = msg_send![state.native_view.as_ptr(), superview];
+        parent != state.native_window.contentView()
     };
+    if !embedded {
+        let callback = state.resize_callback.take();
+        let size = state.content_size();
+        let scale = state.scale_factor();
+        drop(state);
+        if let Some(mut callback) = callback {
+            callback(size, scale);
+            window_state.lock().resize_callback = Some(callback);
+        }
+        return;
+    }
+    if state.resize_callback_pending {
+        return;
+    }
+    state.resize_callback_pending = true;
+    let executor = state.executor.clone();
+    let weak_state = Arc::downgrade(window_state);
+    drop(state);
+    // MacDispatcher queues this on the main dispatch queue, after the native
+    // layout and enclosing GPUI update return. Read the latest size once so a
+    // burst of Auto Layout callbacks publishes only its final viewport.
+    executor
+        .spawn(async move {
+            let Some(window_state) = weak_state.upgrade() else {
+                return;
+            };
+            let mut state = window_state.lock();
+            state.resize_callback_pending = false;
+            let Some(mut callback) = state.resize_callback.take() else {
+                return;
+            };
+            let size = state.content_size();
+            let scale = state.scale_factor();
+            drop(state);
+            callback(size, scale);
+            window_state.lock().resize_callback = Some(callback);
+        })
+        .detach();
 }
 
 extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
@@ -2196,7 +2278,6 @@ extern "C" fn first_rect_for_character_range(
     range: NSRange,
     _: id,
 ) -> NSRect {
-    let frame = get_frame(this);
     with_input_handler(this, |input_handler| {
         input_handler.bounds_for_range(range.to_range()?)
     })
@@ -2204,31 +2285,10 @@ extern "C" fn first_rect_for_character_range(
     .map_or(
         NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
         |bounds| {
-            NSRect::new(
-                NSPoint::new(
-                    frame.origin.x + bounds.origin.x.0 as f64,
-                    frame.origin.y + frame.size.height
-                        - bounds.origin.y.0 as f64
-                        - bounds.size.height.0 as f64,
-                ),
-                NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
-            )
+            let state = unsafe { get_window_state(this) };
+            state.lock().rect_to_screen(bounds)
         },
     )
-}
-
-fn get_frame(this: &Object) -> NSRect {
-    unsafe {
-        let state = get_window_state(this);
-        let lock = state.lock();
-        let mut frame = NSWindow::frame(lock.native_window);
-        let content_layout_rect: CGRect = msg_send![lock.native_window, contentLayoutRect];
-        let style_mask: NSWindowStyleMask = msg_send![lock.native_window, styleMask];
-        if !style_mask.contains(NSWindowStyleMask::NSFullSizeContentViewWindowMask) {
-            frame.origin.y -= frame.size.height - content_layout_rect.size.height;
-        }
-        frame
-    }
 }
 
 extern "C" fn insert_text(this: &Object, _: Sel, text: id, replacement_range: NSRange) {
@@ -2355,11 +2415,8 @@ extern "C" fn character_index_for_point(this: &Object, _: Sel, position: NSPoint
 }
 
 fn screen_point_to_gpui_point(this: &Object, position: NSPoint) -> Point<Pixels> {
-    let frame = get_frame(this);
-    let window_x = position.x - frame.origin.x;
-    let window_y = frame.size.height - (position.y - frame.origin.y);
-
-    point(px(window_x as f32), px(window_y as f32))
+    let state = unsafe { get_window_state(this) };
+    state.lock().point_from_screen(position)
 }
 
 extern "C" fn dragging_entered(this: &Object, _: Sel, dragging_info: id) -> NSDragOperation {
@@ -2468,7 +2525,7 @@ fn send_new_event(window_state_lock: &Mutex<MacWindowState>, e: PlatformInput) -
 
 fn drag_event_position(window_state: &Mutex<MacWindowState>, dragging_info: id) -> Point<Pixels> {
     let drag_location: NSPoint = unsafe { msg_send![dragging_info, draggingLocation] };
-    convert_mouse_position(drag_location, window_state.lock().content_size().height)
+    window_state.lock().point_from_window(drag_location)
 }
 
 fn with_input_handler<F, R>(window: &Object, f: F) -> Option<R>

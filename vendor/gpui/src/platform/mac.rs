@@ -5,6 +5,7 @@ mod display;
 mod display_link;
 mod events;
 mod keyboard;
+mod view_coordinates;
 
 #[cfg(feature = "screen-capture")]
 mod screen_capture;

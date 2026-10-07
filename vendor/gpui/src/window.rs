@@ -1684,6 +1684,15 @@ impl Window {
             .retain(&(), |callback| callback(self, cx));
     }
 
+    /// Synchronize the drawable viewport after embedding the renderer's NSView.
+    /// Call after the native host lays out its detail view, including during
+    /// initial window construction before native resize callbacks can resolve
+    /// the registered window handle. Subsequent native resizes update normally.
+    #[cfg(target_os = "macos")]
+    pub fn refresh_native_viewport(&mut self, cx: &mut App) {
+        self.bounds_changed(cx);
+    }
+
     /// Returns the bounds of the current window in the global coordinate space, which could span across multiple displays.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.platform_window.bounds()
