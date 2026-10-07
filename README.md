@@ -191,7 +191,9 @@ also work through SSH from any supported host;
 native desktop integrations remain selected by host `cfg`. macOS reports estimated
 available memory and aggregate CPU; Windows has no Unix load average. GPU telemetry
 depends on the adapter and driver: missing measurements are shown as unavailable.
-Linux reads DRM/sysfs and optionally NVIDIA's installed tools. Windows keeps GPU
+Linux re-enumerates DRM devices each sample and reads telemetry once per physical
+adapter, with optional NVIDIA tools. Device removal and unavailable driver data
+appear on the next sample. Windows keeps GPU
 performance-counter identities separate, and macOS reads driver telemetry when exposed.
 
 Preferences has **General**, **System**, **Terminal**, and **Interface** sections:

@@ -1,30 +1,49 @@
-//! Discover DRM physical devices once; AMD sysfs and optional NVIDIA tools supply telemetry.
+//! Discover current DRM devices per sample; read each physical GPU's telemetry once.
 use super::GpuSample;
 use std::collections::BTreeMap;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "linux_tests.rs"]
+mod script_tests;
+
 pub(crate) const SCRIPT: &str = r#"
 printf '\n[gpus]\n'
-if [ -d /sys/class/drm ] && [ -r /sys/class/drm ] && [ -x /sys/class/drm ]; then
+drm=/sys/class/drm
+if [ -d "$drm" ] && [ -r "$drm" ] && [ -x "$drm" ]; then
     printf 'STATUS\tok\n'
 else
     printf 'STATUS\tunavailable\n'
 fi
 metric() {
-    if [ -r "$1" ]; then IFS= read -r value 2>/dev/null < "$1" || value=-; printf '%s' "$value"; else printf '-'; fi
+    value=-
+    if [ -r "$1" ]; then IFS= read -r value 2>/dev/null < "$1" || value=-; fi
+    [ -n "$value" ] || value=-
+    return 0
 }
-for card in /sys/class/drm/card[0-9]*; do
+seen=
+for card in "$drm"/card[0-9]*; do
     name=${card##*/}; number=${name#card}
     case "$number" in ''|*[!0-9]*) continue;; esac
     [ -e "$card/device" ] || continue
     device=$(readlink -f "$card/device" 2>/dev/null) || continue
-    driver=$(readlink -f "$device/driver" 2>/dev/null) || driver=-
-    printf 'DRM\t%s\t%s\t%s\t%s\t%s\t' "$device" "${device##*/}" "${driver##*/}" "$(metric "$device/vendor")" "$(metric "$device/device")"
-    printf '%s\t%s\t%s\t' "$(metric "$device/gpu_busy_percent")" "$(metric "$device/mem_info_vram_used")" "$(metric "$device/mem_info_vram_total")"
+    case "$seen" in *"
+$device
+"*) continue;; esac
+    seen="$seen
+$device
+"
+    driver=-
+    if [ -e "$device/driver" ]; then driver=$(readlink -f "$device/driver" 2>/dev/null) || driver=-; fi
+    metric "$device/vendor"; vendor=$value
+    metric "$device/device"; device_id=$value
+    metric "$device/gpu_busy_percent"; busy=$value
+    metric "$device/mem_info_vram_used"; used=$value
+    metric "$device/mem_info_vram_total"; total=$value
     temperature=-
     for sensor in "$device"/hwmon/hwmon*/temp1_input; do
         [ -r "$sensor" ] || continue
-        temperature=$(metric "$sensor"); break
+        metric "$sensor"; temperature=$value; break
     done
-    printf '%s\n' "$temperature"
+    printf 'DRM\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$device" "${device##*/}" "${driver##*/}" "$vendor" "$device_id" "$busy" "$used" "$total" "$temperature"
 done
 printf '\n[nvidia]\n'
 if command -v nvidia-smi >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
