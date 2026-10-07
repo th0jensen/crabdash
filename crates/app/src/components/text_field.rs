@@ -416,7 +416,7 @@ struct TextFieldElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    line: ShapedLine,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
 }
@@ -550,7 +550,7 @@ impl Element for TextFieldElement {
         };
 
         PrepaintState {
-            line: Some(line),
+            line,
             cursor,
             selection,
         }
@@ -577,9 +577,10 @@ impl Element for TextFieldElement {
             window.paint_quad(selection);
         }
 
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        let line = &prepaint.line;
+        if let Err(error) = line.paint(bounds.origin, window.line_height(), window, cx) {
+            tracing::error!(%error, "Failed to paint text field text");
+        }
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -588,7 +589,7 @@ impl Element for TextFieldElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
+            input.last_layout = Some(line.clone());
             input.last_bounds = Some(bounds);
         });
     }

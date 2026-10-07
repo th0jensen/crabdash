@@ -17,16 +17,18 @@ use tokio::{runtime::Runtime, sync::Mutex};
 
 use utils::{args::Args, output::Output};
 
-static SSH_RT: OnceLock<Runtime> = OnceLock::new();
+static SSH_RT: OnceLock<std::io::Result<Runtime>> = OnceLock::new();
 
-pub(crate) fn ssh_runtime() -> &'static Runtime {
-    SSH_RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("Failed to create SSH runtime")
-    })
+pub(crate) fn ssh_runtime() -> Result<&'static Runtime> {
+    SSH_RT
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+        })
+        .as_ref()
+        .map_err(|error| anyhow!("Unable to initialize SSH runtime: {error}"))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,7 +99,7 @@ impl RemoteConnection {
         let user = self.user.clone();
         let auth = self.auth.clone();
 
-        ssh_runtime()
+        ssh_runtime()?
             .spawn(async move {
                 let tcp = match TokioTcpStream::connect(format!("{host}:22")).await {
                     Ok(s) => {
@@ -166,7 +168,7 @@ impl RemoteConnection {
 
     pub async fn run_ssh_command(&mut self, cmd: &str, args: &Args) -> Result<Output> {
         self.ensure_connected().await?;
-        let result = ssh_runtime()
+        let result = ssh_runtime()?
             .spawn({
                 let session = self.session.clone();
                 let full_cmd = self.build_command(cmd, args);

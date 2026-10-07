@@ -16,7 +16,8 @@ impl RemoteConnection {
         options: TerminalOptions,
     ) -> Result<TerminalSession> {
         let session = self.connect().await?;
-        let channel = crate::remote_connection::ssh_runtime()
+        let runtime = crate::remote_connection::ssh_runtime()?;
+        let channel = runtime
             .spawn(async move {
                 let mut channel = session.channel_session().await?;
                 channel.handle_extended_data(ExtendedData::Merge).await?;
@@ -50,11 +51,7 @@ impl RemoteConnection {
 
         let (commands, command_receiver) = smol::channel::unbounded();
         let (events, event_receiver) = smol::channel::unbounded();
-        crate::remote_connection::ssh_runtime().spawn(run_remote_terminal(
-            channel,
-            command_receiver,
-            events,
-        ));
+        runtime.spawn(run_remote_terminal(channel, command_receiver, events));
 
         Ok(TerminalSession {
             controller: TerminalController { commands },
