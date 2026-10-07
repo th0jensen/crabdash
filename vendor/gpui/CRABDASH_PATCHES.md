@@ -22,3 +22,11 @@ cargo --config 'profile.release.build-override.strip="none"' test --manifest-pat
 
 The strip override matches the workspace profile and preserves Rust proc-macro
 metadata when running this crate standalone with the macOS linker.
+
+`src/platform/mac/platform.rs`: register the Services submenu (`NSMenu`) with
+`NSApplication`, rather than its containing `NSMenuItem`. The Objective-C
+bindings use an untyped `id`, so Rust cannot reject the incorrect object type.
+Crabdash's native app menu exercises this registration path. Apple's
+[servicesMenu documentation](https://developer.apple.com/documentation/appkit/nsapplication/servicesmenu)
+specifies an `NSMenu` value. This correction was reviewed against the source and
+public API contract; macOS compilation and runtime remain unverified.

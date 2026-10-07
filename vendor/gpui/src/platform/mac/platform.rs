@@ -435,7 +435,8 @@ impl MacPlatform {
                     match menu_type {
                         SystemMenuType::Services => {
                             let app: id = msg_send![APP_CLASS, sharedApplication];
-                            app.setServicesMenu_(item);
+                            // AppKit requires the NSMenu, not its containing NSMenuItem.
+                            app.setServicesMenu_(submenu);
                         }
                     }
 
