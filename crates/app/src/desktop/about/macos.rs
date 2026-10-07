@@ -7,7 +7,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSApplication, NSImage,
 };
-use objc2_foundation::{NSDictionary, NSString};
+use objc2_foundation::{NSBundle, NSDictionary, NSString};
 
 use crate::APP_ICON_PATH;
 use crate::{APP_LICENSE, APP_NAME, APP_VERSION, app_authors_display, short_git_commit_hash};
@@ -35,7 +35,7 @@ pub(crate) fn show_about_dialog(_window: &mut gpui::Window, _cx: &mut gpui::App)
     };
     let mut values: Vec<_> = vec![app_name.into(), app_version.into()];
 
-    if let Some(icon) = load_app_icon() {
+    if let Some(icon) = load_app_icon(&app) {
         keys.push(unsafe { NSAboutPanelOptionApplicationIcon });
         values.push(icon);
     }
@@ -50,8 +50,23 @@ pub(crate) fn show_about_dialog(_window: &mut gpui::Window, _cx: &mut gpui::App)
 type RetainedAboutOptions =
     objc2::rc::Retained<NSDictionary<objc2_app_kit::NSAboutPanelOptionKey, AnyObject>>;
 
-fn load_app_icon() -> Option<objc2::rc::Retained<AnyObject>> {
+fn load_app_icon(app: &NSApplication) -> Option<objc2::rc::Retained<AnyObject>> {
+    // Installed bundles provide their native icon, including macOS appearance
+    // variants. A build-machine source path is only useful for developer runs.
+    if NSBundle::mainBundle()
+        .bundlePath()
+        .to_string()
+        .to_ascii_lowercase()
+        .ends_with(".app")
+    {
+        return app
+            .applicationIconImage()
+            .filter(|icon| icon.isValid())
+            .map(Into::into);
+    }
     let path = NSString::from_str(APP_ICON_PATH);
-    let icon = NSImage::initByReferencingFile(NSImage::alloc(), &path)?;
-    Some(icon.into())
+    NSImage::initByReferencingFile(NSImage::alloc(), &path)
+        .filter(|icon| icon.isValid())
+        .or_else(|| app.applicationIconImage().filter(|icon| icon.isValid()))
+        .map(Into::into)
 }

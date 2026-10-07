@@ -4,22 +4,37 @@ use ksni::TrayMethods;
 use smol::channel::{Receiver, Sender};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU8, Ordering},
 };
 
+const CONNECTING: u8 = 0;
+const AVAILABLE: u8 = 1;
+const OFFLINE: u8 = 2;
+
 #[derive(Clone, Default)]
-struct TrayState(Arc<AtomicBool>);
+struct TrayState(Arc<AtomicU8>);
 impl Global for TrayState {}
 
 use super::TrayCommand;
 struct CrabdashTray {
     commands: Sender<TrayCommand>,
-    available: Arc<AtomicBool>,
+    available: Arc<AtomicU8>,
     icon: Vec<ksni::Icon>,
     activation_token: Option<String>,
 }
 
 impl CrabdashTray {
+    fn registered(&self) {
+        // ksni starts its watcher task before returning the handle. An offline
+        // callback may already have arrived; never overwrite it with success.
+        let _ = self.available.compare_exchange(
+            CONNECTING,
+            AVAILABLE,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
     fn show(&mut self) {
         let token = self.activation_token.take();
         self.send(TrayCommand::Show(token));
@@ -80,10 +95,10 @@ impl ksni::Tray for CrabdashTray {
         ]
     }
     fn watcher_online(&self) {
-        self.available.store(true, Ordering::Release);
+        self.available.store(AVAILABLE, Ordering::Release);
     }
     fn watcher_offline(&self, _: ksni::OfflineReason) -> bool {
-        self.available.store(false, Ordering::Release);
+        self.available.store(OFFLINE, Ordering::Release);
         // A disappearing panel must never leave the app inaccessible.
         self.send(TrayCommand::Show(None));
         true
@@ -122,17 +137,19 @@ pub(crate) fn start(cx: &mut App) -> Option<Receiver<TrayCommand>> {
         let icon = icon();
         let mut warned = false;
         loop {
+            state.0.store(CONNECTING, Ordering::Release);
             let tray = CrabdashTray { commands: commands.clone(), available: state.0.clone(), icon: icon.clone(), activation_token: None };
             match tray.spawn().await {
                 Ok(handle) => {
-                    state.0.store(true, Ordering::Release);
+                    let _ = handle.update(|tray| tray.registered()).await;
                     while !handle.is_closed() {
                         smol::Timer::after(std::time::Duration::from_secs(2)).await;
                     }
-                    state.0.store(false, Ordering::Release);
+                    state.0.store(OFFLINE, Ordering::Release);
                     let _ = commands.try_send(TrayCommand::Show(None));
                 }
                 Err(error) => {
+                    state.0.store(OFFLINE, Ordering::Release);
                     if !warned {
                         tracing::warn!(%error, "Desktop tray unavailable; window close will quit until tray support is available");
                         warned = true;
@@ -151,9 +168,9 @@ pub(crate) fn should_close(window: &mut Window, cx: &mut App) -> bool {
     if crate::features::preferences::current(cx).close_to_tray
         && cx
             .try_global::<TrayState>()
-            .is_some_and(|state| state.0.load(Ordering::Acquire))
+            .is_some_and(|state| state.0.load(Ordering::Acquire) == AVAILABLE)
     {
-        window.minimize_window();
+        crate::desktop::window::hide_to_tray(window);
         false
     } else {
         true
@@ -205,10 +222,30 @@ mod tests {
         (quit.activate)(&mut tray);
         assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Quit)));
         tray.watcher_online();
-        assert!(tray.available.load(Ordering::Acquire));
+        assert_eq!(tray.available.load(Ordering::Acquire), AVAILABLE);
         tray.watcher_offline(ksni::OfflineReason::No);
-        assert!(!tray.available.load(Ordering::Acquire));
+        assert_eq!(tray.available.load(Ordering::Acquire), OFFLINE);
         assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Show(None))));
+    }
+
+    #[test]
+    fn initial_registration_preserves_a_concurrent_host_loss() {
+        use ksni::Tray;
+        let (commands, receiver) = smol::channel::unbounded();
+        let tray = CrabdashTray {
+            commands,
+            available: Arc::default(),
+            icon: vec![],
+            activation_token: None,
+        };
+        tray.registered();
+        assert_eq!(tray.available.load(Ordering::Acquire), AVAILABLE);
+        tray.watcher_offline(ksni::OfflineReason::No);
+        tray.registered();
+        assert_eq!(tray.available.load(Ordering::Acquire), OFFLINE);
+        assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Show(None))));
+        tray.watcher_online();
+        assert_eq!(tray.available.load(Ordering::Acquire), AVAILABLE);
     }
 }
 

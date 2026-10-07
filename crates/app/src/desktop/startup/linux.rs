@@ -98,13 +98,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unit_quotes_paths_and_stops_with_the_graphical_session() {
-        let unit = service_unit(Path::new("/home/test/My Apps/Crab\"dash%$test/crabdash"))
-            .expect("valid path");
+    fn unit_quotes_paths_and_stops_with_the_graphical_session() -> Result<()> {
+        let unit = service_unit(Path::new("/home/test/My Apps/Crab\"dash%$test/crabdash"))?;
         assert!(unit.contains("ExecStart=\"/home/test/My Apps/Crab\\\"dash%%$$test/crabdash\""));
         assert!(unit.contains("PartOf=graphical-session.target"));
         assert!(unit.contains("WantedBy=graphical-session.target"));
         assert!(unit.contains("Restart=no"));
+        Ok(())
     }
 
     #[test]

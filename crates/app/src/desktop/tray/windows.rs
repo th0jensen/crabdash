@@ -1,7 +1,6 @@
 //! Native Windows notification icon with an independent Win32 message loop.
 use super::TrayCommand;
 use gpui::{App, Global, Window};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use smol::channel::{Receiver, Sender};
 use std::{
     mem, ptr,
@@ -67,6 +66,9 @@ impl NativeTray {
                 }
                 self.state.available.store(false, Ordering::Release);
                 tracing::warn!("Windows could not configure the Crabdash notification icon");
+                // Explorer may have restarted while the dashboard was hidden.
+                // Losing the restore icon must never make the app inaccessible.
+                let _ = self.commands.try_send(TrayCommand::Show(None));
                 return;
             }
         }
@@ -108,6 +110,9 @@ impl NativeTray {
             ) as usize;
             DestroyMenu(menu);
             PostMessageW(hwnd, WM_NULL, 0, 0);
+            // Return keyboard focus to the notification area even when Escape
+            // cancels this menu, as required by Shell_NotifyIcon's contract.
+            Shell_NotifyIconW(NIM_SETFOCUS, &self.data(hwnd));
             let command = match selection {
                 SHOW => Some(TrayCommand::Show(None)),
                 PREFERENCES => Some(TrayCommand::Preferences),
@@ -171,6 +176,22 @@ unsafe extern "system" fn procedure(
 }
 
 fn icon() -> HICON {
+    // Prefer the same executable resource used by GPUI and Explorer. Without
+    // LR_SHARED this handle is owned and must be destroyed on worker teardown.
+    let native = unsafe {
+        LoadImageW(
+            GetModuleHandleW(ptr::null()),
+            1usize as *const u16,
+            IMAGE_ICON,
+            32,
+            32,
+            LR_DEFAULTCOLOR,
+        )
+    };
+    if !native.is_null() {
+        return native as HICON;
+    }
+    // Test harnesses and library consumers may lack the binary icon resource.
     let bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../assets/icons/AppIcon.ico"
@@ -292,6 +313,9 @@ fn run(commands: Sender<TrayCommand>, state: TrayState) {
         }
         DestroyIcon(icon);
         UnregisterClassW(class.as_ptr(), instance);
+        if !tray.state.exiting.load(Ordering::Acquire) {
+            let _ = tray.commands.try_send(TrayCommand::Show(None));
+        }
     }
 }
 
@@ -338,14 +362,8 @@ pub(crate) fn should_close(window: &mut Window, cx: &mut App) -> bool {
             .try_global::<TrayState>()
             .is_some_and(|state| state.available.load(Ordering::Acquire))
     {
-        if let Ok(handle) = HasWindowHandle::window_handle(window) {
-            if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                unsafe {
-                    ShowWindow(handle.hwnd.get() as HWND, SW_HIDE);
-                }
-                return false;
-            }
-        }
+        crate::desktop::window::hide_to_tray(window);
+        return false;
     }
     true
 }
