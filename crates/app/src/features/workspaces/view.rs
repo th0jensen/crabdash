@@ -170,21 +170,6 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
         .text_color(rgb(style::TEXT_PRIMARY))
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .capture_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
-            match event.keystroke.key.as_str() {
-                "enter" if app.workspaces.rename.is_some() => app.finish_workspace_name(window, cx),
-                "escape" => {
-                    if app.workspaces.rename.take().is_none() {
-                        app.workspaces.open = false;
-                    }
-                    app.workspaces.error = None;
-                    app.focus_handle.focus(window);
-                    cx.notify();
-                }
-                _ => return,
-            }
-            cx.stop_propagation();
-        }))
         .child(
             div()
                 .px(px(8.0))

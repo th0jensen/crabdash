@@ -1,6 +1,6 @@
 use super::AddMachineAuthMode;
 use super::sidebar;
-use crate::{SubmitAddMachineModal, app::Crabdash};
+use crate::app::Crabdash;
 use crate::components::text_field::{FieldTab, FieldTabPrev};
 use anyhow::anyhow;
 use gpui::*;
@@ -379,17 +379,6 @@ impl Crabdash {
             },
         )
         .detach();
-    }
-
-    pub(crate) fn submit_add_machine_action(
-        &mut self,
-        _: &SubmitAddMachineModal,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.add_machine_modal_open {
-            self.submit_add_machine(window, cx);
-        }
     }
 
     pub(crate) fn focus_next(

@@ -15,7 +15,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     };
     let force = removal.force;
     div()
-        .absolute().top_0().left_0().size_full()
+        .absolute().top_0().left_0().size_full().occlude()
         .bg(rgba(0x00000099))
         .flex().items_center().justify_center()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -233,6 +233,30 @@ impl Crabdash {
         app
     }
 
+    pub(crate) fn submit_modal_action(
+        &mut self,
+        _: &crate::SubmitModal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.add_machine_modal_open {
+            self.submit_add_machine(window, cx);
+        } else if self.workspaces.open
+            && self.workspaces.rename.is_some()
+            && self
+                .workspaces
+                .name
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+            && !self.preferences_open
+            && !self.docker_run_modal_open
+            && self.docker_removal.is_none()
+        {
+            self.finish_workspace_name(window, cx);
+        }
+    }
+
     pub(crate) fn dismiss_modal_action(
         &mut self,
         _: &DismissModal,
@@ -254,8 +278,10 @@ impl Crabdash {
             self.close_add_machine_modal(window, cx);
             return;
         } else if self.workspaces.open {
-            self.workspaces.open = false;
-            self.workspaces.rename = None;
+            if self.workspaces.rename.take().is_none() {
+                self.workspaces.open = false;
+            }
+            self.workspaces.error = None;
         } else if self.open_menu.take().is_none() {
             return;
         }
@@ -332,7 +358,7 @@ impl Render for Crabdash {
                 this.open_add_machine_modal(window, cx);
             }))
             .on_action(cx.listener(Crabdash::dismiss_modal_action))
-            .on_action(cx.listener(Crabdash::submit_add_machine_action))
+            .on_action(cx.listener(Crabdash::submit_modal_action))
             .on_action(|_: &MinimizeWindow, window, _| {
                 window.minimize_window();
             })

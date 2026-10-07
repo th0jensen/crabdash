@@ -14,7 +14,7 @@ use gpui::*;
 
 use crate::{
     CloseWindow, DismissModal, MinimizeWindow, OpenAddMachine, OpenPreferences, RefreshServices,
-    SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
+    SubmitModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
 };
 impl Crabdash {
     pub fn bind_keys(cx: &mut App) {
@@ -76,8 +76,8 @@ impl Crabdash {
             ),
             KeyBinding::new("escape", DismissModal, None),
             KeyBinding::new("escape", DismissModal, Some("CrabdashTextField")),
-            KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("return", SubmitAddMachineModal, Some("CrabdashTextField")),
+            KeyBinding::new("enter", SubmitModal, Some("CrabdashTextField")),
+            KeyBinding::new("return", SubmitModal, Some("CrabdashTextField")),
             KeyBinding::new("backspace", FieldBackspace, Some("CrabdashTextField")),
             KeyBinding::new("delete", FieldDelete, Some("CrabdashTextField")),
             KeyBinding::new("left", FieldLeft, Some("CrabdashTextField")),

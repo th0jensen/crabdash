@@ -75,6 +75,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .top_0()
         .left_0()
         .size_full()
+        .occlude()
         .child(
             div()
                 .absolute()

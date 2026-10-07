@@ -393,6 +393,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
         .top_0()
         .left_0()
         .size_full()
+        .occlude()
         .bg(rgba(0x00000088))
         .flex()
         .items_center()
@@ -482,6 +483,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                     .top_0()
                                     .left_0()
                                     .size_full()
+                                    .occlude()
                                     .bg(rgba(0x1E1E1E88))
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation()
