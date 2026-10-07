@@ -170,6 +170,8 @@ empty list. Removal asks for confirmation, stops active containers gracefully,
 and keeps images, volumes and bind-mounted files. Force removal is an explicit
 option. Pending actions are tracked separately for each machine.
 
+Run uses compact Container, Network & storage, Environment, and Advanced tabs,
+with a collapsible command preview. Its neutral actions match the table controls.
 Run creates detached containers, with optional open stdin. The preview quotes
 individual arguments; the command field supports shell-style quoting without
 shell expansion. Invalid resource limits and conflicting options are rejected

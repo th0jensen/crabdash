@@ -6,6 +6,32 @@ use super::run_parameters::Parameters;
 use crate::app::Crabdash;
 use crate::components::text_field::TextField;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum RunSection {
+    #[default]
+    Container,
+    Connections,
+    Environment,
+    Advanced,
+}
+
+impl RunSection {
+    pub const ALL: [Self; 4] = [
+        Self::Container,
+        Self::Connections,
+        Self::Environment,
+        Self::Advanced,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Container => "Container",
+            Self::Connections => "Network & storage",
+            Self::Environment => "Environment",
+            Self::Advanced => "Advanced",
+        }
+    }
+}
+
 pub struct DockerRunConfig {
     pub image: Entity<TextField>,
     pub name: Entity<TextField>,
@@ -23,6 +49,8 @@ pub struct DockerRunConfig {
     pub working_dir: Entity<TextField>,
     pub entrypoint: Entity<TextField>,
     pub command: Entity<TextField>,
+    pub(super) section: RunSection,
+    pub(super) show_preview: bool,
     pub busy: bool,
     pub error: Option<String>,
     _changes: Vec<Subscription>,
@@ -31,9 +59,9 @@ pub struct DockerRunConfig {
 impl DockerRunConfig {
     pub fn new(cx: &mut Context<Crabdash>) -> Self {
         let mut config = Self {
-            image: cx.new(|cx| TextField::new("", "nginx:latest", 50, cx)),
-            name: cx.new(|cx| TextField::new("", "my-container", 51, cx)),
-            hostname: cx.new(|cx| TextField::new("", "my-host", 52, cx)),
+            image: cx.new(|cx| TextField::new("", "nginx:latest", 50, cx).compact()),
+            name: cx.new(|cx| TextField::new("", "my-container", 51, cx).compact()),
+            hostname: cx.new(|cx| TextField::new("", "my-host", 52, cx).compact()),
             interactive: false,
             remove: false,
             restart: RestartPolicy::default(),
@@ -41,12 +69,14 @@ impl DockerRunConfig {
             ports: vec![],
             volumes: vec![],
             env_vars: vec![],
-            memory: cx.new(|cx| TextField::new("", "512m", 53, cx)),
-            cpus: cx.new(|cx| TextField::new("", "1.0", 54, cx)),
-            user: cx.new(|cx| TextField::new("", "1000:1000", 55, cx)),
-            working_dir: cx.new(|cx| TextField::new("", "/app", 56, cx)),
-            entrypoint: cx.new(|cx| TextField::new("", "/bin/sh", 57, cx)),
-            command: cx.new(|cx| TextField::new("", "sh -c 'echo hello'", 58, cx)),
+            memory: cx.new(|cx| TextField::new("", "512m", 53, cx).compact()),
+            cpus: cx.new(|cx| TextField::new("", "1.0", 54, cx).compact()),
+            user: cx.new(|cx| TextField::new("", "1000:1000", 55, cx).compact()),
+            working_dir: cx.new(|cx| TextField::new("", "/app", 56, cx).compact()),
+            entrypoint: cx.new(|cx| TextField::new("", "/bin/sh", 57, cx).compact()),
+            command: cx.new(|cx| TextField::new("", "sh -c 'echo hello'", 58, cx).compact()),
+            section: RunSection::default(),
+            show_preview: false,
             busy: false,
             error: None,
             _changes: Vec::new(),
@@ -94,6 +124,8 @@ impl DockerRunConfig {
         self.restart = RestartPolicy::default();
         self.network = NetworkMode::default();
         self.error = None;
+        self.section = RunSection::default();
+        self.show_preview = false;
         self._changes.truncate(9);
     }
 
@@ -103,7 +135,7 @@ impl DockerRunConfig {
             "volume" => ("/host/path:/container/path:ro", 61),
             _ => ("KEY=value", 62),
         };
-        let field = cx.new(|cx| TextField::new("", placeholder, tab, cx));
+        let field = cx.new(|cx| TextField::new("", placeholder, tab, cx).compact());
         self._changes.push(observe_field(&field, cx));
         match kind {
             "port" => self.ports.push(field),

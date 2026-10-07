@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     app::Crabdash,
     components::{
-        common::{LucideIcon, button, lucide_icon},
+        common::{LucideIcon, lucide_icon, surface_button},
         scroll_list,
     },
 };
@@ -372,11 +372,10 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
                     .gap(px(6.0))
                     .child(
                         div().flex().child(
-                            button(
+                            surface_button(
                                 "run-container-open",
                                 Some(LucideIcon::Play),
                                 Some("Run"),
-                                true,
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_docker_run_modal(cx);

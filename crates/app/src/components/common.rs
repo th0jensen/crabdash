@@ -113,3 +113,37 @@ where
         })
         .when_some(label, |this, label| this.child(div().child(label)))
 }
+
+/// Neutral action control matching table filters and compact text fields.
+pub(crate) fn surface_button(
+    id: impl Into<ElementId>,
+    icon: Option<Icon>,
+    label: Option<&str>,
+) -> Stateful<Div> {
+    let has_label = label.is_some();
+    div()
+        .id(id)
+        .h(rems(style::CONTROL / 16.0))
+        .flex_none()
+        .px(px(9.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(style::CARD_RADIUS))
+        .bg(rgb(style::SURFACE))
+        .border_1()
+        .border_color(rgb(style::BORDER))
+        .text_size(rems(style::META / 16.0))
+        .text_color(rgb(style::TEXT_PRIMARY))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(|s| {
+            s.bg(rgb(style::SURFACE_HOVER))
+                .text_color(rgb(style::TEXT_SELECTED))
+        })
+        .when(has_label, |control| control.gap(px(6.0)))
+        .when_some(icon, |control, icon| {
+            control.child(lucide_icon(icon, style::ICON))
+        })
+        .when_some(label, |control, label| control.child(label.to_owned()))
+}
