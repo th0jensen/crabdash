@@ -34,28 +34,61 @@ fn agent_path() -> Result<PathBuf> {
         .join(format!("{LABEL}.plist")))
 }
 
-pub(super) fn startup_enabled() -> Result<bool> {
-    if let Some(service) = bundled_service()? {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ServiceStatus {
+    Disabled,
+    Enabled,
+    RequiresApproval,
+    NotFound,
+}
+impl ServiceStatus {
+    fn read(service: &AnyObject) -> Result<Self> {
         // SAFETY: Public SMAppServiceStatus getter; values are stable NSInteger.
-        let status: isize = unsafe { msg_send![&*service, status] };
-        return match status {
-            1 | 2 => Ok(true),
-            0 | 3 => Ok(false),
+        let status: isize = unsafe { msg_send![service, status] };
+        match status {
+            0 => Ok(Self::Disabled),
+            1 => Ok(Self::Enabled),
+            2 => Ok(Self::RequiresApproval),
+            3 => Ok(Self::NotFound),
             _ => bail!("macOS reported an unknown login item status ({status})"),
-        };
+        }
     }
-    Ok(agent_path()?
+    fn enabled(self) -> bool {
+        matches!(self, Self::Enabled | Self::RequiresApproval)
+    }
+}
+fn fallback_enabled() -> Result<bool> {
+    agent_path()?
         .try_exists()
-        .context("Unable to inspect your login agent")?)
+        .context("Unable to inspect your login agent")
+}
+fn remove_agent() -> Result<()> {
+    match fs::remove_file(agent_path()?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("Unable to remove the Crabdash developer login agent"),
+    }
+}
+
+pub(super) fn startup_enabled() -> Result<bool> {
+    let fallback = fallback_enabled()?;
+    if let Some(service) = bundled_service()? {
+        // A developer agent can survive moving to an application bundle. Report
+        // the effective setting until the user explicitly changes registration.
+        return Ok(ServiceStatus::read(&service)?.enabled() || fallback);
+    }
+    Ok(fallback)
 }
 
 /// Registration remains enabled while macOS is waiting for user approval; the
 /// warning explains why the app will not launch yet and the switch can disable it.
 pub(super) fn startup_warning() -> Result<Option<String>> {
     if let Some(service) = bundled_service()? {
-        let status: isize = unsafe { msg_send![&*service, status] };
-        if status == 2 {
+        if ServiceStatus::read(&service)? == ServiceStatus::RequiresApproval {
             return Ok(Some("Allow Crabdash in System Settings > General > Login Items to complete login startup".into()));
+        }
+        if fallback_enabled()? {
+            return Ok(Some("A developer build is configured to start at login. Turn Start at login off and on to use this installed app.".into()));
         }
     }
     Ok(None)
@@ -93,43 +126,37 @@ fn enable_agent() -> Result<()> {
 
 pub(super) fn set_login_startup(enabled: bool) -> Result<()> {
     if let Some(service) = bundled_service()? {
-        let mut error: Option<Retained<NSError>> = None;
-        // SAFETY: These public ServiceManagement selectors receive an NSError
-        // out-parameter whose lifetime is managed by objc2.
-        let success: bool = unsafe {
-            if enabled {
-                msg_send![&*service, registerAndReturnError: &mut error]
-            } else {
-                msg_send![&*service, unregisterAndReturnError: &mut error]
-            }
-        };
-        if !success {
-            bail!(
-                "{}",
-                error
-                    .map(|error| error.localizedDescription().to_string())
-                    .unwrap_or_else(|| "macOS could not change the login item".into())
-            );
-        }
-        // Remove a developer LaunchAgent when migrating to a bundled app so
-        // macOS has only one owner for future login launches.
-        let fallback = agent_path()?;
-        match fs::remove_file(fallback) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).context("Unable to remove the previous developer login agent");
+        let status = ServiceStatus::read(&service)?;
+        // ServiceManagement rejects redundant registration/unregistration. A
+        // repeated request must still remove a surviving developer LaunchAgent.
+        if enabled != status.enabled() {
+            let mut error: Option<Retained<NSError>> = None;
+            // SAFETY: Public ServiceManagement selectors receive an NSError
+            // out-parameter whose lifetime is managed by objc2.
+            let success: bool = unsafe {
+                if enabled {
+                    msg_send![&*service,registerAndReturnError:&mut error]
+                } else {
+                    msg_send![&*service,unregisterAndReturnError:&mut error]
+                }
+            };
+            if !success {
+                bail!(
+                    "{}",
+                    error
+                        .map(|error| error.localizedDescription().to_string())
+                        .unwrap_or_else(|| "macOS could not change the login item".into())
+                );
             }
         }
+        // Changing this app's explicit setting migrates the app-owned fallback;
+        // merely reading the preference never modifies login registrations.
+        remove_agent()?;
         return Ok(());
     }
     let path = agent_path()?;
     if !enabled {
-        match fs::remove_file(&path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error).context("Unable to remove the Crabdash login agent"),
-        }
+        return remove_agent();
     }
     let executable = env::current_exe().context("Unable to locate Crabdash")?;
     let executable = executable
