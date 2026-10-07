@@ -1,0 +1,84 @@
+name: Build and Test - Windows
+
+# Windows validation is opt-in while native device testing is unavailable.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: C:/crabdash-target
+      LIBGHOSTTY_VT_SYS_CPU: baseline
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Enable long checkout paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Read pinned Ghostty revision
+        id: ghostty
+        run: |
+          $revision = git -C vendor/ghostty rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "revision=$revision" >> $env:GITHUB_OUTPUT
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          # Ghostty's requireZig rejects a different major/minor, including 0.17.
+          version: 0.16.0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Configure native compiler and Windows SDK
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Locate SDK shader compiler
+        run: |
+          $kitsDirectory = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $shaderCompiler = Get-ChildItem $kitsDirectory -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } |
+            Where-Object { Test-Path $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (-not $shaderCompiler) {
+            throw 'The Windows SDK HLSL compiler fxc.exe is required for GPUI release builds.'
+          }
+          "GPUI_FXC_PATH=$shaderCompiler" >> $env:GITHUB_ENV
+          Write-Host "Using GPUI shader compiler: $shaderCompiler"
+          zig version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Native Ghostty sources are outside Cargo.lock, so their revision
+          # must invalidate cached Zig/build-script artifacts independently.
+          shared-key: windows-msvc-zig-0.16.0-${{ steps.ghostty.outputs.revision }}
+          workspaces: . -> C:/crabdash-target
+      - name: Build native executable and release shaders
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc -p crabdash
+      - name: Run Windows workspace tests
+        run: cargo test --locked --workspace --target x86_64-pc-windows-msvc -- --test-threads=1
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: crabdash-Windows-x86_64
+          path: C:/crabdash-target/x86_64-pc-windows-msvc/release/crabdash.exe
+          if-no-files-found: error

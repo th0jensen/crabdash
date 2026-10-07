@@ -1246,6 +1246,7 @@ name = "crabdash"
 version = "0.1.4"
 dependencies = [
  "app",
+ "embed-resource",
  "gpui",
  "smol",
  "tracing-subscriber",

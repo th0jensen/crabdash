@@ -19,5 +19,8 @@ short_description = "Native desktop dashboard for machines and services"
 category = "public.app-category.developer-tools"
 osx_info_plist_exts = ["assets/macos/info-extra.plist"]
 
+[target.'cfg(target_os = "windows")'.build-dependencies]
+embed-resource = "3.0"
+
 [lints]
 workspace = true
