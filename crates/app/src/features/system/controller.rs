@@ -143,7 +143,7 @@ impl Crabdash {
                 match result.and_then(|sample| state.record(sample)) {
                     Ok(()) => {}
                     Err(error) => {
-                        state.monitor.reset();
+                        state.record_gap(std::time::Instant::now());
                         state.error = Some(format!("Unable to sample resources: {error}"));
                     }
                 }

@@ -1,5 +1,10 @@
 //! Live resource usage belongs to the selected machine, independently of tables.
+mod chart;
 mod controller;
+mod history;
+#[cfg(test)]
+use history::HISTORY_LIMIT;
+use history::{HistoryPoint, ScalarPoint, append};
 mod processes;
 mod view;
 pub(crate) use view::render;
@@ -13,17 +18,6 @@ use std::{
 };
 use uuid::Uuid;
 
-const HISTORY_LIMIT: usize = 60;
-
-#[derive(Clone, Copy)]
-pub(crate) struct HistoryPoint {
-    pub cpu: Option<f64>,
-    pub memory: f64,
-    pub network_rx: Option<f64>,
-    pub network_tx: Option<f64>,
-    pub disk_read: Option<f64>,
-    pub disk_write: Option<f64>,
-}
 fn sum_rates(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     let values: Vec<_> = values.collect();
     if values.is_empty() {
@@ -33,13 +27,6 @@ fn sum_rates(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
         .into_iter()
         .try_fold(0.0, |sum, value| Some(sum + value?))
 }
-fn append<T>(history: &mut VecDeque<T>, value: T) {
-    history.push_back(value);
-    while history.len() > HISTORY_LIMIT {
-        history.pop_front();
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct MachineState {
     target: Option<Target>,
@@ -47,7 +34,7 @@ pub(crate) struct MachineState {
     boot_id: Option<String>,
     pub usage: Option<ResourceUsage>,
     pub history: VecDeque<HistoryPoint>,
-    pub gpu_history: HashMap<String, VecDeque<Option<f64>>>,
+    pub gpu_history: HashMap<String, VecDeque<ScalarPoint>>,
     pub error: Option<String>,
     pub updated: Option<Instant>,
     pub loading: bool,
@@ -85,8 +72,23 @@ impl MachineState {
                 .is_none_or(|requested| now.saturating_duration_since(requested) >= interval)
     }
 
+    fn record_gap(&mut self, captured_at: Instant) {
+        self.monitor.reset();
+        append(&mut self.history, HistoryPoint::gap(captured_at));
+        for history in self.gpu_history.values_mut() {
+            append(
+                history,
+                ScalarPoint {
+                    captured_at,
+                    value: None,
+                },
+            );
+        }
+    }
+
     fn record(&mut self, sample: ResourceSample) -> anyhow::Result<()> {
         let boot_id = sample.boot_id.clone();
+        let captured_at = sample.captured_at;
         let usage = self.monitor.update(sample)?;
         if self
             .boot_id
@@ -101,40 +103,50 @@ impl MachineState {
             self.gpu_history.clear();
         }
         self.boot_id = Some(boot_id);
-        self.history.push_back(HistoryPoint {
-            cpu: usage.cpu_percent,
-            memory: usage.memory.used_percent(),
-            network_rx: usage
-                .network
-                .as_ref()
-                .and_then(|v| sum_rates(v.iter().map(|v| v.received_bytes_per_second))),
-            network_tx: usage
-                .network
-                .as_ref()
-                .and_then(|v| sum_rates(v.iter().map(|v| v.sent_bytes_per_second))),
-            disk_read: usage
-                .disks
-                .as_ref()
-                .and_then(|v| sum_rates(v.iter().map(|v| v.read_bytes_per_second))),
-            disk_write: usage
-                .disks
-                .as_ref()
-                .and_then(|v| sum_rates(v.iter().map(|v| v.written_bytes_per_second))),
-        });
-        while self.history.len() > HISTORY_LIMIT {
-            self.history.pop_front();
-        }
-        self.gpu_history.retain(|id, _| {
-            usage
-                .gpus
-                .as_ref()
-                .is_some_and(|values| values.iter().any(|value| &value.id == id))
-        });
+        append(
+            &mut self.history,
+            HistoryPoint {
+                captured_at,
+                cpu: usage.cpu_percent,
+                memory: Some(usage.memory.used_percent()),
+                network_rx: usage
+                    .network
+                    .as_ref()
+                    .and_then(|v| sum_rates(v.iter().map(|v| v.received_bytes_per_second))),
+                network_tx: usage
+                    .network
+                    .as_ref()
+                    .and_then(|v| sum_rates(v.iter().map(|v| v.sent_bytes_per_second))),
+                disk_read: usage
+                    .disks
+                    .as_ref()
+                    .and_then(|v| sum_rates(v.iter().map(|v| v.read_bytes_per_second))),
+                disk_write: usage
+                    .disks
+                    .as_ref()
+                    .and_then(|v| sum_rates(v.iter().map(|v| v.written_bytes_per_second))),
+            },
+        );
         if let Some(values) = &usage.gpus {
+            self.gpu_history
+                .retain(|id, _| values.iter().any(|value| &value.id == id));
             for value in values {
                 append(
                     self.gpu_history.entry(value.id.clone()).or_default(),
-                    value.busy_percent,
+                    ScalarPoint {
+                        captured_at,
+                        value: value.busy_percent,
+                    },
+                );
+            }
+        } else {
+            for history in self.gpu_history.values_mut() {
+                append(
+                    history,
+                    ScalarPoint {
+                        captured_at,
+                        value: None,
+                    },
                 );
             }
         }
@@ -199,7 +211,7 @@ mod tests {
         state.record(sample("new-boot", 1.0))?;
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.history[0].cpu, Some(25.0));
-        assert_eq!(state.history[0].memory, 75.0);
+        assert_eq!(state.history[0].memory, Some(75.0));
         Ok(())
     }
 
@@ -242,9 +254,49 @@ mod tests {
         assert_eq!(state.history.back().and_then(|v| v.network_rx), Some(100.0));
         assert_eq!(state.history.back().and_then(|v| v.disk_write), Some(400.0));
         state.record(sample("boot", 101.0))?;
+        assert_eq!(state.gpu_history["gpu0"].len(), HISTORY_LIMIT);
+        assert_eq!(
+            state.gpu_history["gpu0"]
+                .back()
+                .and_then(|point| point.value),
+            None
+        );
+        let mut removed = sample("boot", 102.0);
+        removed.gpus = Some(vec![]);
+        state.record(removed)?;
         assert!(state.gpu_history.is_empty());
         state.record(sample("newboot", 0.0))?;
         assert_eq!(state.history.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_samples_preserve_values_but_break_every_history() -> anyhow::Result<()> {
+        let mut state = MachineState::default();
+        let start = Instant::now();
+        let mut first = sample("boot", 0.0);
+        first.captured_at = start;
+        state.record(first)?;
+        state.gpu_history.insert(
+            "gpu".into(),
+            VecDeque::from([ScalarPoint {
+                captured_at: start,
+                value: Some(25.0),
+            }]),
+        );
+        state.record_gap(start + Duration::from_secs(3));
+        let gap = &state.history[1];
+        assert_eq!(gap.captured_at, start + Duration::from_secs(3));
+        assert!(gap.cpu.is_none() && gap.memory.is_none());
+        assert!(gap.network_rx.is_none() && gap.network_tx.is_none());
+        assert!(gap.disk_read.is_none() && gap.disk_write.is_none());
+        assert_eq!(state.gpu_history["gpu"][1].value, None);
+        assert!(state.usage.is_some());
+        let mut next = sample("boot", 9.0);
+        next.captured_at = start + Duration::from_secs(9);
+        state.record(next)?;
+        assert_eq!(state.history[2].captured_at, start + Duration::from_secs(9));
+        assert_eq!(state.history[2].memory, Some(75.0));
         Ok(())
     }
 

@@ -1,5 +1,10 @@
 //! Responsive resource mosaic: the pane's width decides the arrangement.
-use super::{MachineState, processes::Column, sum_rates};
+use super::{
+    HistoryPoint, MachineState, ScalarPoint,
+    chart::{self, Series},
+    processes::Column,
+    sum_rates,
+};
 use crate::{
     app::Crabdash,
     components::{
@@ -47,51 +52,26 @@ fn uptime(seconds: f64) -> String {
         format!("{hours}h {}m", minutes % 60)
     }
 }
-fn chart(series: Vec<(Vec<Option<f64>>, u32)>, fixed_max: Option<f64>) -> impl IntoElement {
-    let maximum = fixed_max.unwrap_or_else(|| {
-        series
+fn history_series(
+    state: &MachineState,
+    value: impl Fn(&HistoryPoint) -> Option<f64>,
+    label: Option<&'static str>,
+    color: u32,
+    dashed: bool,
+) -> Series {
+    Series {
+        label,
+        samples: state
+            .history
             .iter()
-            .flat_map(|(values, _)| values)
-            .filter_map(|value| *value)
-            .filter(|value| value.is_finite())
-            .fold(1.0_f64, f64::max)
-    });
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            for (values, color) in &series {
-                if values.len() < 2 {
-                    continue;
-                }
-                let mut path = PathBuilder::stroke(px(1.5));
-                let mut connected = false;
-                for (index, value) in values.iter().enumerate() {
-                    let Some(value) = value.filter(|value| value.is_finite()) else {
-                        connected = false;
-                        continue;
-                    };
-                    let position = point(
-                        bounds.left()
-                            + bounds.size.width * (index as f32 / (values.len() - 1) as f32),
-                        bounds.bottom()
-                            - bounds.size.height * (value.clamp(0.0, maximum) / maximum) as f32,
-                    );
-                    if connected {
-                        path.line_to(position);
-                    } else {
-                        path.move_to(position);
-                        connected = true;
-                    }
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, rgb(*color));
-                }
-            }
-        },
-    )
-    .w_full()
-    .h(rems(56.0 / 16.0))
-    .flex_none()
+            .map(|point| ScalarPoint {
+                captured_at: point.captured_at,
+                value: value(point),
+            })
+            .collect(),
+        color,
+        dashed,
+    }
 }
 fn card() -> Div {
     div()
@@ -181,10 +161,13 @@ fn cpu_card(state: &MachineState, usage: &ResourceUsage) -> Div {
             percent(usage.cpu_percent),
             format!("{} logical processors", usage.logical_cpus),
         ))
-        .child(chart(
-            vec![(
-                state.history.iter().map(|point| point.cpu).collect(),
+        .child(chart::render(
+            vec![history_series(
+                state,
+                |point| point.cpu,
+                None,
                 style::TEXT_PRIMARY,
+                false,
             )],
             Some(100.0),
         ))
@@ -240,14 +223,13 @@ fn memory_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                 bytes(usage.memory.total_bytes)
             ),
         ))
-        .child(chart(
-            vec![(
-                state
-                    .history
-                    .iter()
-                    .map(|point| Some(point.memory))
-                    .collect(),
+        .child(chart::render(
+            vec![history_series(
+                state,
+                |point| point.memory,
+                None,
                 style::TEXT_MUTED,
+                false,
             )],
             Some(100.0),
         ))
@@ -349,15 +331,21 @@ fn network_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                     .map(|interface| interface.sent_bytes_per_second),
             )),
         ))
-        .child(chart(
+        .child(chart::render(
             vec![
-                (
-                    state.history.iter().map(|point| point.network_rx).collect(),
+                history_series(
+                    state,
+                    |point| point.network_rx,
+                    Some("Receive"),
                     style::TEXT_PRIMARY,
+                    false,
                 ),
-                (
-                    state.history.iter().map(|point| point.network_tx).collect(),
+                history_series(
+                    state,
+                    |point| point.network_tx,
+                    Some("Send"),
                     style::TEXT_MUTED,
+                    true,
                 ),
             ],
             None,
@@ -413,15 +401,21 @@ fn disk_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                 disks.iter().map(|disk| disk.written_bytes_per_second),
             )),
         ))
-        .child(chart(
+        .child(chart::render(
             vec![
-                (
-                    state.history.iter().map(|point| point.disk_read).collect(),
+                history_series(
+                    state,
+                    |point| point.disk_read,
+                    Some("Read"),
                     style::TEXT_PRIMARY,
+                    false,
                 ),
-                (
-                    state.history.iter().map(|point| point.disk_write).collect(),
+                history_series(
+                    state,
+                    |point| point.disk_write,
+                    Some("Write"),
                     style::TEXT_MUTED,
+                    true,
                 ),
             ],
             None,
@@ -471,11 +465,16 @@ fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
             state.gpu_history.get(&gpu.id).filter(|history| {
                 history
                     .iter()
-                    .any(|value| value.is_some_and(|value| value.is_finite()))
+                    .any(|point| point.value.is_some_and(|value| value.is_finite()))
             }),
             |this, history| {
-                this.child(chart(
-                    vec![(history.iter().copied().collect(), style::TEXT_PRIMARY)],
+                this.child(chart::render(
+                    vec![Series {
+                        label: None,
+                        samples: history.iter().copied().collect(),
+                        color: style::TEXT_PRIMARY,
+                        dashed: false,
+                    }],
                     Some(100.0),
                 ))
             },

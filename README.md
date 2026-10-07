@@ -149,7 +149,7 @@ of the machine's total CPU capacity. Up to 100 processes are displayed after ran
 the sampled process set. CPU and throughput start with **Sampling…** until two counter
 snapshots are available. Resource sampling is independent of
 automatic table refresh; **Preferences → System → Sample interval** adjusts it
-from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; live history stays in memory and resets after a reboot
+from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; charts use actual elapsed sample times, with solid/dashed legends for paired I/O and gaps for unavailable samples. Live history stays in memory and resets after a reboot
 or replacement connection. Existing workspaces gain System in the focused pane
 without changing their selection or split sizes.
 
