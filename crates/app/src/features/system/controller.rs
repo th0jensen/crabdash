@@ -46,6 +46,7 @@ impl Crabdash {
             if interrupted && let Some(uuid) = target {
                 self.refresh_system_resources_for(uuid, cx);
             }
+            self.observe_system_status(std::time::Instant::now());
             return;
         }
         if !interrupted && let Some(previous) = self.system.visible_machine {
@@ -55,6 +56,24 @@ impl Crabdash {
         if let Some(uuid) = target {
             self.refresh_system_resources_for(uuid, cx);
         }
+        self.observe_system_status(std::time::Instant::now());
+    }
+
+    fn observe_system_status(&mut self, now: std::time::Instant) -> bool {
+        let current = (self.dashboard_visibility.is_visible()
+            && system_is_visible(&self.workspaces.layout().root))
+        .then(|| {
+            let uuid = self.selected_machine().uuid;
+            (
+                uuid,
+                super::status::current(
+                    self.system.machines.get(&uuid),
+                    now,
+                    self.preferences.system_refresh_interval(),
+                ),
+            )
+        });
+        self.system.status.observe(current)
     }
 
     pub(crate) fn start_system_resource_loop(
@@ -83,6 +102,9 @@ impl Crabdash {
                             && system_is_visible(&this.workspaces.layout().root)
                         {
                             this.refresh_system_resources(cx);
+                        }
+                        if this.observe_system_status(std::time::Instant::now()) {
+                            cx.notify();
                         }
                     })
                     .is_err()
@@ -183,8 +205,8 @@ impl Crabdash {
             .ok();
         })
         .detach();
-        // Once live data exists, no visible state changes until the sample
-        // completes. Avoid rendering the same mosaic twice per interval.
+        // Ordinary overlapping reads do not change a live status. The heartbeat
+        // redraws only if freshness expires before this request completes.
         if show_initial_loading {
             cx.notify();
         }

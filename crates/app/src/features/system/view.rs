@@ -530,15 +530,10 @@ pub(crate) fn render(
         || info.platform_label().to_string(),
         |distribution| distribution.pretty_name.clone(),
     );
-    let label: String = state.and_then(|state| state.updated).map_or_else(
-        || "Starting…".into(),
-        |updated| {
-            if updated.elapsed() > app.preferences.system_refresh_interval() * 3 {
-                "Waiting for a sample…".into()
-            } else {
-                format!("Live · {}s", app.preferences.system_refresh_seconds)
-            }
-        },
+    let status = super::status::current(
+        state,
+        std::time::Instant::now(),
+        app.preferences.system_refresh_interval(),
     );
     let mut mosaic = div()
         .w_full()
@@ -603,7 +598,7 @@ pub(crate) fn render(
             card()
                 .col_span_full()
                 .text_color(rgb(style::TEXT_MUTED))
-                .child("Collecting resource samples…"),
+                .child(status.empty_message()),
         );
     }
     let toolbar = div()
@@ -614,9 +609,11 @@ pub(crate) fn render(
         .gap(px(8.0))
         .child(
             div()
+                .min_w_0()
+                .flex_1()
                 .text_size(rems(style::META / 16.0))
                 .text_color(rgb(style::TEXT_MUTED))
-                .child(label),
+                .child(status.label()),
         )
         .child(
             surface_button("system-refresh", Some(Icon::RefreshCw), None)

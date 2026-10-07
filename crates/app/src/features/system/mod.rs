@@ -7,6 +7,7 @@ mod history;
 use history::HISTORY_LIMIT;
 use history::{HistoryPoint, ScalarPoint, append};
 mod processes;
+mod status;
 mod view;
 pub(crate) use view::render;
 
@@ -497,6 +498,7 @@ pub(crate) struct State {
     clock: clock::SamplingClock,
     pub machines: HashMap<Uuid, MachineState>,
     visible_machine: Option<Uuid>,
+    status: status::Tracker,
     pub processes: Option<processes::State>,
 }
 impl State {
