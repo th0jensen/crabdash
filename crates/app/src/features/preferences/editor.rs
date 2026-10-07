@@ -388,11 +388,11 @@ fn toggle_row(
             .rounded_full()
             .flex()
             .items_center()
-            .bg(if enabled {
-                rgb(0x4D8CEC)
+            .bg(rgb(if enabled {
+                style::FOCUS_BORDER
             } else {
-                rgb(0x505050)
-            })
+                style::CONTROL_SELECTED_BG
+            }))
             .when(enabled, |this| this.justify_end())
             .when(busy, |this| this.opacity(0.5))
             .cursor_pointer()
