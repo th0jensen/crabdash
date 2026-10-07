@@ -1894,6 +1894,15 @@ impl Window {
         self.mouse_position
     }
 
+    /// Whether a GPUI overlay may cover an embedded native control. Read during
+    /// Element::paint, after deferred views and tooltips have been prepainted.
+    /// Native subviews should hide and paint their GPUI fallback in that frame.
+    pub fn has_native_overlay_occluder(&self) -> bool {
+        self.prompt.is_some()
+            || self.tooltip_bounds.is_some()
+            || !self.next_frame.deferred_draws.is_empty()
+    }
+
     /// The current state of the keyboard's modifiers
     pub fn modifiers(&self) -> Modifiers {
         self.modifiers

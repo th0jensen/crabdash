@@ -30,3 +30,8 @@ Crabdash's native app menu exercises this registration path. Apple's
 [servicesMenu documentation](https://developer.apple.com/documentation/appkit/nsapplication/servicesmenu)
 specifies an `NSMenu` value. This correction was reviewed against the source and
 public API contract; macOS compilation and runtime remain unverified.
+
+`src/window.rs`: expose `has_native_overlay_occluder` for embedded native controls.
+The read-only query is intended for the Element paint phase, after tooltip and
+deferred popup prepaint. Crabdash hides AppKit button overlays and paints their
+GPUI fallbacks whenever GPUI displays a prompt, tooltip, or deferred overlay.

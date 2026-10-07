@@ -1,24 +1,31 @@
 //! Real AppKit material only behind the top navigation chrome. Data remains opaque.
-use gpui::{Div, Hsla, Pixels, Window, px, rgba};
-use objc2::{
-    MainThreadMarker, MainThreadOnly, msg_send,
-    rc::{Allocated, Retained},
-    runtime::AnyClass,
-};
+use gpui::{Div, Hsla, Pixels, Window, px, rgb, rgba};
+use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSAutoresizingMaskOptions,
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+    NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 const MATERIAL_ID: &str = "CrabdashNavigationMaterial";
 pub(crate) fn root_background() -> Hsla {
-    rgba(0x00000000).into()
+    if reduced_transparency() {
+        rgb(crate::components::style::CONTENT).into()
+    } else {
+        rgba(0x00000000).into()
+    }
 }
 pub(crate) fn titlebar_background() -> Hsla {
-    rgba(0x20202030).into()
+    if reduced_transparency() {
+        rgb(crate::components::style::CHROME).into()
+    } else {
+        rgba(0x20202030).into()
+    }
+}
+pub(crate) fn reduced_transparency() -> bool {
+    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceTransparency()
 }
 fn native_view(window: &Window) -> Option<&NSView> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -56,6 +63,7 @@ pub(crate) fn frame(root: Div, window: &Window) -> Div {
                     .is_some_and(|id| id.to_string() == MATERIAL_ID)
                 {
                     child.setFrame(bounds(&parent, window));
+                    child.setHidden(reduced_transparency());
                     break;
                 }
             }
@@ -74,32 +82,13 @@ pub(super) fn prepare(window: &Window) {
         return;
     };
     let frame = bounds(&parent, window);
-    let effect: Retained<NSView> = if let Some(class) = AnyClass::get(c"NSGlassEffectView") {
-        // SAFETY: Runtime lookup avoids linking macOS 26-only class symbols on
-        // older systems. All selectors below are public NSGlassEffectView APIs.
-        unsafe {
-            let allocated: Allocated<NSView> = msg_send![class, alloc];
-            let effect: Retained<NSView> = msg_send![allocated, initWithFrame: frame];
-            let _: () = msg_send![&*effect, setStyle: 0_isize]; // Regular glass
-            let _: () = msg_send![&*effect, setCornerRadius: 0.0_f64];
-            let content = NSView::initWithFrame(
-                NSView::alloc(mtm),
-                NSRect::new(NSPoint::new(0.0, 0.0), frame.size),
-            );
-            content.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            let _: () = msg_send![&*effect, setContentView: &*content];
-            effect
-        }
-    } else {
-        let effect = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
-        effect.setMaterial(NSVisualEffectMaterial::HeaderView);
-        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        effect.setState(NSVisualEffectState::FollowsWindowActiveState);
-        effect.into()
-    };
+    // Glass belongs to the real NSButtons above the GPU view. A sibling glass
+    // view with an empty contentView cannot correctly host GPUI controls.
+    let effect = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
+    effect.setMaterial(NSVisualEffectMaterial::HeaderView);
+    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    effect.setState(NSVisualEffectState::FollowsWindowActiveState);
+    effect.setHidden(reduced_transparency());
     // Crabdash currently uses a dark palette; a light native material would
     // wash out its fixed foreground colors. AppKit still manages accessibility
     // contrast, reduced transparency and active/inactive material behavior.

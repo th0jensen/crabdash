@@ -30,16 +30,21 @@ The workspace has five crates:
 - `utils`: shared data models, arguments, raw command output, and domain parsers.
 
 Inside `app`, `features/` declares Docker, disks, system services, live system resources, shared logs, machines, terminals,
-preferences, workspaces, and notifications. Each feature owns its controller, view/editor, and
+preferences, workspaces, polling, and notifications. Each feature owns its controller, view/editor, and
 feature-specific types, including table filtering and ordering in `table.rs`. `components/` contains reusable UI primitives; `content/`
 only composes the main panels and navigation. `app.rs` owns the root entity and
 connects these modules, and `desktop/runtime.rs` owns application lifecycle.
 
-Local desktop features live in `app/src/desktop/{about,appearance,menus,startup,tray,window}/`.
+Local desktop features live in `app/src/desktop/{about,appearance,controls,menus,startup,tray,window}/`.
 Each declares adjacent `linux.rs`, `macos.rs`, and `windows.rs` implementations behind a common
 interface, selected with host `cfg` at the module boundary. Linux uses the GPUI menu bar,
 client window controls, systemd login service, and StatusNotifier tray. macOS backends use
 AppKit menus, a persistent status item, native window material, and login registration.
+Refresh and Terminal use AppKit buttons in the same layout rectangles as the GPUI
+controls on Linux and Windows. On macOS 26, these buttons use the Glass bezel;
+older releases use standard buttons, with a GPUI fallback when system symbols
+are unavailable. Reduce Transparency makes the navigation surface opaque and
+disables the glass bezel. Native controls hide behind application overlays.
 Windows backends use caption hit areas, the notification area, and per-user login startup.
 Unavailable startup/tray capabilities remain visible in Preferences.
 

@@ -103,75 +103,18 @@ pub(crate) fn render(
                 .flex()
                 .items_center()
                 .gap(rems(4.0 / 16.0))
-                .child(
-                    div()
-                        .id("refresh-button")
-                        .tooltip(|_, cx| {
-                            control_tooltip(
-                                crate::desktop::menus::shortcut("Refresh · ⌘R", "Refresh · Ctrl+R"),
-                                cx,
-                            )
-                        })
-                        .size(rems(style::CHROME_CONTROL / 16.0))
-                        .rounded(px(style::RADIUS))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(rgb(style::TEXT_MUTED))
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(rgb(style::SURFACE_HOVER))
-                                .text_color(rgb(style::TEXT_SELECTED))
-                        })
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(lucide_icon(Icon::RefreshCw, style::ICON))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.refresh_services(cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .id("toggle-quake-terminal")
-                        .tooltip(|_, cx| {
-                            control_tooltip(
-                                crate::desktop::menus::shortcut(
-                                    "Toggle terminal · ⌘J",
-                                    "Toggle terminal · Ctrl+J",
-                                ),
-                                cx,
-                            )
-                        })
-                        .size(rems(style::CHROME_CONTROL / 16.0))
-                        .flex_none()
-                        .rounded(px(style::RADIUS))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(gpui::rems(style::TEXT / 16.0))
-                        .text_color(if app.quake_terminal_open {
-                            rgb(style::TEXT_SELECTED)
-                        } else {
-                            rgb(style::TEXT_MUTED)
-                        })
-                        .when(app.quake_terminal_open, |this| {
-                            this.bg(rgb(style::CONTROL_SELECTED_BG))
-                        })
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(rgb(style::SURFACE_HOVER))
-                                .text_color(rgb(style::TEXT_SELECTED))
-                        })
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(lucide_icon(Icon::Terminal, style::ICON))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_quake_terminal(window, cx);
-                        })),
-                )
+                .child(crate::desktop::controls::render(
+                    crate::desktop::controls::Control::Refresh,
+                    app,
+                    window,
+                    cx,
+                ))
+                .child(crate::desktop::controls::render(
+                    crate::desktop::controls::Control::Terminal,
+                    app,
+                    window,
+                    cx,
+                ))
                 .child(crate::features::workspaces::button(app, window, cx))
                 .child(super::platform::controls(window)),
         )
