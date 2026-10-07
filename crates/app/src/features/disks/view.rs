@@ -340,7 +340,8 @@ pub fn render(
     cx: &mut Context<Crabdash>,
     panel_width: Pixels,
 ) -> Div {
-    let show_id = panel_width >= px(560.0 * app.preferences.interface_font_size / 13.0);
+    let show_id = panel_width
+        >= px(560.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let machine = app.selected_machine();
     let disks = machine.services.disks.clone();
     let mounted = disks.iter().filter(|d| Filter::Mounted.matches(d)).count();
@@ -354,7 +355,10 @@ pub fn render(
         Some(
             toolbar(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(6.0))
                     .child(stats_chip(
@@ -382,6 +386,9 @@ pub fn render(
                         cx,
                     )),
                 &app.disks_table.search,
+                panel_width
+                    < px(620.0 * app.preferences.interface_font_size
+                        / crate::components::style::TEXT),
             )
             .into_any_element(),
         ),

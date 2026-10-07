@@ -12,5 +12,10 @@ pub(crate) fn icon(size: f32) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .child(svg().path(PATH).size(rems(size / 16.0)).text_color(white()))
+        .child(
+            svg()
+                .path(PATH)
+                .size(rems(size / 16.0))
+                .text_color(rgb(crate::components::style::TEXT_PRIMARY)),
+        )
 }

@@ -32,6 +32,47 @@ pub(crate) fn fixed_column(width: f32) -> Div {
     div().w(rems(width / 16.0)).flex_none().min_w_0()
 }
 
+/// Narrow tables keep their identity and status together, then place actions
+/// on a separate line so every control remains available.
+pub(crate) fn responsive_row(
+    compact: bool,
+    identity: impl IntoElement,
+    detail: Option<AnyElement>,
+    actions: impl IntoElement,
+    status: impl IntoElement,
+) -> Div {
+    if compact {
+        div()
+            .w_full()
+            .min_w_0()
+            .px(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(TABLE_GAP))
+                    .child(identity)
+                    .child(status),
+            )
+            .child(div().w_full().min_w_0().flex().justify_end().child(actions))
+    } else {
+        table_row()
+            .child(identity)
+            .when_some(detail, |this, detail| this.child(detail))
+            .child(actions)
+            .child(status)
+    }
+}
+
+pub(crate) fn responsive_status_column(compact: bool) -> Div {
+    fixed_column(if compact { 80.0 } else { STATUS_WIDTH })
+}
+
 pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
     div()
         .w_full()
@@ -171,12 +212,7 @@ pub(crate) fn sort_heading(
         }))
         .hover(|s| s.text_color(rgb(style::TEXT_SELECTED)))
         .tooltip(move |_, cx| control_tooltip(hint.clone(), cx))
-        .child(
-            div()
-                .flex_none()
-                .whitespace_nowrap()
-                .child(label.to_owned()),
-        )
+        .child(clipped_text(label.to_owned()).flex_1())
         .child(lucide_icon(
             match direction {
                 Some(Direction::Ascending) => Icon::ArrowUp,
@@ -286,24 +322,28 @@ impl Search {
     }
 }
 
-pub(crate) fn toolbar(filters: impl IntoElement, search: &Search) -> Div {
+pub(crate) fn toolbar(filters: impl IntoElement, search: &Search, compact: bool) -> Div {
     div()
         .w_full()
-        .h(rems(style::CONTROL / 16.0))
+        .min_h(rems(style::CONTROL / 16.0))
         .flex()
+        .when(compact, |this| this.flex_col())
         .items_center()
-        .gap(px(12.0))
+        .gap(px(if compact { 8.0 } else { 12.0 }))
         .child(
             div()
                 .id("table-filters")
-                .flex_1()
                 .min_w_0()
-                .h_full()
-                .overflow_x_scroll()
+                .when(compact, |this| this.w_full())
+                .when(!compact, |this| this.flex_1().overflow_x_scroll())
                 .flex()
                 .items_center()
                 .gap(px(6.0))
                 .child(filters),
         )
-        .child(search.render())
+        .child(if compact {
+            div().w_full().child(search.field.clone())
+        } else {
+            search.render()
+        })
 }

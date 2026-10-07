@@ -12,8 +12,9 @@ use crate::{
 
 use super::table::{Column, Filter, metadata as service_metadata};
 use crate::components::table::{
-    ACTIONS_WIDTH, STATUS_WIDTH, clipped_text, error_panel, filter_chip, fixed_column,
-    placeholder_card, sort_heading, status_label, table_card, table_heading, table_row, toolbar,
+    ACTIONS_WIDTH, clipped_text, error_panel, filter_chip, fixed_column, placeholder_card,
+    responsive_row, responsive_status_column, sort_heading, status_label, table_card,
+    table_heading, toolbar,
 };
 
 fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) -> Div {
@@ -53,7 +54,12 @@ fn stats_chip(
     ))
 }
 
-fn table_header(show_details: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+fn table_header(
+    show_details: bool,
+    compact: bool,
+    app: &Crabdash,
+    cx: &mut Context<Crabdash>,
+) -> Div {
     table_heading()
         .child(
             div().flex_1().min_w_0().h_full().child(
@@ -87,9 +93,11 @@ fn table_header(show_details: bool, app: &Crabdash, cx: &mut Context<Crabdash>) 
                 ),
             )
         })
-        .child(fixed_column(ACTIONS_WIDTH).text_center().child("Actions"))
+        .when(!compact, |this| {
+            this.child(fixed_column(ACTIONS_WIDTH).text_center().child("Actions"))
+        })
         .child(
-            fixed_column(STATUS_WIDTH).h_full().child(
+            responsive_status_column(compact).h_full().child(
                 sort_heading(
                     "services-sort-status",
                     "Status",
@@ -183,6 +191,7 @@ fn system_service_row(
     cx: &mut Context<Crabdash>,
     service: &ServiceItem,
     show_details: bool,
+    compact: bool,
 ) -> Div {
     let service_name = service.name.clone();
     let pending_action = app.pending_service_actions.get(&service_name).copied();
@@ -191,80 +200,80 @@ fn system_service_row(
     let logs_open = app.logs_open_services.contains(&log_key);
     let state = app.expanded_service_logs.get(&log_key);
 
+    let identity = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .child(
+            clipped_text(service.name.clone())
+                .w_full()
+                .text_size(gpui::rems(style::TEXT / 16.0))
+                .text_color(rgb(style::TEXT_PRIMARY)),
+        )
+        .when_some(
+            service.description.as_ref().filter(|description| {
+                !description.trim().is_empty() && description.as_str() != service.name
+            }),
+            |this, description| {
+                this.child(
+                    clipped_text(description.clone())
+                        .w_full()
+                        .text_size(gpui::rems(style::META / 16.0))
+                        .text_color(rgb(style::TEXT_MUTED)),
+                )
+            },
+        );
+    let detail = show_details.then(|| {
+        fixed_column(200.0)
+            .child(
+                clipped_text(service_metadata(service))
+                    .w_full()
+                    .text_size(rems(style::META / 16.0))
+                    .text_color(rgb(style::TEXT_MUTED)),
+            )
+            .into_any_element()
+    });
+    let actions = fixed_column(ACTIONS_WIDTH)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(4.0))
+        .child(service_logs_button(app, cx, service))
+        .child(service_action_button(
+            cx,
+            service,
+            if service.is_running() {
+                ServiceAction::Stop
+            } else {
+                ServiceAction::Start
+            },
+            actions_disabled,
+        ))
+        .child(service_action_button(
+            cx,
+            service,
+            ServiceAction::Restart,
+            actions_disabled,
+        ));
     div()
         .w_full()
         .flex()
         .flex_col()
         .child(
-            table_row()
-                .id(SharedString::from(format!("service-row-{}", service.name)))
-                .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
-                .py(px(10.0))
-                .border_b_1()
-                .border_color(rgb(style::BORDER))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
-                            clipped_text(service.name.clone())
-                                .w_full()
-                                .text_size(gpui::rems(style::TEXT / 16.0))
-                                .text_color(rgb(style::TEXT_PRIMARY)),
-                        )
-                        .when_some(
-                            service.description.as_ref().filter(|description| {
-                                !description.trim().is_empty()
-                                    && description.as_str() != service.name
-                            }),
-                            |this, description| {
-                                this.child(
-                                    clipped_text(description.clone())
-                                        .w_full()
-                                        .text_size(gpui::rems(style::META / 16.0))
-                                        .text_color(rgb(style::TEXT_MUTED)),
-                                )
-                            },
-                        ),
-                )
-                .when(show_details, |this| {
-                    this.child(
-                        fixed_column(200.0).child(
-                            clipped_text(service_metadata(service))
-                                .w_full()
-                                .text_size(gpui::rems(style::META / 16.0))
-                                .text_color(rgb(style::TEXT_MUTED)),
-                        ),
-                    )
-                })
-                .child(
-                    fixed_column(ACTIONS_WIDTH)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(4.0))
-                        .child(service_logs_button(app, cx, service))
-                        .child(service_action_button(
-                            cx,
-                            service,
-                            if service.is_running() {
-                                ServiceAction::Stop
-                            } else {
-                                ServiceAction::Start
-                            },
-                            actions_disabled,
-                        ))
-                        .child(service_action_button(
-                            cx,
-                            service,
-                            ServiceAction::Restart,
-                            actions_disabled,
-                        )),
-                )
-                .child(fixed_column(STATUS_WIDTH).child(status_badge(service, pending_action))),
+            responsive_row(
+                compact,
+                identity,
+                detail,
+                actions,
+                responsive_status_column(compact).child(status_badge(service, pending_action)),
+            )
+            .id(SharedString::from(format!("service-row-{}", service.name)))
+            .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+            .py(px(10.0))
+            .border_b_1()
+            .border_color(rgb(style::BORDER)),
         )
         .when(logs_open, |this| {
             this.child(crate::features::logs::render(
@@ -284,7 +293,10 @@ pub fn render(
     cx: &mut Context<Crabdash>,
     panel_width: Pixels,
 ) -> Div {
-    let show_details = panel_width >= px(720.0 * app.preferences.interface_font_size / 13.0);
+    let compact = panel_width
+        < px(400.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
+    let show_details = panel_width
+        >= px(720.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let machine = app.selected_machine();
     let services = machine.services.systemd.clone();
 
@@ -315,7 +327,10 @@ pub fn render(
         Some(
             toolbar(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(6.0))
                     .child(stats_chip(
@@ -351,6 +366,9 @@ pub fn render(
                         cx,
                     )),
                 &app.services_table.search,
+                panel_width
+                    < px(620.0 * app.preferences.interface_font_size
+                        / crate::components::style::TEXT),
             )
             .into_any_element(),
         ),
@@ -372,12 +390,10 @@ pub fn render(
             .when(!visible_services.is_empty(), |this| {
                 this.child(
                     table_card()
-                        .child(table_header(show_details, app, cx))
-                        .children(
-                            visible_services
-                                .iter()
-                                .map(|service| system_service_row(app, cx, service, show_details)),
-                        ),
+                        .child(table_header(show_details, compact, app, cx))
+                        .children(visible_services.iter().map(|service| {
+                            system_service_row(app, cx, service, show_details, compact)
+                        })),
                 )
             }),
         cx,

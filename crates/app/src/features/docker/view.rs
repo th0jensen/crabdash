@@ -16,8 +16,8 @@ use crate::{
 };
 
 use crate::components::table::{
-    STATUS_WIDTH, clipped_text, filter_chip, fixed_column, placeholder_card, sort_heading,
-    status_label, table_card, table_heading, table_row, toolbar,
+    clipped_text, filter_chip, fixed_column, placeholder_card, responsive_row,
+    responsive_status_column, sort_heading, status_label, table_card, table_heading, toolbar,
 };
 use services::docker::{DockerAction, DockerFilter};
 
@@ -108,7 +108,6 @@ fn action_button(
                     else {
                         return;
                     };
-                    this.overlay_window = Some(window.window_handle().window_id());
                     this.docker_removal = Some(DockerRemoval {
                         machine_uuid,
                         id: id.clone(),
@@ -166,6 +165,7 @@ fn container_row_card(
     container: &Container,
     logs_open: bool,
     show_id: bool,
+    compact: bool,
 ) -> impl IntoElement {
     let pending_action = app
         .pending_docker_actions
@@ -173,86 +173,87 @@ fn container_row_card(
         .copied();
     let actions_disabled = pending_action.is_some();
 
-    table_row()
-        .id(SharedString::from(format!(
-            "container-row-{}",
-            container.id
-        )))
-        .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
-        .bg(rgb(style::SURFACE))
-        .border_b_1()
-        .border_color(rgb(style::BORDER))
-        .py(px(12.0))
-        .child(
-            div().flex_1().min_w_0().child(
-                clipped_text(container.name.clone())
+    let identity = div().flex_1().min_w_0().child(
+        clipped_text(container.name.clone())
+            .w_full()
+            .text_size(gpui::rems(style::TEXT / 16.0))
+            .text_color(rgb(style::TEXT_PRIMARY)),
+    );
+    let detail = show_id.then(|| {
+        fixed_column(160.0)
+            .child(
+                clipped_text(container.id.clone())
                     .w_full()
-                    .text_size(gpui::rems(style::TEXT / 16.0))
-                    .text_color(rgb(style::TEXT_PRIMARY)),
-            ),
-        )
-        .when(show_id, |this| {
-            this.child(
-                fixed_column(160.0).child(
-                    clipped_text(container.id.clone())
-                        .w_full()
-                        .text_size(gpui::rems(style::META / 16.0))
-                        .text_color(rgb(style::TEXT_MUTED)),
-                ),
+                    .text_size(rems(style::META / 16.0))
+                    .text_color(rgb(style::TEXT_MUTED)),
             )
-        })
-        .child(
-            div()
-                .w(gpui::rems(DOCKER_ACTIONS_WIDTH / 16.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(4.0))
-                .child(logs_button(
-                    cx,
-                    app.selected_machine().uuid,
-                    container,
-                    logs_open,
-                ))
-                .child(action_button(
-                    cx,
-                    app.selected_machine().uuid,
-                    container,
-                    if container.is_active_status() {
-                        DockerAction::Stop
-                    } else {
-                        DockerAction::Start
-                    },
-                    actions_disabled,
-                ))
-                .child(action_button(
-                    cx,
-                    app.selected_machine().uuid,
-                    container,
-                    DockerAction::Restart,
-                    actions_disabled,
-                ))
-                .child(action_button(
-                    cx,
-                    app.selected_machine().uuid,
-                    container,
-                    if container.is_paused() {
-                        DockerAction::Unpause
-                    } else {
-                        DockerAction::Pause
-                    },
-                    actions_disabled,
-                ))
-                .child(action_button(
-                    cx,
-                    app.selected_machine().uuid,
-                    container,
-                    DockerAction::Remove { force: false },
-                    actions_disabled,
-                )),
-        )
-        .child(fixed_column(STATUS_WIDTH).child(status_badge(container, pending_action)))
+            .into_any_element()
+    });
+    let actions = div()
+        .w(gpui::rems(DOCKER_ACTIONS_WIDTH / 16.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(4.0))
+        .child(logs_button(
+            cx,
+            app.selected_machine().uuid,
+            container,
+            logs_open,
+        ))
+        .child(action_button(
+            cx,
+            app.selected_machine().uuid,
+            container,
+            if container.is_active_status() {
+                DockerAction::Stop
+            } else {
+                DockerAction::Start
+            },
+            actions_disabled,
+        ))
+        .child(action_button(
+            cx,
+            app.selected_machine().uuid,
+            container,
+            DockerAction::Restart,
+            actions_disabled,
+        ))
+        .child(action_button(
+            cx,
+            app.selected_machine().uuid,
+            container,
+            if container.is_paused() {
+                DockerAction::Unpause
+            } else {
+                DockerAction::Pause
+            },
+            actions_disabled,
+        ))
+        .child(action_button(
+            cx,
+            app.selected_machine().uuid,
+            container,
+            DockerAction::Remove { force: false },
+            actions_disabled,
+        ));
+    responsive_row(
+        compact,
+        identity,
+        detail,
+        actions,
+        responsive_status_column(compact).child(status_badge(container, pending_action)),
+    )
+    .id(SharedString::from(format!(
+        "container-row-{}",
+        container.id
+    )))
+    .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+    .bg(rgb(style::SURFACE))
+    .border_b_1()
+    .border_color(rgb(style::BORDER))
+    .py(px(12.0))
 }
 
 fn container_row(
@@ -260,6 +261,7 @@ fn container_row(
     cx: &mut Context<Crabdash>,
     container: &Container,
     show_id: bool,
+    compact: bool,
 ) -> Div {
     let container_id = container.id.clone();
     let log_key = (app.selected_machine().uuid, container_id.clone());
@@ -271,7 +273,9 @@ fn container_row(
         .w_full()
         .flex()
         .flex_col()
-        .child(container_row_card(app, cx, container, logs_open, show_id))
+        .child(container_row_card(
+            app, cx, container, logs_open, show_id, compact,
+        ))
         .when(logs_open, |d| {
             d.child(crate::features::logs::render(
                 format!("docker-logs-{}-{container_id}", app.selected_machine().uuid),
@@ -281,7 +285,7 @@ fn container_row(
         })
 }
 
-fn table_header(show_id: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+fn table_header(show_id: bool, compact: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     table_heading()
         .child(
             div().flex_1().min_w_0().h_full().child(
@@ -315,15 +319,15 @@ fn table_header(show_id: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Di
                 ),
             )
         })
+        .when(!compact, |this| {
+            this.child(
+                fixed_column(DOCKER_ACTIONS_WIDTH)
+                    .text_center()
+                    .child("Actions"),
+            )
+        })
         .child(
-            div()
-                .w(rems(DOCKER_ACTIONS_WIDTH / 16.0))
-                .flex_none()
-                .text_center()
-                .child("Actions"),
-        )
-        .child(
-            fixed_column(STATUS_WIDTH).h_full().child(
+            responsive_status_column(compact).h_full().child(
                 sort_heading(
                     "docker-sort-status",
                     "Status",
@@ -393,10 +397,19 @@ pub fn render(
     cx: &mut Context<Crabdash>,
     panel_width: Pixels,
 ) -> Div {
-    let show_id = panel_width >= px(640.0 * app.preferences.interface_font_size / 13.0);
+    let compact = panel_width
+        < px(400.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
+    let show_id = panel_width
+        >= px(640.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let machine = app.selected_machine();
     if machine.services.docker_not_installed {
-        return not_installed(app, cx);
+        return scroll_list::render(
+            "docker-scroll",
+            &app.docker_scroll_handle,
+            None,
+            not_installed(app, cx),
+            cx,
+        );
     }
     let containers = machine.services.docker.clone();
 
@@ -417,7 +430,10 @@ pub fn render(
         Some({
             toolbar(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(6.0))
                     .child(
@@ -427,11 +443,9 @@ pub fn render(
                                 Some(LucideIcon::Play),
                                 Some("Run"),
                             )
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.open_docker_run_modal(window, cx);
-                                },
-                            )),
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_docker_run_modal(cx);
+                            })),
                         ),
                     )
                     .child(stats_chip(
@@ -467,6 +481,9 @@ pub fn render(
                         cx,
                     )),
                 &app.docker_table.search,
+                panel_width
+                    < px(620.0 * app.preferences.interface_font_size
+                        / crate::components::style::TEXT),
             )
             .into_any_element()
         }),
@@ -487,11 +504,13 @@ pub fn render(
             })
             .when(!visible_services.is_empty(), |this| {
                 this.child(
-                    table_card().child(table_header(show_id, app, cx)).children(
-                        visible_services
-                            .iter()
-                            .map(|service| container_row(app, cx, service, show_id)),
-                    ),
+                    table_card()
+                        .child(table_header(show_id, compact, app, cx))
+                        .children(
+                            visible_services
+                                .iter()
+                                .map(|service| container_row(app, cx, service, show_id, compact)),
+                        ),
                 )
             }),
         cx,
