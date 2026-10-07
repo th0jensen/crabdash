@@ -44,19 +44,17 @@ pub fn render(
                 .w_full()
                 .track_scroll(scroll_handle)
                 .overflow_y_scroll()
-                .on_scroll_wheel(cx.listener(move |_, event: &ScrollWheelEvent, window, cx| {
-                    let delta = event.delta.pixel_delta(window.line_height());
+                .on_scroll_wheel(cx.listener(move |_, _: &ScrollWheelEvent, _, cx| {
+                    // GPUI runs this element's native scroll handler first in
+                    // the bubble phase. Clamp its result without adding twice.
                     let current_offset = scroll_handle_for_wheel.offset();
                     let max_offset = scroll_handle_for_wheel.max_offset();
-                    let next_y = (current_offset.y + delta.y)
-                        .max(-max_offset.height)
-                        .min(px(0.0));
-
+                    let next_y = current_offset.y.max(-max_offset.height).min(px(0.0));
                     if next_y != current_offset.y {
                         scroll_handle_for_wheel.set_offset(point(current_offset.x, next_y));
-                        cx.notify();
                     }
-
+                    // The header's separator is outside the scrolling element.
+                    cx.notify();
                     cx.stop_propagation();
                 }))
                 .child(div().w_full().pb(px(32.0)).child(body)),
