@@ -183,8 +183,8 @@ fn tab_button(
         .tooltip(move |_, cx| {
             control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
         })
-        // Center the visible icon and title together. Shortcuts occupy an
-        // independent layer so holding Alt never moves the visible content.
+        // Balance the leading icon with an equal trailing slot so the title
+        // itself is centered. Alt hints stay independent of this layout.
         .child(
             div()
                 .min_w_0()
@@ -206,7 +206,8 @@ fn tab_button(
                         .text_ellipsis()
                         .overflow_hidden()
                         .child(tab.label()),
-                ),
+                )
+                .child(div().flex_none().w(rems(style::ICON / 16.0))),
         )
         .child(
             div()
