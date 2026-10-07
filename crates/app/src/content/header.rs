@@ -22,7 +22,7 @@ impl Render for DraggedTab {
             .px(px(12.0))
             .flex()
             .items_center()
-            .gap(px(7.0))
+            .gap(px(4.0))
             .bg(rgb(style::SURFACE_HOVER))
             .text_size(rems(style::TEXT / 16.0))
             .text_color(rgb(style::TEXT_SELECTED))
@@ -80,7 +80,7 @@ fn tab_button(
         .min_w_0()
         .max_w(rems(app.preferences.tab_width / 16.0))
         .flex_none()
-        .px(rems(4.0 / 16.0))
+        .px(rems(8.0 / 16.0))
         .relative()
         .flex()
         .items_center()
@@ -125,48 +125,30 @@ fn tab_button(
             reorder(app, drag, Some(tab), cx);
         }))
         .tooltip(move |_, cx| control_tooltip(format!("{} · drag to reorder", tab.label()), cx))
-        // Equal side slots keep the title centered, using the shortcut's actual
-        // font width instead of a platform-specific estimate.
-        .child(
-            div()
-                .flex_none()
-                .min_w(rems(style::ICON / 16.0))
-                .h_full()
-                .relative()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(shortcut().opacity(0.0))
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(tab_icon(tab)),
-                ),
-        )
+        // Zed keeps the icon and title together with a four-pixel gap.
+        // Reserve only the trailing hint so Alt does not resize the tab.
         .child(
             div()
                 .min_w_0()
                 .h_full()
                 .flex()
                 .items_center()
-                .justify_center()
-                .text_center()
-                .text_ellipsis()
-                .overflow_hidden()
-                .child(tab.label()),
+                .gap(rems(4.0 / 16.0))
+                .child(div().flex_none().child(tab_icon(tab)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .overflow_hidden()
+                        .child(tab.label()),
+                ),
         )
         .child(
             div()
                 .flex_none()
-                .min_w(rems(style::ICON / 16.0))
                 .h_full()
                 .flex()
                 .items_center()
-                .justify_center()
                 .text_color(rgb(style::TEXT_MUTED))
                 .child(shortcut().opacity(if hints { 1.0 } else { 0.0 })),
         )
