@@ -1,4 +1,5 @@
 //! Process filtering and ordering keep sampled identities intact.
+mod view;
 use crate::{
     app::Crabdash,
     components::table::{Direction, Search, Sort},
@@ -6,6 +7,7 @@ use crate::{
 use gpui::{Context, ScrollHandle, UniformListScrollHandle};
 use machines::resources::ProcessUsage;
 use std::cmp::Ordering;
+pub(super) use view::render;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Column {
@@ -31,7 +33,7 @@ impl State {
                 direction: Direction::Descending,
             },
             search: Search::new(
-                "Filter sampled processes…",
+                "Filter processes…",
                 |app| {
                     app.system
                         .processes
@@ -66,7 +68,8 @@ fn visible<'a>(rows: &'a [ProcessUsage], sort: Sort<Column>, query: &str) -> Vec
     let mut visible: Vec<_> = rows
         .iter()
         .filter(|row| {
-            row.pid.to_string().contains(&query)
+            query.is_empty()
+                || row.pid.to_string().contains(&query)
                 || row.name.to_lowercase().contains(&query)
                 || row
                     .user
@@ -74,10 +77,22 @@ fn visible<'a>(rows: &'a [ProcessUsage], sort: Sort<Column>, query: &str) -> Vec
                     .is_some_and(|user| user.to_lowercase().contains(&query))
         })
         .collect();
+    if sort.column == Column::Name {
+        let mut named: Vec<_> = visible
+            .into_iter()
+            .map(|row| (row, row.name.to_lowercase()))
+            .collect();
+        named.sort_by(|(a, name_a), (b, name_b)| {
+            sort.order(name_a.cmp(name_b))
+                .then_with(|| a.pid.cmp(&b.pid))
+                .then_with(|| a.start_id.cmp(&b.start_id))
+        });
+        return named.into_iter().map(|(row, _)| row).collect();
+    }
     visible.sort_by(|a, b| {
         match sort.column {
             Column::Pid => sort.order(a.pid.cmp(&b.pid)),
-            Column::Name => sort.order(a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            Column::Name => Ordering::Equal,
             Column::Cpu => optional_order(
                 a.cpu_percent.filter(|value| value.is_finite()),
                 b.cpu_percent.filter(|value| value.is_finite()),
@@ -148,5 +163,44 @@ mod tests {
             [1, 2]
         );
         assert_eq!(visible(&rows, sort, "3")[0].start_id, "start-3");
+    }
+    #[test]
+    fn full_inventory_search_and_sort_include_processes_beyond_first_hundred() {
+        let mut rows: Vec<_> = (1..=250)
+            .map(|pid| process(pid, "worker", Some(10.0)))
+            .collect();
+        rows[200] = process(9001, "archive-indexer", Some(0.0));
+        rows[200].user = Some("backup-owner".into());
+        rows[200].memory_bytes = Some(16 * 1024 * 1024 * 1024);
+        rows[240] = process(1500, "busy-worker", Some(99.0));
+        let mut sort = Sort {
+            column: Column::Cpu,
+            direction: Direction::Descending,
+        };
+        let cpu = visible(&rows, sort, "");
+        assert_eq!(cpu.len(), 250);
+        assert_eq!(cpu.first().map(|row| row.pid), Some(1500));
+        for query in ["ARCHIVE", "9001", "backup-owner"] {
+            let matches = visible(&rows, sort, query);
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches.first().map(|row| row.pid), Some(9001));
+        }
+        sort.column = Column::Memory;
+        assert_eq!(
+            visible(&rows, sort, "").first().map(|row| row.pid),
+            Some(9001)
+        );
+        sort.column = Column::Pid;
+        assert_eq!(
+            visible(&rows, sort, "").first().map(|row| row.pid),
+            Some(9001)
+        );
+        sort.direction = Direction::Ascending;
+        assert_eq!(visible(&rows, sort, "").first().map(|row| row.pid), Some(1));
+        sort.column = Column::Name;
+        assert_eq!(
+            visible(&rows, sort, "").first().map(|row| row.pid),
+            Some(9001)
+        );
     }
 }

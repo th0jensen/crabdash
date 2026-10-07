@@ -160,9 +160,12 @@ information; switching or rearranging tabs refreshes newly visible pages.
 The **System** tab samples the selected machine every two seconds by default while visible,
 including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,
 memory, network, disk activity, machine details, and a card for each graphics adapter.
-The process table supports filtering and sorting; CPU percentages measure a share
-of the machine's total CPU capacity. Up to 100 processes are displayed after ranking
-the sampled process set. CPU and throughput start with **Sampling…** until two counter
+The process table supports filtering and sorting across the full sampled inventory,
+including idle processes; CPU percentages measure a share of the machine's total CPU
+capacity. The list renders visible rows and retains the collectors' 8,192-process
+safety limit. Counts distinguish search matches, sampled processes, and the detected
+total, with incomplete samples identified explicitly. CPU and throughput start with
+**Sampling…** until two counter
 snapshots are available. Resource sampling is independent of
 automatic table refresh; **Preferences → System → Sample interval** adjusts it
 from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; charts use actual elapsed sample times, with solid/dashed legends for paired I/O and gaps for unavailable samples. Live history stays in memory and resets after a reboot
