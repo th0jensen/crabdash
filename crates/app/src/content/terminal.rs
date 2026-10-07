@@ -241,8 +241,29 @@ fn rgb_to_rgba(r: u8, g: u8, b: u8) -> Rgba {
 const LOG_FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
 pub(crate) const INTERACTIVE_CELL_WIDTH_PX: f32 = 8.0;
 pub(crate) const INTERACTIVE_CELL_HEIGHT_PX: f32 = 20.0;
-// 16 rows × 20px exactly fills the quake panel: 380 − 34 header − 26 padding.
-pub(crate) const INTERACTIVE_ROWS: u16 = 16;
+const QUAKE_HEADER_HEIGHT_PX: f32 = 34.0;
+// 16 top + 10 bottom padding inside the quake panel content area.
+const QUAKE_VERTICAL_PADDING_PX: f32 = 26.0;
+const QUAKE_MIN_ROWS: u16 = 4;
+const QUAKE_MAX_ROWS: u16 = 48;
+/// Default: 16 rows × 20px + 34 header + 26 padding.
+pub(crate) const QUAKE_DEFAULT_HEIGHT_PX: f32 =
+    QUAKE_HEADER_HEIGHT_PX + QUAKE_VERTICAL_PADDING_PX + 16.0 * INTERACTIVE_CELL_HEIGHT_PX;
+
+/// Number of terminal rows that fit a quake panel of the given height.
+pub(crate) fn quake_rows_for_height(height: Pixels) -> u16 {
+    let rows = ((f32::from(height) - QUAKE_HEADER_HEIGHT_PX - QUAKE_VERTICAL_PADDING_PX)
+        / INTERACTIVE_CELL_HEIGHT_PX)
+        .floor();
+    rows.clamp(f32::from(QUAKE_MIN_ROWS), f32::from(QUAKE_MAX_ROWS)) as u16
+}
+
+/// Panel height that exactly fits the given number of terminal rows.
+pub(crate) fn quake_height_for_rows(rows: u16) -> Pixels {
+    px(QUAKE_HEADER_HEIGHT_PX
+        + QUAKE_VERTICAL_PADDING_PX
+        + f32::from(rows) * INTERACTIVE_CELL_HEIGHT_PX)
+}
 const CHAR_WIDTH_PX: f32 = INTERACTIVE_CELL_WIDTH_PX;
 const LINE_HEIGHT_PX: f32 = INTERACTIVE_CELL_HEIGHT_PX;
 const MAX_VIEWPORT_HEIGHT_PX: f32 = 300.0;
@@ -342,6 +363,18 @@ impl QuakeTerminalStatus {
     }
 }
 
+/// Marker for an in-progress quake panel resize drag.
+pub(crate) struct QuakeResizeDrag;
+
+/// Invisible drag view: resizing is driven by `on_drag_move`, nothing follows the cursor.
+struct QuakeResizeDragView;
+
+impl Render for QuakeResizeDragView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_0()
+    }
+}
+
 pub(crate) struct QuakeTerminal {
     pub machine_name: String,
     pub endpoint: String,
@@ -370,7 +403,7 @@ pub(crate) fn render_quake(
         .left_0()
         .right_0()
         .bottom_0()
-        .h(px(380.0))
+        .h(app.quake_height)
         .bg(rgb(0x181818))
         .border_t_1()
         .border_color(if focused {
@@ -382,6 +415,18 @@ pub(crate) fn render_quake(
         .flex()
         .flex_col()
         .occlude()
+        .on_drag_move::<QuakeResizeDrag>(cx.listener(
+            |this, event: &DragMoveEvent<QuakeResizeDrag>, window, cx| {
+                cx.set_active_drag_cursor_style(CursorStyle::ResizeUpDown, window);
+                let viewport_height = window.viewport_size().height;
+                let min_height = px(QUAKE_HEADER_HEIGHT_PX
+                    + QUAKE_VERTICAL_PADDING_PX
+                    + f32::from(QUAKE_MIN_ROWS) * INTERACTIVE_CELL_HEIGHT_PX);
+                let height = (viewport_height - event.event.position.y)
+                    .clamp(min_height, viewport_height - px(80.0));
+                this.set_quake_height(height, window, cx);
+            },
+        ))
         .child(
             div()
                 .h(px(34.0))
@@ -470,5 +515,18 @@ pub(crate) fn render_quake(
                     ))
                 })
                 .child(quake.input.clone()),
+        )
+        .child(
+            div()
+                .id("quake-resize-handle")
+                .absolute()
+                .top(px(-3.0))
+                .left_0()
+                .right_0()
+                .h(px(7.0))
+                .cursor(CursorStyle::ResizeUpDown)
+                .on_drag(QuakeResizeDrag, |_, _, _, cx| {
+                    cx.new(|_| QuakeResizeDragView)
+                }),
         )
 }

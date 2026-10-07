@@ -87,6 +87,7 @@ pub struct Crabdash {
     pub(crate) services_scroll_handle: ScrollHandle,
     pub(crate) quake_terminals: HashMap<Uuid, content::terminal::QuakeTerminal>,
     pub(crate) quake_terminal_open: bool,
+    pub(crate) quake_height: Pixels,
     pub(crate) docker_run_config: DockerRunConfig,
     pub(crate) docker_run_modal_open: bool,
     pub(crate) remote_host_field: Entity<TextField>,
@@ -155,6 +156,7 @@ impl Crabdash {
             services_scroll_handle: ScrollHandle::new(),
             quake_terminals: HashMap::default(),
             quake_terminal_open: false,
+            quake_height: px(content::terminal::QUAKE_DEFAULT_HEIGHT_PX),
             docker_run_config: DockerRunConfig::new(cx),
             docker_run_modal_open: false,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
@@ -571,12 +573,12 @@ impl Crabdash {
         }
     }
 
-    fn quake_terminal_size(window: &Window) -> TerminalSize {
+    fn quake_terminal_size(&self, window: &Window) -> TerminalSize {
         let available_width = (window.viewport_size().width - px(20.0)).max(px(80.0));
         let columns = (available_width / px(content::terminal::INTERACTIVE_CELL_WIDTH_PX))
             .floor()
             .clamp(20.0, u16::MAX as f32) as u16;
-        let rows = content::terminal::INTERACTIVE_ROWS;
+        let rows = content::terminal::quake_rows_for_height(self.quake_height);
         TerminalSize {
             columns,
             rows,
@@ -586,12 +588,31 @@ impl Crabdash {
         }
     }
 
+    /// Snap the quake panel height to whole terminal rows and apply it,
+    /// resizing the Ghostty terminal and PTY when the row count changed.
+    pub(crate) fn set_quake_height(
+        &mut self,
+        height: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapped = content::terminal::quake_height_for_rows(
+            content::terminal::quake_rows_for_height(height),
+        );
+        if self.quake_height == snapped {
+            return;
+        }
+        self.quake_height = snapped;
+        self.resize_quake_terminal(window);
+        cx.notify();
+    }
+
     fn resize_quake_terminal(&mut self, window: &Window) {
         if !self.quake_terminal_open {
             return;
         }
 
-        let size = Self::quake_terminal_size(window);
+        let size = self.quake_terminal_size(window);
         let Some(quake) = self
             .active_quake_terminal_mut()
             .filter(|quake| quake.size != size)
@@ -637,7 +658,7 @@ impl Crabdash {
             .as_ref()
             .map(|remote| format!("{}@{}", remote.user, remote.host))
             .unwrap_or_else(|| "Local shell".to_string());
-        let size = Self::quake_terminal_size(window);
+        let size = self.quake_terminal_size(window);
         let terminal =
             match content::terminal::TerminalState::new_interactive(size.columns, size.rows) {
                 Ok(terminal) => terminal,
