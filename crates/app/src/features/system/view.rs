@@ -196,7 +196,10 @@ fn cpu_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                                             .text_color(rgb(style::TEXT_MUTED))
                                             .child(format!("CPU {}", core.name)),
                                     )
-                                    .child(percent(core.percent)),
+                                    .child(match core.percent {
+                                        Some(value) if value.is_finite() => percent(Some(value)),
+                                        _ => "—".into(),
+                                    }),
                             )
                             .child(meter(core.percent.unwrap_or(0.0)))
                     })),
