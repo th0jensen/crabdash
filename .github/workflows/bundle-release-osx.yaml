@@ -10,13 +10,23 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Read pinned Ghostty revision
+        id: ghostty
+        run: |
+          revision=$(git -C vendor/ghostty rev-parse HEAD)
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          # Cargo.lock does not track native sources inside the Ghostty submodule.
+          shared-key: macos-zig-0.16.0-${{ steps.ghostty.outputs.revision }}
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
       - name: Build app bundle
