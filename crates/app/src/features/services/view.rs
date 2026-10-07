@@ -194,7 +194,10 @@ fn system_service_row(
     compact: bool,
 ) -> Div {
     let service_name = service.name.clone();
-    let pending_action = app.pending_service_actions.get(&service_name).copied();
+    let pending_action = app
+        .pending_service_actions
+        .get(&(app.selected_machine().uuid, service_name.clone()))
+        .copied();
     let actions_disabled = pending_action.is_some();
     let log_key = (app.selected_machine().uuid, service_name.clone());
     let logs_open = app.logs_open_services.contains(&log_key);

@@ -1,6 +1,7 @@
 //! Docker feature.
 pub(crate) mod brand;
 mod controller;
+mod request;
 mod view;
 pub(crate) use view::*;
 pub(crate) mod remove_modal;

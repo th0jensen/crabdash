@@ -53,6 +53,7 @@ pub struct DockerRunConfig {
     pub(super) show_preview: bool,
     pub busy: bool,
     pub error: Option<String>,
+    pub(super) submission: super::request::RunRequest,
     _changes: Vec<Subscription>,
 }
 
@@ -79,6 +80,7 @@ impl DockerRunConfig {
             show_preview: false,
             busy: false,
             error: None,
+            submission: super::request::RunRequest::default(),
             _changes: Vec::new(),
         };
         let fields = [
@@ -96,6 +98,15 @@ impl DockerRunConfig {
             config._changes.push(observe_field(field, cx));
         }
         config
+    }
+
+    /// Invalidates a removed target's submission; its command may still finish.
+    pub(crate) fn cancel_run_for(&mut self, machine: uuid::Uuid) -> bool {
+        if !self.submission.cancel_for(machine) {
+            return false;
+        }
+        self.busy = false;
+        true
     }
 
     pub fn reset(&mut self, cx: &mut Context<Crabdash>) {

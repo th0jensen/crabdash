@@ -2,6 +2,7 @@
 pub(crate) mod add_modal;
 mod controller;
 pub(crate) mod logos;
+mod model;
 pub(crate) mod sidebar;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

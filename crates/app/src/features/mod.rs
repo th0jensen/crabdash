@@ -5,6 +5,7 @@ pub(crate) mod logs;
 pub(crate) mod machines;
 pub(crate) mod notifications;
 pub mod preferences;
+pub(crate) mod refresh;
 pub(crate) mod services;
 pub(crate) mod terminal;
 pub(crate) mod workspaces;

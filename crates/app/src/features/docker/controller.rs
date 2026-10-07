@@ -6,6 +6,9 @@ use uuid::Uuid;
 
 impl Crabdash {
     pub(crate) fn open_docker_run_modal(&mut self, cx: &mut Context<Self>) {
+        if self.docker_run_config.busy {
+            return;
+        }
         self.docker_run_modal_open = true;
         cx.notify();
     }
@@ -32,6 +35,8 @@ impl Crabdash {
         };
         let mut machine = self.selected_machine().clone();
         let machine_uuid = machine.uuid;
+        let submission = self.docker_run_config.submission.begin(machine_uuid);
+        let refresh_ticket = self.docker_refresh.restart(machine_uuid);
         self.docker_run_config.busy = true;
         self.docker_run_config.error = None;
         cx.notify();
@@ -45,14 +50,33 @@ impl Crabdash {
                 })
                 .await;
             this.update(cx, move |this, cx| {
+                if !this
+                    .docker_run_config
+                    .submission
+                    .complete(machine_uuid, submission)
+                {
+                    return;
+                }
                 this.docker_run_config.busy = false;
+                let refresh_current = this.docker_refresh.complete(&machine_uuid, refresh_ticket);
+                if !this
+                    .machine_store
+                    .machines
+                    .iter()
+                    .any(|machine| machine.uuid == machine_uuid)
+                {
+                    this.docker_run_modal_open = false;
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(containers) => {
-                        if let Some(machine) = this
-                            .machine_store
-                            .machines
-                            .iter_mut()
-                            .find(|m| m.uuid == machine_uuid)
+                        if refresh_current
+                            && let Some(machine) = this
+                                .machine_store
+                                .machines
+                                .iter_mut()
+                                .find(|m| m.uuid == machine_uuid)
                         {
                             match containers {
                                 Ok(containers) => {
@@ -68,7 +92,9 @@ impl Crabdash {
                         }
                         this.docker_run_modal_open = false;
                         this.docker_run_config.reset(cx);
-                        this.clear_status_message();
+                        if !refresh_current {
+                            this.refresh_docker_for(machine_uuid, true, cx);
+                        }
                     }
                     Err(error) => {
                         this.docker_run_config.error =
@@ -83,14 +109,32 @@ impl Crabdash {
     }
 
     pub(crate) fn refresh_docker(&mut self, cx: &mut Context<Self>) {
-        let mut machine = self.selected_machine().clone();
-        let machine_uuid = machine.uuid;
-        let counter = self
-            .docker_refresh_generation
-            .entry(machine_uuid)
-            .or_default();
-        *counter = counter.saturating_add(1);
-        let generation = *counter;
+        self.refresh_docker_for(self.selected_machine().uuid, false, cx);
+    }
+
+    pub(crate) fn refresh_docker_for(
+        &mut self,
+        machine_uuid: Uuid,
+        replace: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut machine) = self
+            .machine_store
+            .machines
+            .iter()
+            .find(|machine| machine.uuid == machine_uuid)
+            .cloned()
+        else {
+            return;
+        };
+        let ticket = if replace {
+            self.docker_refresh.restart(machine_uuid)
+        } else {
+            let Some(ticket) = self.docker_refresh.begin(machine_uuid) else {
+                return;
+            };
+            ticket
+        };
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let (result, path) = cx
                 .background_spawn(async move {
@@ -99,7 +143,7 @@ impl Crabdash {
                 })
                 .await;
             this.update(cx, move |this, cx| {
-                if this.docker_refresh_generation.get(&machine_uuid) != Some(&generation) {
+                if !this.docker_refresh.complete(&machine_uuid, ticket) {
                     return;
                 }
                 let selected = this.selected_machine().uuid == machine_uuid;
@@ -171,6 +215,8 @@ impl Crabdash {
         let name = container.name.clone();
         container.error = None;
         let mut machine = machine.clone();
+        let action_ticket = self.docker_action_requests.restart(key.clone());
+        let refresh_ticket = self.docker_refresh.restart(machine_uuid);
         self.pending_docker_actions.insert(key.clone(), action);
         cx.notify();
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
@@ -182,7 +228,12 @@ impl Crabdash {
                 })
                 .await;
             this.update(cx, move |this, cx| {
+                if !this.docker_action_requests.complete(&key, action_ticket) {
+                    return;
+                }
                 this.pending_docker_actions.remove(&key);
+                let selected = this.selected_machine().uuid == machine_uuid;
+                let refresh_current = this.docker_refresh.complete(&machine_uuid, refresh_ticket);
                 let Some(machine) = this
                     .machine_store
                     .machines
@@ -197,13 +248,16 @@ impl Crabdash {
                             machine.services.docker.retain(|c| c.id != id);
                             this.logs_open_containers.remove(&key);
                             this.expanded_docker_logs.remove(&key);
+                            this.docker_log_refresh.forget(&key);
                         }
                         match refresh {
+                            _ if !refresh_current => {
+                                this.refresh_docker_for(machine_uuid, true, cx);
+                            }
                             Ok(containers) => {
                                 machine.services.docker = containers;
                                 machine.services.docker_error = None;
                                 machine.services.docker_not_installed = false;
-                                this.clear_status_message();
                             }
                             Err(err) => {
                                 let message = format!(
@@ -211,7 +265,9 @@ impl Crabdash {
                                     action.label()
                                 );
                                 machine.services.docker_error = Some(message.clone());
-                                this.set_status_error(message);
+                                if selected {
+                                    this.set_status_error(message);
+                                }
                             }
                         }
                     }
@@ -223,7 +279,9 @@ impl Crabdash {
                         {
                             container.error = Some(message.clone());
                         }
-                        this.set_status_error(message);
+                        if selected {
+                            this.set_status_error(message);
+                        }
                     }
                 }
                 cx.notify();
@@ -239,11 +297,20 @@ impl Crabdash {
 
         if this.logs_open_containers.contains(&log_key) {
             this.logs_open_containers.remove(&log_key);
+            this.docker_log_refresh.forget(&log_key);
             cx.notify();
             return;
-        } else {
-            this.logs_open_containers.insert(log_key.clone());
         }
+
+        let Some(mut machine) = this
+            .machine_store
+            .machines
+            .iter()
+            .find(|machine| machine.uuid == log_key.0)
+            .cloned()
+        else {
+            return;
+        };
 
         {
             let state = match crate::features::terminal::TerminalState::new_log(
@@ -257,10 +324,11 @@ impl Crabdash {
                     return;
                 }
             };
+            this.logs_open_containers.insert(log_key.clone());
             this.expanded_docker_logs.insert(log_key.clone(), state);
+            let ticket = this.docker_log_refresh.restart(log_key.clone());
 
             let lines = this.preferences.log_lines;
-            let mut machine = this.selected_machine().clone();
             let fetch_id = id.clone();
             let fetch_key = log_key.clone();
             cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
@@ -273,6 +341,16 @@ impl Crabdash {
                         )
                         .await;
                     this.update(&mut cx, move |this, cx| {
+                        if !this.docker_log_refresh.complete(&fetch_key, ticket)
+                            || !this.logs_open_containers.contains(&fetch_key)
+                            || !this
+                                .machine_store
+                                .machines
+                                .iter()
+                                .any(|machine| machine.uuid == fetch_key.0)
+                        {
+                            return;
+                        }
                         if let Some(state) = this.expanded_docker_logs.get_mut(&fetch_key) {
                             match result {
                                 Ok(logs) => state.feed(logs),

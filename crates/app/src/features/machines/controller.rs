@@ -1,7 +1,7 @@
 use super::AddMachineAuthMode;
 use super::sidebar;
-use crate::components::text_field::{FieldTab, FieldTabPrev};
 use crate::{SubmitAddMachineModal, app::Crabdash};
+use crate::components::text_field::{FieldTab, FieldTabPrev};
 use anyhow::anyhow;
 use gpui::*;
 use machines::{
@@ -9,7 +9,6 @@ use machines::{
     remote_connection::AuthMethod,
     store::{MachineStore, load_store},
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -22,41 +21,55 @@ impl Crabdash {
         &mut self.machine_store.machines[self.selected_machine]
     }
 
-    pub(crate) fn sync_state(&mut self, cx: &mut Context<Self>) {
-        let mut mc = self.selected_machine_mut().clone();
-
+    pub(crate) fn sync_state_for(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
+        let Some(mut machine) = self
+            .machine_store
+            .machines
+            .iter()
+            .find(|m| m.uuid == uuid)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(ticket) = self.machine_refresh.begin(uuid) else {
+            return;
+        };
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            if let Err(e) = mc.sync_system_info().await {
-                tracing::warn!(error = %e, "sync_system_info failed");
-            }
-
-            let store = load_store().await;
-            this.update(cx, |this, cx| match store {
-                Ok(store) => {
-                    let saved: HashMap<Uuid, _> = this
-                        .machine_store
-                        .machines
-                        .iter()
-                        .map(|m| (m.uuid, (m.services.clone(), m.remote.clone())))
-                        .collect();
-                    this.machine_store.machines = store.machines;
-                    for m in &mut this.machine_store.machines {
-                        if let Some((services, old_remote)) = saved.get(&m.uuid) {
-                            m.services = services.clone();
-                            if let (Some(new_rc), Some(old_rc)) =
-                                (m.remote.as_mut(), old_remote.as_ref())
-                            {
-                                new_rc.restore_session_from(old_rc);
-                            }
+            let result = cx
+                .background_spawn(async move {
+                    machine.sync_system_info().await?;
+                    Ok::<_, anyhow::Error>((machine.system_info, machine.kind))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if !this.machine_refresh.complete(&uuid, ticket) {
+                    return;
+                }
+                match result {
+                    Ok((info, kind)) => {
+                        if let Some(machine) = this
+                            .machine_store
+                            .machines
+                            .iter_mut()
+                            .find(|m| m.uuid == uuid)
+                        {
+                            machine.system_info = info;
+                            machine.kind = kind;
                         }
                     }
-                    cx.notify();
+                    Err(error) => tracing::warn!(%error, "sync_system_info failed"),
                 }
-                Err(e) => tracing::warn!(error = %e, "load_store failed"),
+                cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn replace_machine_store(&mut self, mut store: MachineStore) {
+        let selected = self.selected_machine().uuid;
+        self.selected_machine = super::model::reconcile(&mut store, &self.machine_store, selected);
+        self.machine_store = store;
     }
 
     pub(crate) fn start_update_loop(&mut self, cx: &mut Context<Self>) {
@@ -87,13 +100,18 @@ impl Crabdash {
                         Some(rc) => rc.has_active_session().await,
                         None => true,
                     };
-                    connected_states.push(state);
+                    connected_states.push((machine.uuid, state));
                 }
 
                 // Apply connected states (shared Arc, so clones see this too) and refresh
                 this.update(cx, |this, cx| {
-                    for (i, connected) in connected_states.into_iter().enumerate() {
-                        if let Some(m) = this.machine_store.machines.get_mut(i) {
+                    for (uuid, connected) in connected_states {
+                        if let Some(m) = this
+                            .machine_store
+                            .machines
+                            .iter_mut()
+                            .find(|m| m.uuid == uuid)
+                        {
                             if let Some(rc) = m.remote.as_ref() {
                                 rc.set_connected(connected);
                             }
@@ -129,10 +147,28 @@ impl Crabdash {
                         {
                             tracing::debug!(%error, "Failed to shut down deleted machine terminal");
                         }
-                        this.machine_store = store;
-                        this.selected_machine = this
-                            .selected_machine
-                            .min(this.machine_store.machines.len().saturating_sub(1));
+                        this.machine_selection_generation =
+                            this.machine_selection_generation.wrapping_add(1);
+                        this.replace_machine_store(store);
+                        if this.docker_run_config.cancel_run_for(uuid) {
+                            this.docker_run_modal_open = false;
+                        }
+                        this.machine_refresh.forget(&uuid);
+                        this.disks_refresh.forget(&uuid);
+                        this.services_refresh.forget(&uuid);
+                        this.docker_refresh.forget(&uuid);
+                        this.docker_log_refresh.forget_where(|key| key.0 == uuid);
+                        this.service_log_refresh.forget_where(|key| key.0 == uuid);
+                        this.docker_action_requests
+                            .forget_where(|key| key.0 == uuid);
+                        this.service_action_requests
+                            .forget_where(|key| key.0 == uuid);
+                        this.pending_service_actions.retain(|key, _| key.0 != uuid);
+                        this.pending_docker_actions.retain(|key, _| key.0 != uuid);
+                        this.logs_open_services.retain(|key| key.0 != uuid);
+                        this.logs_open_containers.retain(|key| key.0 != uuid);
+                        this.expanded_service_logs.retain(|key, _| key.0 != uuid);
+                        this.expanded_docker_logs.retain(|key, _| key.0 != uuid);
                         this.clear_status_message();
                         this.refresh_services(cx);
                         cx.notify();
@@ -272,12 +308,34 @@ impl Crabdash {
 
         cx.spawn(
             async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| -> Result<()> {
-                let (mut cx, mut store) = (cx.clone(), load_store().await?);
+                let mut cx = cx.clone();
+                let mut store = match load_store().await {
+                    Ok(store) => store,
+                    Err(error) => {
+                        this.update(&mut cx, move |this, cx| {
+                            this.set_status_error(format!("Unable to load machines: {error}"));
+                            this.add_machine_error = Some(error);
+                            cx.notify();
+                        })
+                        .ok();
+                        return Ok(());
+                    }
+                };
                 match store.add_remote_machine(user, host, auth).await {
                     Ok(index) => {
                         this.update(&mut cx, move |this, cx| {
-                            this.machine_store = store;
-                            this.selected_machine = index;
+                            let added = store.machines[index].uuid;
+                            this.machine_selection_generation =
+                                this.machine_selection_generation.wrapping_add(1);
+                            this.replace_machine_store(store);
+                            if let Some(index) = this
+                                .machine_store
+                                .machines
+                                .iter()
+                                .position(|m| m.uuid == added)
+                            {
+                                this.selected_machine = index;
+                            }
                             this.add_machine_modal_open = false;
                             this.clear_remote_machine_form(cx);
                             this.clear_status_message();

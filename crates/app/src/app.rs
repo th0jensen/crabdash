@@ -56,12 +56,20 @@ pub struct Crabdash {
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
     pub(crate) workspaces: features::workspaces::State,
-    pub(crate) docker_refresh_generation: HashMap<Uuid, u64>,
+    pub(crate) docker_refresh: features::refresh::Requests,
+    pub(crate) disks_refresh: features::refresh::Requests,
+    pub(crate) services_refresh: features::refresh::Requests,
+    pub(crate) machine_refresh: features::refresh::Requests,
+    pub(crate) machine_selection_generation: u64,
+    pub(crate) docker_log_refresh: features::refresh::Requests<(Uuid, String)>,
+    pub(crate) service_log_refresh: features::refresh::Requests<(Uuid, String)>,
+    pub(crate) docker_action_requests: features::refresh::Requests<(Uuid, String)>,
+    pub(crate) service_action_requests: features::refresh::Requests<(Uuid, String)>,
     pub(crate) docker_table: features::docker::table::State,
     pub(crate) disks_table: features::disks::table::State,
     pub(crate) services_table: features::services::table::State,
     pub(crate) pending_docker_actions: HashMap<(Uuid, String), DockerAction>,
-    pub(crate) pending_service_actions: HashMap<String, ServiceAction>,
+    pub(crate) pending_service_actions: HashMap<(Uuid, String), ServiceAction>,
     pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
@@ -102,10 +110,14 @@ pub struct Crabdash {
 
 impl Crabdash {
     pub(crate) fn refresh_services(&mut self, cx: &mut Context<Self>) {
-        self.sync_state(cx);
-        self.refresh_docker(cx);
-        self.refresh_disks(cx);
-        self.refresh_system_services(cx);
+        self.refresh_machine(self.selected_machine().uuid, cx);
+    }
+
+    pub(crate) fn refresh_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
+        self.sync_state_for(uuid, cx);
+        self.refresh_docker_for(uuid, false, cx);
+        self.refresh_disks_for(uuid, cx);
+        self.refresh_system_services_for(uuid, false, cx);
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -148,7 +160,15 @@ impl Crabdash {
             selected_machine: 0,
             active_tab,
             workspaces,
-            docker_refresh_generation: HashMap::new(),
+            docker_refresh: Default::default(),
+            disks_refresh: Default::default(),
+            services_refresh: Default::default(),
+            machine_refresh: Default::default(),
+            machine_selection_generation: 0,
+            docker_log_refresh: Default::default(),
+            service_log_refresh: Default::default(),
+            docker_action_requests: Default::default(),
+            service_action_requests: Default::default(),
             docker_table: features::docker::table::State::new(cx),
             disks_table: features::disks::table::State::new(cx),
             services_table: features::services::table::State::new(cx),

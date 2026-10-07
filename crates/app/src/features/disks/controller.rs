@@ -10,9 +10,19 @@ impl Crabdash {
         cx.notify();
     }
 
-    pub(crate) fn refresh_disks(&mut self, cx: &mut Context<Self>) {
-        let machine = self.selected_machine().clone();
-        let machine_index = self.selected_machine;
+    pub(crate) fn refresh_disks_for(&mut self, uuid: uuid::Uuid, cx: &mut Context<Self>) {
+        let Some(machine) = self
+            .machine_store
+            .machines
+            .iter()
+            .find(|m| m.uuid == uuid)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(ticket) = self.disks_refresh.begin(uuid) else {
+            return;
+        };
         cx.spawn({
             let mut machine = machine.clone();
             async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
@@ -20,7 +30,16 @@ impl Crabdash {
                     .background_spawn(async move { machine.list_disks().await })
                     .await;
                 this.update(cx, move |this, cx| {
-                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
+                    if !this.disks_refresh.complete(&uuid, ticket) {
+                        return;
+                    }
+                    let selected = this.selected_machine().uuid == uuid;
+                    if let Some(machine) = this
+                        .machine_store
+                        .machines
+                        .iter_mut()
+                        .find(|machine| machine.uuid == uuid)
+                    {
                         match result {
                             Ok(disks) => {
                                 machine.services.disks = disks;
@@ -31,7 +50,7 @@ impl Crabdash {
                                 let newly_failed =
                                     machine.services.disks_error.as_ref() != Some(&message);
                                 machine.services.disks_error = Some(message.clone());
-                                if newly_failed && this.selected_machine == machine_index {
+                                if newly_failed && selected {
                                     this.set_status_error(message);
                                 }
                             }
