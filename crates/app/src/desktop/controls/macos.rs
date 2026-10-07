@@ -8,8 +8,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAccessibility, NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua,
-    NSBezelStyle, NSButton, NSButtonType, NSCellImagePosition, NSControlSize, NSImage,
-    NSImageScaling, NSView, NSWorkspace,
+    NSBezelStyle, NSButton, NSButtonType, NSCellImagePosition, NSControlSize, NSFontWeightRegular,
+    NSImage, NSImageScaling, NSImageSymbolConfiguration, NSView, NSWorkspace,
     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
 use objc2_foundation::{
@@ -18,6 +18,7 @@ use objc2_foundation::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use smol::channel::Sender;
+use std::cell::Cell;
 
 define_class!(
     // SAFETY: NSObject has no subclassing requirements; the weak button target
@@ -119,6 +120,7 @@ fn restore_renderer_focus(window: &Window) {
 struct NativeButton {
     button: Retained<NSButton>,
     _target: Retained<ButtonTarget>,
+    symbol_point_size: Cell<Option<f64>>,
 }
 impl Drop for NativeButton {
     fn drop(&mut self) {
@@ -208,6 +210,7 @@ impl NativeButton {
         Some(Self {
             button,
             _target: target,
+            symbol_point_size: Cell::new(None),
         })
     }
     fn synchronize(&self, bounds: Bounds<Pixels>, selected: bool, window: &Window) -> bool {
@@ -215,6 +218,24 @@ impl NativeButton {
             self.button.setHidden(true);
             return false;
         };
+        let symbol_point_size = f64::from(crate::components::style::ICON)
+            * f64::from(f32::from(window.rem_size()))
+            / 16.0;
+        if self.symbol_point_size.get() != Some(symbol_point_size)
+            && self
+                .button
+                .respondsToSelector(sel!(setSymbolConfiguration:))
+        {
+            // Both symbol configuration and the guarded symbol-image factory
+            // are public macOS 11 APIs. Older runtimes use the GPUI fallback.
+            let configuration = NSImageSymbolConfiguration::configurationWithPointSize_weight(
+                symbol_point_size,
+                // SAFETY: AppKit exports this immutable regular font weight.
+                unsafe { NSFontWeightRegular },
+            );
+            self.button.setSymbolConfiguration(Some(&configuration));
+            self.symbol_point_size.set(Some(symbol_point_size));
+        }
         let glass = AnyClass::get(c"NSGlassEffectView").is_some()
             && !crate::desktop::appearance::reduced_transparency();
         self.button.setBezelStyle(if glass {
