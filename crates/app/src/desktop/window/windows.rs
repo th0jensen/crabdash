@@ -6,7 +6,9 @@ use crate::components::{
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_RESTORE, ShowWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    IsIconic, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, ShowWindow, ShowWindowAsync,
+};
 
 pub(super) const LEADING_PADDING: f32 = 0.0;
 pub(super) fn configure(_: &mut WindowOptions) {}
@@ -25,11 +27,44 @@ pub(super) fn activate_window(window: &mut Window, _: Option<&str>) {
     if let Ok(handle) = HasWindowHandle::window_handle(window) {
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
             unsafe {
-                ShowWindow(handle.hwnd.get() as _, SW_RESTORE);
+                let hwnd = handle.hwnd.get() as _;
+                ShowWindow(
+                    hwnd,
+                    if IsIconic(hwnd) != 0 {
+                        SW_RESTORE
+                    } else {
+                        SW_SHOW
+                    },
+                );
             }
         }
     }
     window.activate_window();
+}
+pub(super) fn zoom(window: &mut Window) {
+    if let Ok(handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            let hwnd = handle.hwnd.get() as _;
+            // GPUI's Windows zoom currently only maximizes. Match the caption
+            // button's native toggle and queue it without reentering GPUI's
+            // active input callback through synchronous WM_SIZE delivery.
+            unsafe {
+                let command = if IsZoomed(hwnd) != 0 {
+                    SW_RESTORE
+                } else {
+                    SW_MAXIMIZE
+                };
+                if ShowWindowAsync(hwnd, command) == 0 {
+                    tracing::warn!(
+                        "Unable to change the native Windows window state: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
+            return;
+        }
+    }
+    window.zoom_window();
 }
 pub(super) fn controls(window: &Window) -> Div {
     div()
@@ -54,7 +89,7 @@ pub(super) fn controls(window: &Window) -> Div {
             },
             WindowControlArea::Max,
             "Maximize / restore · Ctrl+Shift+M",
-            |_, window, _| window.zoom_window(),
+            |_, window, _| super::zoom(window),
         ))
         .child(control(
             "window-close",

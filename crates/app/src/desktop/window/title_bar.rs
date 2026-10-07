@@ -20,9 +20,13 @@ pub(crate) fn render(
         .id("app-titlebar")
         .flex_none()
         .window_control_area(WindowControlArea::Drag)
-        .on_mouse_down(MouseButton::Left, |event, window, _| {
+        .on_mouse_down(MouseButton::Left, |event, window, cx| {
             if event.click_count == 2 {
-                window.zoom_window();
+                super::zoom(window);
+                // Windows forwards caption double-clicks to this handler. We
+                // handled the toggle, so DefWindowProc must not toggle again.
+                window.prevent_default();
+                cx.stop_propagation();
             } else {
                 window.start_window_move();
             }

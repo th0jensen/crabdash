@@ -18,6 +18,9 @@ pub(super) fn activate_window(window: &mut Window, _: Option<&str>) {
     }
     window.activate_window();
 }
+pub(super) fn zoom(window: &mut Window) {
+    window.zoom_window();
+}
 fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {

@@ -44,6 +44,9 @@ pub(crate) fn register_lifecycle(cx: &mut App) {
 pub(crate) fn activate_window(window: &mut Window, token: Option<&str>) {
     platform::activate_window(window, token);
 }
+pub(crate) fn zoom(window: &mut Window) {
+    platform::zoom(window);
+}
 /// Hide only this dashboard while keeping its sessions available to the tray.
 pub(crate) fn hide_to_tray(window: &mut Window) {
     platform::hide_to_tray(window);

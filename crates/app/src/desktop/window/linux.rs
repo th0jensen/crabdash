@@ -71,7 +71,7 @@ pub(super) fn controls(window: &Window) -> Div {
                     Icon::Square
                 },
                 WindowControlArea::Max,
-                |_, window, _| window.zoom_window(),
+                |_, window, _| super::zoom(window),
             ))
         })
         .child(window_button(
@@ -192,6 +192,9 @@ pub(super) fn activate_window(window: &mut Window, token: Option<&str>) {
         }
     }
     window.activate_window();
+}
+pub(super) fn zoom(window: &mut Window) {
+    window.zoom_window();
 }
 
 pub(super) fn configure(options: &mut WindowOptions) {

@@ -392,7 +392,7 @@ impl Render for Crabdash {
                 window.minimize_window();
             })
             .on_action(|_: &ZoomWindow, window, _| {
-                window.zoom_window();
+                crate::desktop::window::zoom(window);
             })
             .on_action(|_: &ToggleFullScreen, window, _| {
                 window.toggle_fullscreen();
