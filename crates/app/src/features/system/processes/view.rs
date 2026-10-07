@@ -12,6 +12,7 @@ use crate::{
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use machines::resources::{ProcessUsage, ResourceUsage};
+use std::rc::Rc;
 
 fn process_heading(
     app: &Crabdash,
@@ -134,7 +135,7 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
 }
 pub(crate) fn render(
     app: &Crabdash,
-    usage: &ResourceUsage,
+    usage: &Rc<ResourceUsage>,
     width: f32,
     cx: &mut Context<Crabdash>,
 ) -> Div {
@@ -149,8 +150,8 @@ pub(crate) fn render(
         return card().child("Preparing process list…");
     };
     let query = state.search.query(cx);
-    let rows = state.visible(processes, &query);
-    let count = rows.len();
+    let prepared = state.prepare(app.selected_machine().uuid, usage, &query);
+    let count = prepared.indices.len();
     let sampled = processes.len();
     let filtering = !query.trim().is_empty();
     let incomplete =
@@ -283,11 +284,10 @@ pub(crate) fn render(
             .child(fixed_column(64.0).child(process_heading(app, Column::Cpu, "CPU", cx)))
             .child(fixed_column(88.0).child(process_heading(app, Column::Memory, "Memory", cx)))
     };
-    let snapshot: Vec<ProcessUsage> = rows.into_iter().cloned().collect();
     let scroll = state.scroll.clone();
     let list = uniform_list("system-process-list", count, move |range, _, _| {
         range
-            .filter_map(|index| snapshot.get(index))
+            .filter_map(|index| prepared.row(index))
             .map(|process| process_row(process, compact))
             .collect::<Vec<_>>()
     })

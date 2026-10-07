@@ -1,12 +1,14 @@
 //! Process filtering and ordering keep sampled identities intact.
+mod cache;
 mod view;
 use crate::{
     app::Crabdash,
     components::table::{Direction, Search, Sort},
 };
 use gpui::{Context, ScrollHandle, UniformListScrollHandle};
-use machines::resources::ProcessUsage;
-use std::cmp::Ordering;
+use machines::resources::{ProcessUsage, ResourceUsage};
+use std::{cell::RefCell, cmp::Ordering, rc::Rc};
+use uuid::Uuid;
 pub(super) use view::render;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +24,7 @@ pub(crate) struct State {
     pub search: Search,
     pub scroll: ScrollHandle,
     pub list_scroll: UniformListScrollHandle,
+    cache: RefCell<Option<Rc<cache::Prepared>>>,
 }
 impl State {
     pub(crate) fn new(cx: &mut Context<Crabdash>) -> Self {
@@ -45,14 +48,16 @@ impl State {
             ),
             scroll,
             list_scroll,
+            cache: RefCell::new(None),
         }
     }
-    pub(crate) fn visible<'a>(
+    fn prepare(
         &self,
-        rows: &'a [ProcessUsage],
+        machine: Uuid,
+        source: &Rc<ResourceUsage>,
         query: &str,
-    ) -> Vec<&'a ProcessUsage> {
-        visible(rows, self.sort, query)
+    ) -> Rc<cache::Prepared> {
+        cache::prepare(&self.cache, machine, source, self.sort, query)
     }
 }
 fn optional_order<T: PartialOrd>(a: Option<T>, b: Option<T>, sort: Sort<Column>) -> Ordering {
@@ -63,33 +68,38 @@ fn optional_order<T: PartialOrd>(a: Option<T>, b: Option<T>, sort: Sort<Column>)
         (None, None) => Ordering::Equal,
     }
 }
-fn visible<'a>(rows: &'a [ProcessUsage], sort: Sort<Column>, query: &str) -> Vec<&'a ProcessUsage> {
-    let query = query.trim().to_lowercase();
+fn visible_indices(rows: &[ProcessUsage], sort: Sort<Column>, query: &str) -> Vec<usize> {
     let mut visible: Vec<_> = rows
         .iter()
-        .filter(|row| {
+        .enumerate()
+        .filter(|(_, row)| {
             query.is_empty()
-                || row.pid.to_string().contains(&query)
-                || row.name.to_lowercase().contains(&query)
+                || row.pid.to_string().contains(query)
+                || row.name.to_lowercase().contains(query)
                 || row
                     .user
                     .as_ref()
-                    .is_some_and(|user| user.to_lowercase().contains(&query))
+                    .is_some_and(|user| user.to_lowercase().contains(query))
         })
+        .map(|(index, _)| index)
         .collect();
     if sort.column == Column::Name {
         let mut named: Vec<_> = visible
             .into_iter()
-            .map(|row| (row, row.name.to_lowercase()))
+            .map(|index| (index, rows[index].name.to_lowercase()))
             .collect();
         named.sort_by(|(a, name_a), (b, name_b)| {
+            let a = &rows[*a];
+            let b = &rows[*b];
             sort.order(name_a.cmp(name_b))
                 .then_with(|| a.pid.cmp(&b.pid))
                 .then_with(|| a.start_id.cmp(&b.start_id))
         });
-        return named.into_iter().map(|(row, _)| row).collect();
+        return named.into_iter().map(|(index, _)| index).collect();
     }
     visible.sort_by(|a, b| {
+        let a = &rows[*a];
+        let b = &rows[*b];
         match sort.column {
             Column::Pid => sort.order(a.pid.cmp(&b.pid)),
             Column::Name => Ordering::Equal,
@@ -104,6 +114,14 @@ fn visible<'a>(rows: &'a [ProcessUsage], sort: Sort<Column>, query: &str) -> Vec
         .then_with(|| a.start_id.cmp(&b.start_id))
     });
     visible
+}
+
+#[cfg(test)]
+fn visible<'a>(rows: &'a [ProcessUsage], sort: Sort<Column>, query: &str) -> Vec<&'a ProcessUsage> {
+    visible_indices(rows, sort, &query.trim().to_lowercase())
+        .into_iter()
+        .filter_map(|index| rows.get(index))
+        .collect()
 }
 
 #[cfg(test)]

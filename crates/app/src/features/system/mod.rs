@@ -16,6 +16,7 @@ use machines::resources::{ResourceMonitor, ResourceSample, ResourceUsage};
 use machines::{machine::Machine, remote_connection::RemoteConnection};
 use std::{
     collections::{HashMap, VecDeque},
+    rc::Rc,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -34,7 +35,7 @@ pub(crate) struct MachineState {
     target: Option<Target>,
     monitor: ResourceMonitor,
     boot_id: Option<String>,
-    pub usage: Option<ResourceUsage>,
+    pub usage: Option<Rc<ResourceUsage>>,
     pub history: VecDeque<HistoryPoint>,
     pub gpu_history: HashMap<String, VecDeque<ScalarPoint>>,
     pub error: Option<String>,
@@ -152,7 +153,7 @@ impl MachineState {
                 );
             }
         }
-        self.usage = Some(usage);
+        self.usage = Some(Rc::new(usage));
         self.error = None;
         self.updated = Some(Instant::now());
         Ok(())
@@ -286,7 +287,17 @@ mod tests {
                 value: Some(25.0),
             }]),
         );
+        let retained = state
+            .usage
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Missing usage"))?;
         state.record_gap(start + Duration::from_secs(3));
+        assert!(
+            state
+                .usage
+                .as_ref()
+                .is_some_and(|usage| Rc::ptr_eq(usage, &retained))
+        );
         let gap = &state.history[1];
         assert_eq!(gap.captured_at, start + Duration::from_secs(3));
         assert!(gap.cpu.is_none() && gap.memory.is_none());
