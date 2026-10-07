@@ -3248,6 +3248,7 @@ dependencies = [
  "base64",
  "dirs 6.0.0",
  "indoc",
+ "plist",
  "portable-pty",
  "serde",
  "serde_json",

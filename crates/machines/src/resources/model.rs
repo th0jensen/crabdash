@@ -1,6 +1,13 @@
 //! Platform-neutral samples and interval CPU calculations. Live data is never persisted.
+use super::{
+    DiskCounter, DiskUsage, GpuSample, NetworkCounter, NetworkUsage, ProcessUsage, ProcessesSample,
+    processes,
+};
 use anyhow::{Result, ensure};
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CpuCounter {
@@ -75,6 +82,12 @@ pub struct ResourceSample {
     pub load_average: Option<[f64; 3]>,
     pub uptime_seconds: f64,
     pub boot_id: String,
+    /// Local monotonic capture time. Never persisted or derived from a poll preference.
+    pub captured_at: Instant,
+    pub processes: Option<ProcessesSample>,
+    pub network: Option<Vec<NetworkCounter>>,
+    pub disks: Option<Vec<DiskCounter>>,
+    pub gpus: Option<Vec<GpuSample>>,
 }
 impl ResourceSample {
     pub fn validate(&self) -> Result<()> {
@@ -149,6 +162,17 @@ pub struct ResourceUsage {
     pub swap: Option<SwapSample>,
     pub load_average: Option<[f64; 3]>,
     pub uptime_seconds: f64,
+    pub processes: Option<Vec<ProcessUsage>>,
+    pub process_count: Option<usize>,
+    pub processes_truncated: bool,
+    pub network: Option<Vec<NetworkUsage>>,
+    pub disks: Option<Vec<DiskUsage>>,
+    pub gpus: Option<Vec<GpuSample>>,
+}
+
+fn rate(new: u64, old: Option<u64>, seconds: Option<f64>) -> Option<f64> {
+    let delta = new.checked_sub(old?)?;
+    Some(delta as f64 / seconds?)
 }
 
 #[derive(Default)]
@@ -200,6 +224,68 @@ impl ResourceMonitor {
                 (cpu, cores)
             }
         };
+        let seconds = previous
+            .and_then(|previous| {
+                sample
+                    .captured_at
+                    .checked_duration_since(previous.captured_at)
+            })
+            .map(|elapsed| elapsed.as_secs_f64())
+            .filter(|value| value.is_finite() && *value > 0.0);
+        let old_network: HashMap<_, _> = previous
+            .and_then(|p| p.network.as_ref())
+            .into_iter()
+            .flatten()
+            .map(|counter| (counter.id.as_str(), counter))
+            .collect();
+        let network = sample.network.as_ref().map(|counters| {
+            counters
+                .iter()
+                .map(|counter| {
+                    let old = old_network.get(counter.id.as_str());
+                    NetworkUsage {
+                        id: counter.id.clone(),
+                        received_bytes_per_second: rate(
+                            counter.received_bytes,
+                            old.map(|c| c.received_bytes),
+                            seconds,
+                        ),
+                        sent_bytes_per_second: rate(
+                            counter.sent_bytes,
+                            old.map(|c| c.sent_bytes),
+                            seconds,
+                        ),
+                    }
+                })
+                .collect()
+        });
+        let old_disks: HashMap<_, _> = previous
+            .and_then(|p| p.disks.as_ref())
+            .into_iter()
+            .flatten()
+            .map(|counter| (counter.id.as_str(), counter))
+            .collect();
+        let disks = sample.disks.as_ref().map(|counters| {
+            counters
+                .iter()
+                .map(|counter| {
+                    let old = old_disks.get(counter.id.as_str());
+                    DiskUsage {
+                        id: counter.id.clone(),
+                        read_bytes_per_second: rate(
+                            counter.read_bytes,
+                            old.map(|c| c.read_bytes),
+                            seconds,
+                        ),
+                        written_bytes_per_second: rate(
+                            counter.written_bytes,
+                            old.map(|c| c.written_bytes),
+                            seconds,
+                        ),
+                    }
+                })
+                .collect()
+        });
         let usage = ResourceUsage {
             cpu_percent,
             cores,
@@ -208,6 +294,19 @@ impl ResourceMonitor {
             swap: sample.swap,
             load_average: sample.load_average,
             uptime_seconds: sample.uptime_seconds,
+            processes: sample.processes.as_ref().map(|p| {
+                processes::usage(
+                    p,
+                    previous.and_then(|old| old.processes.as_ref()),
+                    seconds,
+                    sample.logical_cpus,
+                )
+            }),
+            process_count: sample.processes.as_ref().map(|p| p.total_count),
+            processes_truncated: sample.processes.as_ref().is_some_and(|p| p.truncated),
+            network,
+            disks,
+            gpus: sample.gpus.clone(),
         };
         self.previous = Some(sample);
         Ok(usage)
@@ -237,6 +336,11 @@ mod tests {
             load_average: Some([0.0; 3]),
             uptime_seconds: uptime,
             boot_id: "boot".into(),
+            captured_at: Instant::now(),
+            processes: None,
+            network: None,
+            disks: None,
+            gpus: None,
         }
     }
     #[test]
@@ -305,6 +409,200 @@ mod tests {
         let updated = monitor.update(topology)?;
         assert_eq!(updated.cpu_percent, None);
         assert!(updated.cores.iter().all(|core| core.percent.is_none()));
+        Ok(())
+    }
+    #[test]
+    fn io_uses_actual_elapsed_time_and_rebaselines_identity_reset_and_reboot() -> Result<()> {
+        let mut monitor = ResourceMonitor::default();
+        let start = Instant::now();
+        let io = |bytes, elapsed, uptime| {
+            let mut sample = sample(100 + bytes, 40, uptime);
+            sample.captured_at = start + std::time::Duration::from_secs(elapsed);
+            sample.network = Some(vec![NetworkCounter {
+                id: "eth0".into(),
+                received_bytes: bytes,
+                sent_bytes: bytes * 2,
+            }]);
+            sample.disks = Some(vec![DiskCounter {
+                id: "nvme0n1".into(),
+                read_bytes: bytes,
+                written_bytes: bytes * 3,
+            }]);
+            sample
+        };
+        let first = monitor.update(io(100, 0, 10.0))?;
+        assert_eq!(
+            first
+                .network
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.received_bytes_per_second),
+            None
+        );
+        let second = monitor.update(io(400, 3, 13.0))?;
+        assert_eq!(
+            second
+                .network
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.received_bytes_per_second),
+            Some(100.0)
+        );
+        assert_eq!(
+            second
+                .disks
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.written_bytes_per_second),
+            Some(300.0)
+        );
+        let reset = monitor.update(io(10, 4, 14.0))?;
+        assert_eq!(
+            reset
+                .network
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.received_bytes_per_second),
+            None
+        );
+        let mut renamed = io(200, 5, 15.0);
+        if let Some(values) = renamed.network.as_mut() {
+            values[0].id = "eth1".into();
+        }
+        assert_eq!(
+            monitor
+                .update(renamed)?
+                .network
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.received_bytes_per_second),
+            None
+        );
+        let mut reboot = io(300, 6, 1.0);
+        reboot.boot_id = "newboot".into();
+        assert_eq!(
+            monitor
+                .update(reboot)?
+                .disks
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|v| v.read_bytes_per_second),
+            None
+        );
+        Ok(())
+    }
+    #[test]
+    fn process_interval_cpu_is_whole_machine_share_and_reused_pid_is_unknown() -> Result<()> {
+        use super::super::{ProcessCpu, ProcessSample};
+        let mut monitor = ResourceMonitor::default();
+        let processes = |total, cpu, start_id: &str| {
+            let mut sample = sample(total, 0, total as f64);
+            sample.processes = Some(ProcessesSample {
+                total_cpu: Some(total),
+                total_count: 1,
+                truncated: false,
+                entries: vec![ProcessSample {
+                    pid: 42,
+                    start_id: start_id.into(),
+                    name: "worker".into(),
+                    user: None,
+                    memory_bytes: Some(4096),
+                    cpu: ProcessCpu::Counter(cpu),
+                }],
+            });
+            sample
+        };
+        assert_eq!(
+            monitor
+                .update(processes(100, 20, "old"))?
+                .processes
+                .and_then(|v| v.first().and_then(|v| v.cpu_percent)),
+            None
+        );
+        assert_eq!(
+            monitor
+                .update(processes(300, 70, "old"))?
+                .processes
+                .and_then(|v| v.first().and_then(|v| v.cpu_percent)),
+            Some(25.0)
+        );
+        assert_eq!(
+            monitor
+                .update(processes(500, 170, "new"))?
+                .processes
+                .and_then(|v| v.first().and_then(|v| v.cpu_percent)),
+            None
+        );
+        assert_eq!(
+            monitor
+                .update(processes(700, 10, "new"))?
+                .processes
+                .and_then(|v| v.first().and_then(|v| v.cpu_percent)),
+            None
+        );
+        Ok(())
+    }
+    #[test]
+    fn timed_process_cpu_uses_fractional_monotonic_interval_and_resets_identity() -> Result<()> {
+        use super::super::{ProcessCpu, ProcessSample};
+        let mut monitor = ResourceMonitor::default();
+        let start = Instant::now();
+        let timed = |ticks, millis, identity: &str, boot: &str| {
+            let mut sample = sample(100 + millis, 0, millis as f64 / 1000.0);
+            sample.logical_cpus = 2;
+            if let CpuSample::Counters { aggregate, cores } = &mut sample.cpu {
+                cores.push(CpuCoreCounter {
+                    name: "1".into(),
+                    counter: *aggregate,
+                });
+            }
+            sample.boot_id = boot.into();
+            sample.captured_at = start + std::time::Duration::from_millis(millis);
+            sample.processes = Some(ProcessesSample {
+                total_cpu: None,
+                total_count: 1,
+                truncated: false,
+                entries: vec![ProcessSample {
+                    pid: 42,
+                    start_id: identity.into(),
+                    name: "timed".into(),
+                    user: None,
+                    memory_bytes: None,
+                    cpu: ProcessCpu::TimedCounter {
+                        ticks,
+                        ticks_per_second: 100,
+                    },
+                }],
+            });
+            sample
+        };
+        let cpu = |usage: ResourceUsage| {
+            usage
+                .processes
+                .and_then(|values| values.first().and_then(|value| value.cpu_percent))
+        };
+        assert_eq!(cpu(monitor.update(timed(100, 0, "first", "boot"))?), None);
+        // 37 centiseconds in 0.74 seconds = half one CPU, one quarter of two CPUs.
+        assert_eq!(
+            cpu(monitor.update(timed(137, 740, "first", "boot"))?),
+            Some(25.0)
+        );
+        assert_eq!(
+            cpu(monitor.update(timed(200, 1000, "replacement", "boot"))?),
+            None
+        );
+        assert_eq!(
+            cpu(monitor.update(timed(225, 1500, "replacement", "newboot"))?),
+            None
+        );
+        assert_eq!(
+            cpu(monitor.update(timed(10, 2000, "replacement", "newboot"))?),
+            None
+        );
+        assert_eq!(
+            cpu(monitor.update(timed(20, 2000, "replacement", "newboot"))?),
+            None
+        );
         Ok(())
     }
 }

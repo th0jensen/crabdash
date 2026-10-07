@@ -27,8 +27,18 @@ try {
 "#;
 
 pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
+    let captured_at = std::time::Instant::now();
     let output = powershell::run(machine, SCRIPT).await?;
-    parse(&output)
+    let mut sample = parse(&output)?;
+    sample.processes =
+        super::processes::windows::sample(machine, sample.uptime_seconds, sample.logical_cpus)
+            .await
+            .ok();
+    sample.network = super::network::windows::sample(machine).await.ok();
+    sample.disks = super::disks::windows::sample(machine).await.ok();
+    sample.gpus = super::gpu::windows::sample(machine).await.ok();
+    sample.captured_at = captured_at;
+    Ok(sample)
 }
 
 // WMI uint64 values may be represented as decimal strings by older tools.
@@ -118,6 +128,11 @@ fn parse(output: &str) -> Result<ResourceSample> {
         load_average: None,
         uptime_seconds: snapshot.uptime,
         boot_id: snapshot.boot,
+        captured_at: std::time::Instant::now(),
+        processes: None,
+        network: None,
+        disks: None,
+        gpus: None,
     };
     sample.validate()?;
     Ok(sample)

@@ -104,6 +104,11 @@ mod tests {
             load_average: None,
             uptime_seconds,
             boot_id: boot_id.into(),
+            captured_at: Instant::now(),
+            processes: None,
+            network: None,
+            disks: None,
+            gpus: None,
         }
     }
 

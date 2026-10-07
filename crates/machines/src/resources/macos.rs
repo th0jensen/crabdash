@@ -19,8 +19,15 @@ printf '\n[swap]\n'; /usr/sbin/sysctl -n vm.swapusage 2>/dev/null || true
 "#;
 
 pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
+    let captured_at = std::time::Instant::now();
     let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
-    parse(&output)
+    let mut sample = parse(&output)?;
+    sample.processes = super::processes::macos::sample(machine).await.ok();
+    sample.network = super::network::macos::sample(machine).await.ok();
+    sample.disks = super::disks::macos::sample(machine).await.ok();
+    sample.gpus = super::gpu::macos::sample(machine).await.ok();
+    sample.captured_at = captured_at;
+    Ok(sample)
 }
 
 fn parse(output: &str) -> Result<ResourceSample> {
@@ -96,6 +103,11 @@ fn parse(output: &str) -> Result<ResourceSample> {
         load_average,
         uptime_seconds,
         boot_id: format!("macos:{boot_seconds}"),
+        captured_at: std::time::Instant::now(),
+        processes: None,
+        network: None,
+        disks: None,
+        gpus: None,
     };
     sample.validate()?;
     Ok(sample)

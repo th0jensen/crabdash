@@ -17,8 +17,19 @@ printf '\n[boot]\n'; cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
 "#;
 
 pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
-    let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
-    parse(&output)
+    let script = [
+        SCRIPT,
+        super::processes::linux::SCRIPT,
+        super::network::linux::SCRIPT,
+        super::disks::linux::SCRIPT,
+        super::gpu::linux::SCRIPT,
+    ]
+    .concat();
+    let captured_at = std::time::Instant::now();
+    let output = machine.run("sh", &args!["-c", script]).await?;
+    let mut sample = parse(&output)?;
+    sample.captured_at = captured_at;
+    Ok(sample)
 }
 
 fn parse(output: &str) -> Result<ResourceSample> {
@@ -106,17 +117,28 @@ fn parse(output: &str) -> Result<ResourceSample> {
         boot.to_owned()
     };
     let logical_cpus = cores.len();
+    let aggregate = aggregate.context("Missing Linux aggregate CPU counter")?;
     let sample = ResourceSample {
-        cpu: CpuSample::Counters {
-            aggregate: aggregate.context("Missing Linux aggregate CPU counter")?,
-            cores,
-        },
+        cpu: CpuSample::Counters { aggregate, cores },
         logical_cpus,
         memory: memory.0,
         swap: memory.1,
         load_average,
         uptime_seconds,
         boot_id,
+        captured_at: std::time::Instant::now(),
+        processes: section(output, "processes")
+            .ok()
+            .and_then(|value| super::processes::linux::parse(value, aggregate.total)),
+        network: section(output, "network")
+            .ok()
+            .and_then(super::network::linux::parse),
+        disks: section(output, "disks")
+            .ok()
+            .and_then(super::disks::linux::parse),
+        gpus: section(output, "gpus")
+            .ok()
+            .and_then(|value| super::gpu::linux::parse(value, section(output, "nvidia").ok())),
     };
     sample.validate()?;
     Ok(sample)

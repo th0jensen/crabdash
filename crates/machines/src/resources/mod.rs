@@ -1,8 +1,17 @@
 //! Live resource collection for the selected machine, using its local/SSH transport.
+mod disks;
+mod gpu;
 mod linux;
 mod macos;
 mod model;
+mod network;
+mod processes;
 mod windows;
+
+pub use disks::{DiskCounter, DiskUsage};
+pub use gpu::GpuSample;
+pub use network::{NetworkCounter, NetworkUsage};
+pub use processes::{ProcessCpu, ProcessSample, ProcessUsage, ProcessesSample};
 
 pub use model::{
     CpuCoreCounter, CpuCounter, CpuSample, CpuUsage, MemorySample, ResourceMonitor, ResourceSample,
