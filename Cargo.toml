@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/gpui"]
+exclude = ["vendor/ksni", "vendor/gpui"]
 members = [
     "crates/app",
     "crates/crabdash",

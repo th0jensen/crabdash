@@ -1,0 +1,46 @@
+[package]
+name = "ksni"
+version = "0.3.6"
+authors = ["iovxw <iovxw@outlook.com>"]
+edition = "2021"
+rust-version = "1.80"
+description = """
+A Rust implementation of the KDE/freedesktop StatusNotifierItem specification
+"""
+repository = "https://github.com/iovxw/ksni"
+keywords = ["systray", "linux", "gui"]
+categories = ["api-bindings"]
+license = "Unlicense"
+exclude = ["reference/", "spec/"]
+
+[features]
+default = ["tokio"]
+blocking = []
+tokio = ["dep:tokio", "zbus/tokio"]
+async-io = [
+    "dep:async-io",
+    "dep:async-lock",
+    "dep:async-executor",
+    "dep:futures-lite",
+    "dep:futures-channel",
+    "dep:task-local",
+    "zbus/async-io",
+]
+
+[dependencies]
+pastey = "0.2"
+futures-util = "0.3"
+zbus = { version = "5", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+tokio = { version = "1", features = ["rt", "macros"], optional = true }
+
+async-io = { version = "2", optional = true }
+async-lock = { version = "3", optional = true }
+async-executor = { version = "1", optional = true }
+futures-lite = { version = "2", optional = true }
+futures-channel = { version = "0.3", optional = true }
+task-local = { version = "0.1", optional = true }
+
+
+[workspace]
