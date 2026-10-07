@@ -9,9 +9,9 @@ use std::{
 };
 use uuid::Uuid;
 
-// Version 2 writes flat ordered tabs. Version 1 is accepted and flattened by
-// Layout's deserializer; loading never rewrites the original file.
-const VERSION: u32 = 2;
+// Version 3 stores splits within one window. Versions 1/2 migrate to a
+// single pane in memory; loading never rewrites the original file.
+const VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Workspace {
@@ -35,20 +35,41 @@ pub(crate) struct Store {
 struct SavedStore {
     version: u32,
     active: Uuid,
-    workspaces: Vec<Workspace>,
+    workspaces: Vec<SavedWorkspace>,
+}
+
+#[derive(Deserialize)]
+struct SavedWorkspace {
+    id: Uuid,
+    name: String,
+    layout: serde_json::Value,
+    sidebar_collapsed: bool,
+    sidebar_width: f32,
+    terminal_open: bool,
 }
 
 impl TryFrom<SavedStore> for Store {
     type Error = anyhow::Error;
 
     fn try_from(saved: SavedStore) -> Result<Self> {
-        if saved.version != 1 && saved.version != VERSION {
+        if !(1..=VERSION).contains(&saved.version) {
             bail!("Unsupported workspace file version.");
+        }
+        let mut workspaces = Vec::with_capacity(saved.workspaces.len());
+        for workspace in saved.workspaces {
+            workspaces.push(Workspace {
+                id: workspace.id,
+                name: workspace.name,
+                layout: Layout::from_saved(workspace.layout, saved.version)?,
+                sidebar_collapsed: workspace.sidebar_collapsed,
+                sidebar_width: workspace.sidebar_width,
+                terminal_open: workspace.terminal_open,
+            });
         }
         let store = Self {
             version: VERSION,
             active: saved.active,
-            workspaces: saved.workspaces,
+            workspaces,
         };
         store.validate()?;
         Ok(store)
@@ -225,16 +246,22 @@ mod tests {
         let path = fixture.path();
         let mut store = Store::load_from(&path, 286.0)?;
         let first_id = store.active;
-        assert!(store.current_mut().layout.reorder(Tab::Services, 0));
-        assert!(store.current_mut().layout.select(Tab::Services));
+        assert!(store.current_mut().layout.drop_tab(
+            Tab::Services,
+            1,
+            super::super::model::Drop::Tab(0)
+        ));
         store.current_mut().terminal_open = true;
         store.current_mut().sidebar_collapsed = true;
         let saved = store.current().clone();
         let mut second = saved.clone();
         second.id = Uuid::new_v4();
         second.name = "Storage".into();
-        assert!(second.layout.reorder(Tab::Disks, 0));
-        assert!(second.layout.select(Tab::Disks));
+        assert!(
+            second
+                .layout
+                .drop_tab(Tab::Disks, 1, super::super::model::Drop::Tab(0))
+        );
         let second_layout = second.layout.clone();
         store.active = second.id;
         store.workspaces.push(second);
@@ -281,22 +308,115 @@ mod tests {
         assert_eq!(store.version, VERSION);
         assert_eq!(store.active, id);
         assert_eq!(
-            store.current().layout.tabs,
-            vec![Tab::Disks, Tab::Docker, Tab::Services]
+            store
+                .current()
+                .layout
+                .pane(1)
+                .map(|(tabs, _)| tabs.to_vec()),
+            Some(vec![Tab::Disks, Tab::Docker, Tab::Services])
         );
-        assert_eq!(store.current().layout.active, Tab::Services);
+        assert_eq!(store.current().layout.active(), Tab::Services);
         assert!(store.current().sidebar_collapsed);
         assert!(store.current().terminal_open);
         assert_eq!(store.current().sidebar_width, 318.0);
         store.save_to(&path)?;
         let written: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
         assert_eq!(written["version"], VERSION);
-        assert!(written["workspaces"][0]["layout"].get("root").is_none());
+        assert!(written["workspaces"][0]["layout"].get("root").is_some());
         assert!(written["workspaces"][0]["layout"].get("detached").is_none());
         assert_eq!(
             Store::load_from(&path, 200.0)?.current().layout,
             store.current().layout
         );
+        Ok(())
+    }
+
+    #[test]
+    fn version_two_preserves_flat_order_selection_and_file_bytes() -> Result<()> {
+        use super::super::model::{Node, Tab};
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        fs::create_dir_all(&fixture.0)?;
+        let id = Uuid::new_v4();
+        let saved = serde_json::json!({
+            "version":2, "active":id, "workspaces":[{
+                "id":id, "name":"Flat", "sidebar_collapsed":false,
+                "sidebar_width":286.0, "terminal_open":true,
+                "layout":{"tabs":["services","docker","disks"],"active":"disks"}
+            }]
+        });
+        let original = serde_json::to_vec_pretty(&saved)?;
+        fs::write(&path, &original)?;
+        let store = Store::load_from(&path, 240.0)?;
+        assert_eq!(fs::read(&path)?, original);
+        assert_eq!(store.version, VERSION);
+        assert_eq!(
+            store.current().layout.pane(1),
+            Some((&[Tab::Services, Tab::Docker, Tab::Disks][..], Tab::Disks))
+        );
+        assert!(matches!(
+            store.current().layout.root,
+            Node::Pane { id: 1, .. }
+        ));
+        store.save_to(&path)?;
+        let rewritten: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        assert_eq!(rewritten["version"], VERSION);
+        assert!(rewritten["workspaces"][0]["layout"].get("tabs").is_none());
+        assert_eq!(
+            Store::load_from(&path, 240.0)?.current().layout,
+            store.current().layout
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_split_and_detached_content_migrate_to_one_ordered_pane() -> Result<()> {
+        use super::super::model::{Node, Tab};
+        let id = Uuid::new_v4();
+        let saved = serde_json::json!({
+            "version":1, "active":id, "workspaces":[{
+                "id":id, "name":"Legacy", "sidebar_collapsed":false,
+                "sidebar_width":240.0, "terminal_open":false,
+                "layout":{
+                    "root":{"kind":"split","id":4,"axis":"horizontal","ratio":0.6,
+                        "first":{"kind":"pane","id":1,"tabs":["disks"],"active":"disks"},
+                        "second":{"kind":"pane","id":2,"tabs":["docker"],"active":"docker"}},
+                    "focused":3,
+                    "detached":[{"id":3,"node":{"kind":"pane","id":3,"tabs":["services"],"active":"services"},"bounds":null}]
+                }
+            }]
+        });
+        let store: Store = serde_json::from_value(saved.clone())?;
+        assert_eq!(
+            store.current().layout.pane(1),
+            Some((&[Tab::Disks, Tab::Docker, Tab::Services][..], Tab::Services))
+        );
+        assert!(matches!(store.current().layout.root, Node::Pane { .. }));
+        for corrupt in [
+            {
+                let mut value = saved.clone();
+                value["workspaces"][0]["layout"]["focused"] = serde_json::json!(99);
+                value
+            },
+            {
+                let mut value = saved.clone();
+                value["workspaces"][0]["layout"]["root"]["ratio"] = serde_json::json!(1.0);
+                value
+            },
+            {
+                let mut value = saved.clone();
+                value["workspaces"][0]["layout"]["root"]["second"]["id"] = serde_json::json!(1);
+                value
+            },
+            {
+                let mut value = saved.clone();
+                value["workspaces"][0]["layout"]["detached"][0]["bounds"] =
+                    serde_json::json!({"x":0.0,"y":0.0,"width":1.0,"height":1.0});
+                value
+            },
+        ] {
+            assert!(serde_json::from_value::<Store>(corrupt).is_err());
+        }
         Ok(())
     }
 
