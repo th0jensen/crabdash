@@ -102,6 +102,9 @@ pub(crate) struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == crate::features::docker::brand::PATH {
+            return Ok(Some(Cow::Borrowed(crate::features::docker::brand::BYTES)));
+        }
         Ok(LOGOS
             .iter()
             .find(|logo| logo.path == path)
@@ -109,11 +112,15 @@ impl AssetSource for Assets {
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(LOGOS
+        let mut assets: Vec<_> = LOGOS
             .iter()
             .filter(|logo| logo.path.starts_with(path))
             .map(|logo| SharedString::from(logo.path))
-            .collect())
+            .collect();
+        if crate::features::docker::brand::PATH.starts_with(path) {
+            assets.push(crate::features::docker::brand::PATH.into());
+        }
+        Ok(assets)
     }
 }
 

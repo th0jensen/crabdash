@@ -48,7 +48,10 @@ fn tab_button(
                 .bg(rgb(style::SURFACE_HOVER))
                 .text_color(rgb(style::TEXT_SELECTED))
         })
-        .child(lucide_icon(tab.icon(), style::ICON))
+        .child(match tab {
+            MainTab::Docker => crate::features::docker::brand::icon(24.0).into_any_element(),
+            _ => lucide_icon(tab.icon(), style::ICON).into_any_element(),
+        })
         .child(tab.label().to_string())
         .child(div().flex_1())
         .when(hints, |this| {

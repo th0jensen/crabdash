@@ -6,8 +6,9 @@ pub trait Docker {
     /// Finds the Docker executable
     ///
     /// # Returns
-    /// * `String`: The Docker binary path
-    fn find_docker(&mut self) -> impl Future<Output = String>;
+    /// * `Ok(String)`: The Docker binary path
+    /// * `Err(DockerNotInstalled)`: No Docker executable is installed
+    fn find_docker(&mut self) -> impl Future<Output = Result<String>>;
     /// Lists all Docker containers on the machine
     ///
     /// # Returns
@@ -59,6 +60,19 @@ pub trait Docker {
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn container_logs(&mut self, id: &str, lines: u32) -> impl Future<Output = Result<Output>>;
 }
+
+/// A missing executable is an installation state, distinct from daemon,
+/// permission, transport, and container failures.
+#[derive(Debug)]
+pub struct DockerNotInstalled;
+
+impl std::fmt::Display for DockerNotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Docker not installed")
+    }
+}
+
+impl std::error::Error for DockerNotInstalled {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RestartPolicy {

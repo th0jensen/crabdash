@@ -58,6 +58,7 @@ impl Crabdash {
                                 Ok(containers) => {
                                     machine.services.docker = containers;
                                     machine.services.docker_error = None;
+                                    machine.services.docker_not_installed = false;
                                 }
                                 Err(error) => {
                                     machine.services.docker_error =
@@ -82,36 +83,62 @@ impl Crabdash {
     }
 
     pub(crate) fn refresh_docker(&mut self, cx: &mut Context<Self>) {
-        let machine = self.selected_machine().clone();
-        let machine_index = self.selected_machine;
-        cx.spawn({
-            let mut machine = machine.clone();
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-                let result = cx
-                    .background_spawn(async move { machine.list_docker().await })
-                    .await;
-                this.update(cx, move |this, cx| {
-                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
-                        match result {
-                            Ok(containers) => {
-                                machine.services.docker = containers;
-                                machine.services.docker_error = None;
-                            }
-                            Err(error) => {
-                                let message = format!("Unable to load Docker: {error}");
-                                let newly_failed =
-                                    machine.services.docker_error.as_ref() != Some(&message);
-                                machine.services.docker_error = Some(message.clone());
-                                if newly_failed && this.selected_machine == machine_index {
-                                    this.set_status_error(message);
-                                }
-                            }
+        let mut machine = self.selected_machine().clone();
+        let machine_uuid = machine.uuid;
+        let counter = self
+            .docker_refresh_generation
+            .entry(machine_uuid)
+            .or_default();
+        *counter = counter.saturating_add(1);
+        let generation = *counter;
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let (result, path) = cx
+                .background_spawn(async move {
+                    let result = machine.list_docker().await;
+                    (result, machine.docker_path)
+                })
+                .await;
+            this.update(cx, move |this, cx| {
+                if this.docker_refresh_generation.get(&machine_uuid) != Some(&generation) {
+                    return;
+                }
+                let selected = this.selected_machine().uuid == machine_uuid;
+                let Some(machine) = this
+                    .machine_store
+                    .machines
+                    .iter_mut()
+                    .find(|machine| machine.uuid == machine_uuid)
+                else {
+                    return;
+                };
+                if path.is_some() {
+                    machine.docker_path = path;
+                }
+                match result {
+                    Ok(containers) => {
+                        machine.services.docker = containers;
+                        machine.services.docker_error = None;
+                        machine.services.docker_not_installed = false;
+                    }
+                    Err(error) if error.is::<services::docker::DockerNotInstalled>() => {
+                        machine.services.docker.clear();
+                        machine.services.docker_error = None;
+                        machine.services.docker_not_installed = true;
+                        machine.docker_path = None;
+                    }
+                    Err(error) => {
+                        let message = format!("Unable to load Docker: {error}");
+                        let newly_failed = machine.services.docker_error.as_ref() != Some(&message);
+                        machine.services.docker_error = Some(message.clone());
+                        machine.services.docker_not_installed = false;
+                        if newly_failed && selected {
+                            this.set_status_error(message);
                         }
                     }
-                    cx.notify();
-                })
-                .ok();
-            }
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -175,6 +202,7 @@ impl Crabdash {
                             Ok(containers) => {
                                 machine.services.docker = containers;
                                 machine.services.docker_error = None;
+                                machine.services.docker_not_installed = false;
                                 this.clear_status_message();
                             }
                             Err(err) => {

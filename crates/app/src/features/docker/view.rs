@@ -339,6 +339,53 @@ fn table_header(show_id: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Di
         )
 }
 
+fn not_installed(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+    div().p(px(16.0)).w_full().min_w_0().child(
+        div()
+            .w_full()
+            .bg(rgb(style::SURFACE))
+            .border_1()
+            .border_color(rgb(style::BORDER))
+            .rounded(px(style::CARD_RADIUS))
+            .p(px(18.0))
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(super::brand::icon(48.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.0))
+                    .child(
+                        div()
+                            .text_size(rems(style::TEXT / 16.0))
+                            .text_color(rgb(style::TEXT_SELECTED))
+                            .child("Docker not installed"),
+                    )
+                    .child(
+                        div()
+                            .text_size(rems(style::META / 16.0))
+                            .text_color(rgb(style::TEXT_MUTED))
+                            .child(format!(
+                                "Install Docker on {} to manage containers here.",
+                                app.selected_machine().system_info.machine_name
+                            )),
+                    ),
+            )
+            .child(
+                div().flex().child(
+                    surface_button(
+                        "docker-check-installation",
+                        Some(LucideIcon::RefreshCw),
+                        Some("Check again"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_docker(cx))),
+                ),
+            ),
+    )
+}
+
 pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
     let show_id = window.viewport_size().width
         - if app.sidebar_collapsed {
@@ -348,6 +395,9 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
         }
         >= px(640.0 * app.preferences.interface_font_size / 13.0);
     let machine = app.selected_machine();
+    if machine.services.docker_not_installed {
+        return not_installed(app, cx);
+    }
     let containers = machine.services.docker.clone();
 
     let total_count = containers.len();
@@ -377,9 +427,11 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
                                 Some(LucideIcon::Play),
                                 Some("Run"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_docker_run_modal(cx);
-                            })),
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.open_docker_run_modal(window, cx);
+                                },
+                            )),
                         ),
                     )
                     .child(stats_chip(

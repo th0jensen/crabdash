@@ -1,11 +1,12 @@
 //! Docker feature.
+pub(crate) mod brand;
 mod controller;
 mod view;
 pub(crate) use view::*;
 pub(crate) mod remove_modal;
 mod run;
-mod run_parameters;
 pub(crate) mod run_modal;
+mod run_parameters;
 pub(crate) use run::DockerRunConfig;
 
 use uuid::Uuid;
