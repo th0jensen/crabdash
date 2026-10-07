@@ -1,14 +1,17 @@
-use std::borrow::Cow;
-
-use gpui::{App, actions};
+use gpui::actions;
 
 pub mod app;
 pub mod components;
 pub mod content;
 pub mod desktop;
 pub mod features;
+mod fonts;
 pub use app::Crabdash;
 pub(crate) use desktop::about::show_about_dialog;
+pub use fonts::{
+    JETBRAINS_MONO_NERD_BOLD, JETBRAINS_MONO_NERD_BOLD_ITALIC, JETBRAINS_MONO_NERD_ITALIC,
+    JETBRAINS_MONO_NERD_REGULAR, register_fonts,
+};
 
 pub const APP_NAME: &str = "Crabdash";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -57,24 +60,3 @@ actions!(
         ZoomWindow
     ]
 );
-
-pub const JETBRAINS_MONO_NERD_REGULAR: &[u8] =
-    include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf");
-pub const JETBRAINS_MONO_NERD_BOLD: &[u8] =
-    include_bytes!("../assets/JetBrainsMonoNerdFont-Bold.ttf");
-pub const JETBRAINS_MONO_NERD_ITALIC: &[u8] =
-    include_bytes!("../assets/JetBrainsMonoNerdFont-Italic.ttf");
-pub const JETBRAINS_MONO_NERD_BOLD_ITALIC: &[u8] =
-    include_bytes!("../assets/JetBrainsMonoNerdFont-BoldItalic.ttf");
-
-pub fn register_fonts(cx: &mut App) {
-    cx.text_system()
-        .add_fonts(vec![
-            Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES),
-            Cow::Borrowed(JETBRAINS_MONO_NERD_REGULAR),
-            Cow::Borrowed(JETBRAINS_MONO_NERD_BOLD),
-            Cow::Borrowed(JETBRAINS_MONO_NERD_ITALIC),
-            Cow::Borrowed(JETBRAINS_MONO_NERD_BOLD_ITALIC),
-        ])
-        .expect("failed to load fonts");
-}

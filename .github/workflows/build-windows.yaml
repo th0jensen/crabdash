@@ -76,9 +76,15 @@ jobs:
         run: cargo build --locked --release --target x86_64-pc-windows-msvc -p crabdash
       - name: Run Windows workspace tests
         run: cargo test --locked --workspace --target x86_64-pc-windows-msvc -- --test-threads=1
-      - name: Upload Windows executable
+      - name: Stage executable and bundled font notice
+        run: |
+          $artifactDirectory = Join-Path $env:RUNNER_TEMP 'crabdash-Windows'
+          New-Item -ItemType Directory -Force $artifactDirectory | Out-Null
+          Copy-Item 'C:/crabdash-target/x86_64-pc-windows-msvc/release/crabdash.exe' $artifactDirectory
+          Copy-Item 'crates/app/assets/fonts/ibm-plex-sans/OFL.txt' (Join-Path $artifactDirectory 'IBM-Plex-Sans-OFL.txt')
+      - name: Upload Windows executable and notices
         uses: actions/upload-artifact@v4
         with:
           name: crabdash-Windows-x86_64
-          path: C:/crabdash-target/x86_64-pc-windows-msvc/release/crabdash.exe
+          path: ${{ runner.temp }}/crabdash-Windows
           if-no-files-found: error

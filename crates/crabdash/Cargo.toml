@@ -15,6 +15,7 @@ smol.workspace = true
 name = "Crabdash"
 identifier = "com.thojensen.crabdash"
 icon = ["assets/icons/AppIcon.icns"]
+resources = ["crates/app/assets/fonts/ibm-plex-sans/OFL.txt"]
 short_description = "Native desktop dashboard for machines and services"
 category = "public.app-category.developer-tools"
 osx_info_plist_exts = ["assets/macos/info-extra.plist"]
