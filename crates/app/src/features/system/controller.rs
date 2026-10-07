@@ -42,6 +42,9 @@ impl Crabdash {
         if self.system.visible_machine == target {
             return;
         }
+        if let Some(previous) = self.system.visible_machine {
+            self.system.pause(previous, std::time::Instant::now());
+        }
         self.system.visible_machine = target;
         if let Some(uuid) = target {
             self.refresh_system_resources_for(uuid, cx);

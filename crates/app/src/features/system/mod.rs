@@ -301,6 +301,28 @@ mod tests {
     }
 
     #[test]
+    fn pausing_rejects_pending_samples_and_resets_the_counter_baseline() -> anyhow::Result<()> {
+        let mut state = State::default();
+        let uuid = Uuid::new_v4();
+        let now = Instant::now();
+        let ticket = state.requests.restart(uuid);
+        let mut machine = MachineState::default();
+        let mut first = sample("boot", 0.0);
+        first.captured_at = now;
+        machine.record(first)?;
+        machine.loading = true;
+        machine.last_requested = Some(now);
+        state.machines.insert(uuid, machine);
+        state.pause(uuid, now + Duration::from_secs(2));
+        assert!(!state.requests.complete(&uuid, ticket));
+        let machine = &state.machines[&uuid];
+        assert!(machine.sampling_due(now + Duration::from_secs(2), Duration::from_secs(60)));
+        assert_eq!(machine.history.back().and_then(|point| point.memory), None);
+        assert!(machine.usage.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn removing_a_machine_rejects_its_pending_sample_and_removes_history() {
         let mut state = State::default();
         let uuid = Uuid::new_v4();
@@ -348,6 +370,20 @@ impl State {
             ..Self::default()
         }
     }
+    fn pause(&mut self, uuid: Uuid, captured_at: Instant) {
+        // Reject pending capture-start samples before adding the later gap.
+        self.requests.forget(&uuid);
+        if let Some(state) = self.machines.get_mut(&uuid) {
+            state.loading = false;
+            state.last_requested = None;
+            if state.usage.is_some() {
+                state.record_gap(captured_at);
+            } else {
+                state.monitor.reset();
+            }
+        }
+    }
+
     pub(crate) fn remove(&mut self, uuid: Uuid) {
         self.requests.forget(&uuid);
         self.machines.remove(&uuid);
