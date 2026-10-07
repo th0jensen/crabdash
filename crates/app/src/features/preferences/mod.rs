@@ -13,6 +13,7 @@ use macos as platform;
 use windows as platform;
 mod controller;
 mod editor;
+pub(crate) mod mutation;
 mod settings;
 pub(crate) use editor::{Editor, render};
 pub use settings::*;

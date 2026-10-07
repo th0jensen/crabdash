@@ -3,6 +3,7 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+mod runtime;
 #[cfg(target_os = "windows")]
 mod windows;
 use anyhow::Result;
@@ -13,7 +14,10 @@ use macos as platform;
 #[cfg(target_os = "windows")]
 use windows as platform;
 pub(crate) const SUPPORTED: bool = platform::SUPPORTED;
-#[derive(Clone, Default)]
+pub(crate) use runtime::{
+    Runtime, begin_toggle, complete_toggle, initialize, refresh, set_start_minimised,
+};
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct LoginStartup {
     pub enabled: bool,
     pub start_minimised: bool,

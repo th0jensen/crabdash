@@ -87,6 +87,8 @@ pub struct Crabdash {
     pub(crate) preferences: crate::features::preferences::Preferences,
     pub(crate) preference_editor: preferences::Editor,
     _preference_changes: Subscription,
+    _preference_mutations: Subscription,
+    _startup_changes: Subscription,
     pub(crate) login_startup: crate::desktop::startup::LoginStartup,
     pub(crate) startup_busy: bool,
     pub(crate) open_menu: Option<usize>,
@@ -158,6 +160,21 @@ impl Crabdash {
                 this.update_saved_preferences(crate::features::preferences::current(cx), cx);
                 cx.notify();
             });
+        crate::desktop::startup::initialize(cx);
+        preferences::mutation::initialize(cx);
+        let startup_changes = cx.observe_global::<crate::desktop::startup::Runtime>(|this, cx| {
+            this.synchronize_login_startup(cx);
+            cx.notify();
+        });
+        let preference_mutations = cx.observe_global::<preferences::mutation::State>(|this, cx| {
+            if !preferences::mutation::is_busy(cx) {
+                this.preference_editor.mutation_error = None;
+            }
+            cx.notify();
+        });
+        let startup_runtime = cx.global::<crate::desktop::startup::Runtime>();
+        let login_startup = startup_runtime.status();
+        let startup_busy = startup_runtime.startup_busy();
         let mut preference_editor = preferences::Editor::new(&settings, cx);
         preference_editor.error = settings_error;
         let workspaces = features::workspaces::State::load(cx);
@@ -196,8 +213,10 @@ impl Crabdash {
             preferences: settings.clone(),
             preference_editor,
             _preference_changes: preference_changes,
-            login_startup: crate::desktop::startup::LoginStartup::load(),
-            startup_busy: false,
+            _preference_mutations: preference_mutations,
+            _startup_changes: startup_changes,
+            login_startup,
+            startup_busy,
             open_menu: None,
             menu_item: 0,
             _menu_keystrokes: menu_keystrokes,
@@ -358,7 +377,10 @@ impl Render for Crabdash {
                     this.preference_editor = preferences::Editor::new(&this.preferences, cx);
                 }
                 this.preferences_open = true;
-                this.login_startup = crate::desktop::startup::LoginStartup::load();
+                if !preferences::mutation::is_busy(cx) {
+                    crate::desktop::startup::refresh(cx);
+                }
+                this.synchronize_login_startup(cx);
                 window.focus(&this.focus_handle);
                 cx.notify();
             }))

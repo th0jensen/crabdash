@@ -174,6 +174,7 @@ pub(crate) struct Editor {
     fields: Inputs,
     pub busy: bool,
     pub error: Option<String>,
+    pub mutation_error: Option<String>,
     pub scroll: ScrollHandle,
     pub picker: Option<Field>,
 }
@@ -186,6 +187,7 @@ impl Editor {
             fields,
             busy: false,
             error: None,
+            mutation_error: None,
             scroll: ScrollHandle::new(),
             picker: None,
         }
@@ -406,7 +408,7 @@ fn toggle_row(
 
 pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> impl IntoElement {
     let editor = &app.preference_editor;
-    let busy = editor.busy || app.startup_busy;
+    let busy = editor.busy || app.startup_busy || super::mutation::is_busy(cx);
     let mut body = div().flex().flex_col().gap(px(22.0));
     match editor.section {
         Section::General => {
@@ -483,7 +485,12 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
             ));
         }
     }
-    let error = editor.error.as_ref().or(app.login_startup.error.as_ref());
+    let errors = visible_errors(
+        editor.error.as_deref(),
+        app.login_startup.error.as_deref(),
+        editor.mutation_error.as_deref(),
+        super::mutation::is_busy(cx),
+    );
     div()
         .absolute()
         .inset_0()
@@ -554,14 +561,12 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                         .pr(px(6.0))
                         .child(body),
                 )
-                .when_some(error, |this, error| {
-                    this.child(
-                        div()
-                            .text_size(gpui::rems(style::META / 16.0))
-                            .text_color(rgb(0xFF9F99))
-                            .child(error.clone()),
-                    )
-                })
+                .children(errors.into_iter().map(|error| {
+                    div()
+                        .text_size(gpui::rems(style::META / 16.0))
+                        .text_color(rgb(0xFF9F99))
+                        .child(error)
+                }))
                 .child(
                     div()
                         .flex()
@@ -621,4 +626,69 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                         ),
                 ),
         )
+}
+
+/// Native registration has its own result. It must remain visible beside
+/// unrelated editor errors; a blocked operation is only relevant while busy.
+fn visible_errors(
+    editor_error: Option<&str>,
+    startup_error: Option<&str>,
+    mutation_error: Option<&str>,
+    busy: bool,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for error in [editor_error, startup_error, mutation_error.filter(|_| busy)]
+        .into_iter()
+        .flatten()
+    {
+        if !errors.iter().any(|existing| existing == error) {
+            errors.push(error.to_string());
+        }
+    }
+    errors
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::visible_errors;
+    use std::prelude::v1::test;
+
+    #[test]
+    fn native_failure_is_visible_beside_validation_and_completed_busy_errors() {
+        assert_eq!(
+            visible_errors(
+                Some("Invalid font"),
+                Some("Registration failed"),
+                Some("Login startup is being updated"),
+                false
+            ),
+            ["Invalid font", "Registration failed"]
+        );
+        assert_eq!(
+            visible_errors(
+                None,
+                Some("Registration failed"),
+                Some("Login startup is being updated"),
+                true
+            ),
+            ["Registration failed", "Login startup is being updated"]
+        );
+    }
+
+    #[test]
+    fn persistent_errors_remain_after_idle_and_identical_messages_are_deduplicated() {
+        assert_eq!(
+            visible_errors(
+                Some("Unable to read settings"),
+                Some("Unable to read settings"),
+                Some("Another window is saving"),
+                false
+            ),
+            ["Unable to read settings"]
+        );
+        assert_eq!(
+            visible_errors(Some("Unable to save settings"), None, None, false),
+            ["Unable to save settings"]
+        );
+    }
 }

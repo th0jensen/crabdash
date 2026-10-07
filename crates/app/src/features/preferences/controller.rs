@@ -1,53 +1,52 @@
+use super::mutation::{self, Operation};
 use crate::app::Crabdash;
 use gpui::*;
 
-#[derive(Default)]
-struct PreferenceSave {
-    busy: bool,
-}
-impl Global for PreferenceSave {}
-
 impl Crabdash {
     pub(crate) fn toggle_login_startup(&mut self, cx: &mut Context<Self>) {
-        if self.startup_busy {
+        if let Err(error) = mutation::begin(cx, Operation::LoginStartup) {
+            self.preference_editor.mutation_error = Some(error.into());
+            cx.notify();
             return;
         }
-        self.startup_busy = true;
-        self.login_startup.error = None;
-        let enabled = !self.login_startup.enabled;
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+        let enabled = match crate::desktop::startup::begin_toggle(cx) {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                mutation::complete(cx, Operation::LoginStartup);
+                self.preference_editor.mutation_error = Some(error.into());
+                cx.notify();
+                return;
+            }
+        };
+        // A previous busy message belongs to its completed operation. Keep
+        // unrelated validation/save errors while starting native registration.
+        self.preference_editor.mutation_error = None;
+        self.synchronize_login_startup(cx);
+        cx.spawn(async move |_: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let result = cx
                 .background_spawn(async move {
                     let result = crate::desktop::startup::set_login_startup(enabled);
                     (result, crate::desktop::startup::LoginStartup::load())
                 })
                 .await;
-            this.update(cx, |this, cx| {
-                this.startup_busy = false;
+            // Native state and both guards belong to the application. Publish
+            // and release them even if the initiating dashboard has closed.
+            let _ = cx.update(|cx| {
                 let (result, startup) = result;
-                this.login_startup = startup;
-                if let Err(error) = result {
-                    this.login_startup.error = Some(error.to_string());
-                }
-                cx.notify();
-            })
-            .ok();
+                crate::desktop::startup::complete_toggle(
+                    cx,
+                    startup,
+                    result.err().map(|error| error.to_string()),
+                );
+                mutation::complete(cx, Operation::LoginStartup);
+            });
         })
         .detach();
         cx.notify();
     }
 
     pub(crate) fn apply_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.preference_editor.busy || self.startup_busy {
-            return;
-        }
-        if cx
-            .try_global::<PreferenceSave>()
-            .is_some_and(|save| save.busy)
-        {
-            self.preference_editor.error =
-                Some("Another window is saving preferences. Please try again shortly.".into());
-            cx.notify();
+        if self.preference_editor.busy {
             return;
         }
         let settings = match self.preference_editor.collect(cx) {
@@ -58,20 +57,26 @@ impl Crabdash {
                 return;
             }
         };
+        if let Err(error) = mutation::begin(cx, Operation::Preferences) {
+            self.preference_editor.mutation_error = Some(error.into());
+            cx.notify();
+            return;
+        }
         window.focus(&self.focus_handle);
         self.preference_editor.busy = true;
         self.preference_editor.error = None;
-        cx.set_global(PreferenceSave { busy: true });
+        self.preference_editor.mutation_error = None;
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let saved = settings.clone();
             let result = cx.background_spawn(async move { saved.save() }).await;
             // The initiating window can close during disk I/O. Release the
             // shared guard and update other windows independently of its owner.
             let _ = cx.update(|cx| {
-                cx.set_global(PreferenceSave::default());
                 if result.is_ok() {
                     cx.set_global(settings.clone());
+                    crate::desktop::startup::set_start_minimised(cx, settings.start_minimised);
                 }
+                mutation::complete(cx, Operation::Preferences);
             });
             this.update(cx, |this, cx| {
                 this.preference_editor.busy = false;
@@ -88,6 +93,12 @@ impl Crabdash {
         })
         .detach();
         cx.notify();
+    }
+
+    pub(crate) fn synchronize_login_startup(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<crate::desktop::startup::Runtime>();
+        self.login_startup = runtime.status();
+        self.startup_busy = runtime.startup_busy();
     }
 
     pub(crate) fn update_saved_preferences(
