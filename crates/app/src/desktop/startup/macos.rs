@@ -70,28 +70,22 @@ fn remove_agent() -> Result<()> {
     }
 }
 
-pub(super) fn startup_enabled() -> Result<bool> {
+/// Read registration and its warning together. A pending approval or a
+/// surviving developer agent stays enabled so the switch can remove it.
+pub(super) fn startup_status() -> Result<(bool, Option<String>)> {
     let fallback = fallback_enabled()?;
     if let Some(service) = bundled_service()? {
-        // A developer agent can survive moving to an application bundle. Report
-        // the effective setting until the user explicitly changes registration.
-        return Ok(ServiceStatus::read(&service)?.enabled() || fallback);
+        let status = ServiceStatus::read(&service)?;
+        let warning = if status == ServiceStatus::RequiresApproval {
+            Some("Allow Crabdash in System Settings > General > Login Items to complete login startup".into())
+        } else if fallback {
+            Some("A developer build is configured to start at login. Turn Start at login off and on to use this installed app.".into())
+        } else {
+            None
+        };
+        return Ok((status.enabled() || fallback, warning));
     }
-    Ok(fallback)
-}
-
-/// Registration remains enabled while macOS is waiting for user approval; the
-/// warning explains why the app will not launch yet and the switch can disable it.
-pub(super) fn startup_warning() -> Result<Option<String>> {
-    if let Some(service) = bundled_service()? {
-        if ServiceStatus::read(&service)? == ServiceStatus::RequiresApproval {
-            return Ok(Some("Allow Crabdash in System Settings > General > Login Items to complete login startup".into()));
-        }
-        if fallback_enabled()? {
-            return Ok(Some("A developer build is configured to start at login. Turn Start at login off and on to use this installed app.".into()));
-        }
-    }
-    Ok(None)
+    Ok((fallback, None))
 }
 
 fn xml(text: &str) -> String {

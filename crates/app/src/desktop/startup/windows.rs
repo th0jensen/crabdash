@@ -1,8 +1,9 @@
 //! Windows login startup is a user-scoped Run registry value.
+use super::windows_registration::{self, CAPACITY, Registration, quoted_command};
 use anyhow::{Context as _, Result, bail};
 use std::{env, mem, ptr};
 use windows_sys::Win32::{
-    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS},
+    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS},
     System::Registry::*,
 };
 
@@ -46,7 +47,7 @@ fn writable_key() -> Result<Key> {
     Ok(Key(key))
 }
 
-pub(super) fn startup_enabled() -> Result<bool> {
+pub(super) fn startup_status() -> Result<(bool, Option<String>)> {
     // Reading status never creates registry entries.
     let mut handle = ptr::null_mut();
     let opened = unsafe {
@@ -59,7 +60,7 @@ pub(super) fn startup_enabled() -> Result<bool> {
         )
     };
     match opened {
-        ERROR_FILE_NOT_FOUND => return Ok(false),
+        ERROR_FILE_NOT_FOUND => return Ok((false, None)),
         ERROR_SUCCESS => {}
         _ => bail!(
             "Unable to read Windows login preferences: {}",
@@ -67,20 +68,40 @@ pub(super) fn startup_enabled() -> Result<bool> {
         ),
     }
     let key = Key(handle);
+    let mut buffer = [0u16; CAPACITY];
+    let mut value_type = 0;
+    let mut bytes = (buffer.len() * mem::size_of::<u16>()) as u32;
+    // SAFETY: The single read is bounded by this fixed buffer's byte size.
+    // RegGetValueW reports its type and returned size; oversized/failed reads
+    // are never decoded. The handle is user-scoped and remains owned by Key.
     let result = unsafe {
         RegGetValueW(
             key.0,
             ptr::null(),
             wide("Crabdash").as_ptr(),
-            RRF_RT_REG_SZ,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
+            RRF_RT_ANY | RRF_NOEXPAND,
+            &mut value_type,
+            buffer.as_mut_ptr().cast(),
+            &mut bytes,
         )
     };
     match result {
-        ERROR_SUCCESS => Ok(true),
-        ERROR_FILE_NOT_FOUND => Ok(false),
+        ERROR_SUCCESS => Ok(windows_registration::status(
+            Registration::Value {
+                value_type,
+                bytes,
+                buffer: &buffer,
+            },
+            expected_command,
+        )),
+        ERROR_MORE_DATA => Ok(windows_registration::status(
+            Registration::TooLarge,
+            expected_command,
+        )),
+        ERROR_FILE_NOT_FOUND => Ok(windows_registration::status(
+            Registration::Missing,
+            expected_command,
+        )),
         _ => bail!(
             "Unable to read Windows login startup: {}",
             std::io::Error::from_raw_os_error(result as i32)
@@ -88,23 +109,20 @@ pub(super) fn startup_enabled() -> Result<bool> {
     }
 }
 
+fn expected_command() -> Result<String> {
+    let executable = env::current_exe().context("Unable to locate Crabdash")?;
+    quoted_command(
+        executable
+            .to_str()
+            .context("Crabdash's path is not valid Unicode")?,
+    )
+}
+
 pub(super) fn set_login_startup(enabled: bool) -> Result<()> {
     let key = writable_key()?;
     let name = wide("Crabdash");
     let result = if enabled {
-        let executable = env::current_exe().context("Unable to locate Crabdash")?;
-        let command = format!(
-            "\"{}\"",
-            executable
-                .to_str()
-                .context("Crabdash's path is not valid Unicode")?
-        );
-        if command.encode_utf16().count() > 260 {
-            bail!(
-                "The Crabdash path is too long for Windows login startup; move it to a shorter installation path"
-            );
-        }
-        let command = wide(&command);
+        let command = wide(&expected_command()?);
         unsafe {
             RegSetValueExW(
                 key.0,
@@ -125,8 +143,4 @@ pub(super) fn set_login_startup(enabled: bool) -> Result<()> {
         "Unable to change Windows login startup: {}",
         std::io::Error::from_raw_os_error(result as i32)
     )
-}
-
-pub(super) fn startup_warning() -> Result<Option<String>> {
-    Ok(None)
 }

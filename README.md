@@ -268,6 +268,13 @@ cargo test --locked --workspace --target x86_64-pc-windows-msvc -- --test-thread
 The manually dispatched **Build and Test - Windows** workflow configures these tools,
 builds release shaders and the executable, runs workspace tests, and uploads the `.exe`.
 It has not yet been executed. Windows Preferences use `%APPDATA%/Crabdash/preferences.json`.
+Windows login startup uses Crabdash's own value under the current user's
+[Run key](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
+Preferences read its command as well as its presence. A different or malformed command
+keeps Start at login on with a repair message; turn it off and on to register the current
+executable. Reading the setting never rewrites an existing registration. This status
+describes the Run registration, not external Windows startup-blocking policies.
+
 Windows service logs show recent Service Control Manager events; they are distinct from
 an application's own log files. Docker over Windows SSH uses encoded PowerShell transport
 and direct native argument handling.

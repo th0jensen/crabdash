@@ -6,6 +6,8 @@ mod macos;
 mod runtime;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_registration;
 use anyhow::Result;
 #[cfg(target_os = "linux")]
 use linux as platform;
@@ -30,14 +32,11 @@ impl LoginStartup {
             Ok(value) => (value, None),
             Err(error) => (false, Some(error.to_string())),
         };
-        match platform::startup_enabled() {
-            Ok(enabled) => Self {
+        match platform::startup_status() {
+            Ok((enabled, warning)) => Self {
                 enabled,
                 start_minimised,
-                error: preference_error.or_else(|| match platform::startup_warning() {
-                    Ok(warning) => warning,
-                    Err(error) => Some(error.to_string()),
-                }),
+                error: preference_error.or(warning),
             },
             Err(error) => Self {
                 enabled: false,

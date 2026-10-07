@@ -14,7 +14,7 @@ fn config_dir() -> Result<PathBuf> {
         .context("Unable to find your desktop configuration directory")
 }
 
-pub(super) fn startup_enabled() -> Result<bool> {
+fn startup_enabled() -> Result<bool> {
     let output = Command::new("systemctl")
         .args(["--user", "is-enabled", "crabdash.service"])
         .output()
@@ -115,6 +115,6 @@ mod tests {
 
 pub(super) const SUPPORTED: bool = true;
 
-pub(super) fn startup_warning() -> Result<Option<String>> {
-    Ok(None)
+pub(super) fn startup_status() -> Result<(bool, Option<String>)> {
+    startup_enabled().map(|enabled| (enabled, None))
 }
