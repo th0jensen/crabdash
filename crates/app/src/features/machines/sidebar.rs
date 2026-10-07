@@ -1,5 +1,24 @@
 use super::logos;
-use crate::components::style;
+// Keep the restored sidebar presentation independent of the newer dashboard chrome.
+mod style {
+    pub(super) const TEXT: f32 = 13.0;
+    pub(super) const META: f32 = 12.0;
+    pub(super) const ICON: f32 = 14.0;
+    pub(super) const BAR: f32 = 36.0;
+    pub(super) const RADIUS: f32 = 4.0;
+    pub(super) const TEXT_PRIMARY: u32 = 0xD0D0D0;
+    pub(super) const TEXT_SELECTED: u32 = 0xF2F2F2;
+    pub(super) const TEXT_MUTED: u32 = 0x969696;
+    pub(super) const ACCENT: u32 = 0xA9CEFF;
+    pub(super) const SELECTED_BG: u32 = 0x252F3D;
+    pub(super) const SELECTED_BORDER: u32 = 0x3C506A;
+    pub(super) const SURFACE: u32 = 0x1E1E1E;
+    pub(super) const SURFACE_HOVER: u32 = 0x282828;
+    pub(super) const BORDER: u32 = 0x353535;
+    pub(super) const CONTROL_SELECTED_BORDER: u32 = 0x555555;
+    pub(super) const SUCCESS: u32 = 0x59C69A;
+    pub(super) const CARD_RADIUS: f32 = 7.0;
+}
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
@@ -67,12 +86,8 @@ impl Render for MachineTooltip {
     }
 }
 
-fn machine_item(
-    machine: &Machine,
-    index: usize,
-    selected: bool,
-    cx: &mut Context<Crabdash>,
-) -> Stateful<Div> {
+fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+    let machine_uuid = machine.uuid;
     let connection_active = machine.connected();
     let is_remote = machine.remote.is_some();
     let name = if machine.system_info.machine_name.trim().is_empty() {
@@ -91,10 +106,20 @@ fn machine_item(
     let bg = if selected {
         rgb(style::SELECTED_BG)
     } else {
-        rgb(style::CHROME)
+        rgb(0x1B1B1B)
+    };
+    let border = if selected {
+        rgb(style::SELECTED_BORDER)
+    } else {
+        rgb(0x1B1B1B)
+    };
+    let icon_bg = if selected {
+        rgb(0x304158)
+    } else {
+        rgb(style::SURFACE_HOVER)
     };
     let icon_color = if selected {
-        rgb(style::TEXT_PRIMARY)
+        rgb(style::ACCENT)
     } else {
         rgb(style::TEXT_MUTED)
     };
@@ -110,30 +135,47 @@ fn machine_item(
         .map(|remote| format!("com.thojensen.crabdash.ssh.{}@{}", remote.user, remote.host));
 
     div()
-        .id(SharedString::from(format!("machine-{}", machine.id)))
-        .h(gpui::rems(40.0 / 16.0))
-        .px(rems(8.0 / 16.0))
+        .id(SharedString::from(format!("machine-{}", machine.uuid)))
+        .h(gpui::rems(60.0 / 16.0))
+        .px(px(10.0))
         .bg(bg)
+        .border_1()
+        .border_color(border)
+        .rounded(px(style::CARD_RADIUS))
         .flex()
         .items_center()
-        .gap(rems(8.0 / 16.0))
+        .gap(px(10.0))
         .cursor_pointer()
         .hover(move |style| {
             style.bg(if selected {
-                rgb(style::SELECTED_BG)
+                rgb(0x2B3849)
             } else {
                 rgb(style::SURFACE_HOVER)
             })
         })
         .child(
             div()
-                .size(gpui::rems(20.0 / 16.0))
+                .relative()
+                .size(gpui::rems(32.0 / 16.0))
                 .flex_none()
+                .rounded(px(style::CARD_RADIUS))
+                .bg(icon_bg)
                 .text_color(icon_color)
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(logos::render(machine)),
+                .child(logos::render(machine))
+                .child(
+                    div()
+                        .absolute()
+                        .right(-px(2.0))
+                        .bottom(-px(2.0))
+                        .size(px(9.0))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(bg)
+                        .bg(dot),
+                ),
         )
         .child(
             div()
@@ -141,12 +183,12 @@ fn machine_item(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(rems(1.0 / 16.0))
-                .line_height(relative(1.15))
+                .gap(px(2.0))
                 .child(
                     clipped_text(name)
                         .w_full()
                         .text_size(gpui::rems(style::TEXT / 16.0))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(name_color),
                 )
                 .child(
@@ -156,14 +198,9 @@ fn machine_item(
                         .text_color(meta_color),
                 ),
         )
-        .child(
-            div()
-                .size(rems(5.0 / 16.0))
-                .flex_none()
-                .rounded_full()
-                .bg(dot),
-        )
-        .on_click(cx.listener(move |_this, _, window, cx| {
+        .on_click(cx.listener(move |app, _, window, cx| {
+            app.machine_selection_generation = app.machine_selection_generation.wrapping_add(1);
+            let generation = app.machine_selection_generation;
             window.activate_window();
             let credentials_key = credentials_key.clone();
             cx.spawn_in(window, async move |this: WeakEntity<Crabdash>, cx| {
@@ -177,6 +214,17 @@ fn machine_item(
                 };
 
                 this.update_in(cx, |this, window, cx| {
+                    if this.machine_selection_generation != generation {
+                        return;
+                    }
+                    let Some(index) = this
+                        .machine_store
+                        .machines
+                        .iter()
+                        .position(|m| m.uuid == machine_uuid)
+                    else {
+                        return;
+                    };
                     if let Some((_, bytes)) = credentials
                         && let Some(remote) = this
                             .machine_store
@@ -203,21 +251,27 @@ fn machine_item(
         }))
 }
 
-fn add_machine_button(cx: &mut Context<Crabdash>) -> impl IntoElement {
+fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
     div()
         .id("open-add-machine-modal")
-        .size(rems(style::CHROME_CONTROL / 16.0))
-        .flex_none()
-        .rounded(px(style::RADIUS))
+        .h(gpui::rems(style::BAR / 16.0))
+        .w_full()
+        .px(px(10.0))
+        .bg(rgb(style::SURFACE))
+        .border_1()
+        .border_color(rgb(style::BORDER))
+        .rounded(px(style::CARD_RADIUS))
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(style::TEXT_MUTED))
+        .gap(px(8.0))
+        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_size(gpui::rems(style::TEXT / 16.0))
         .cursor_pointer()
         .hover(|style| {
             style
                 .bg(rgb(style::SURFACE_HOVER))
-                .text_color(rgb(style::TEXT_SELECTED))
+                .border_color(rgb(style::CONTROL_SELECTED_BORDER))
         })
         .tooltip(|_, cx| {
             control_tooltip(
@@ -229,6 +283,7 @@ fn add_machine_button(cx: &mut Context<Crabdash>) -> impl IntoElement {
             )
         })
         .child(lucide_icon(Icon::Plus, style::ICON))
+        .child("Add machine")
         .on_click(cx.listener(|this, _, window, cx| {
             this.open_add_machine_modal(window, cx);
         }))
@@ -242,7 +297,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .iter()
         .enumerate()
         .map(|(index, machine)| {
-            let row = machine_item(machine, index, app.selected_machine == index, cx);
+            let row = machine_item(machine, app.selected_machine == index, cx);
             let machine_uuid = machine.uuid;
 
             let tooltip_app = app_entity.clone();
@@ -250,7 +305,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
             let is_localhost = machine.id == "localhost";
             right_click_menu(SharedString::from(format!(
                 "machine-context-menu-{}",
-                machine.id
+                machine.uuid
             )))
             .trigger(move |menu_open, _, _| {
                 row.when(!menu_open, |row| {
@@ -270,7 +325,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                     let menu_app_refresh = menu_app.clone();
                     let menu_app_delete = menu_app.clone();
                     let menu = menu.entry("Refresh", Icon::RefreshCw, None, move |_, cx| {
-                        menu_app_refresh.update(cx, |app, cx| app.refresh_services(cx))
+                        menu_app_refresh.update(cx, |app, cx| app.refresh_machine(machine_uuid, cx))
                     });
                     if is_localhost {
                         menu
@@ -296,34 +351,37 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .w(app.sidebar_width)
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(style::CHROME))
+        .bg(rgb(0x1B1B1B))
         .border_r_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(rgb(0x2B2B2B))
         .flex()
         .flex_col()
         .child(
             div()
                 .h(gpui::rems(style::BAR / 16.0))
                 .flex_none()
-                .px(rems(8.0 / 16.0))
+                .px(px(14.0))
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_size(gpui::rems(style::TEXT / 16.0))
+                .text_size(gpui::rems(style::META / 16.0))
                 .text_color(rgb(style::TEXT_MUTED))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(rems(6.0 / 16.0))
-                        .child("Machines")
-                        .child(
-                            div()
-                                .text_size(rems(style::META / 16.0))
-                                .child(app.machine_store.machines.len().to_string()),
-                        ),
+                        .gap(px(7.0))
+                        .child(lucide_icon(Icon::Network, 13.0))
+                        .child("Machines"),
                 )
-                .child(add_machine_button(cx)),
+                .child(
+                    div()
+                        .px(px(6.0))
+                        .rounded(px(style::RADIUS))
+                        .bg(rgb(style::SURFACE_HOVER))
+                        .text_color(rgb(style::TEXT_MUTED))
+                        .child(app.machine_store.machines.len().to_string()),
+                ),
         )
         .child(
             div()
@@ -331,9 +389,23 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .px(rems(4.0 / 16.0))
-                .py(rems(4.0 / 16.0))
-                .child(div().flex().flex_col().children(machine_entries)),
+                .px(px(8.0))
+                .py(px(6.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .children(machine_entries),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .p(px(10.0))
+                .border_t_1()
+                .border_color(rgb(style::BORDER))
+                .child(add_machine_item(cx)),
         )
         .child(
             div()

@@ -14,7 +14,6 @@ pub(crate) const CHROME: u32 = 0x202020;
 pub(crate) const TEXT_PRIMARY: u32 = 0xE0E0E0;
 pub(crate) const TEXT_SELECTED: u32 = 0xF2F2F2;
 pub(crate) const TEXT_MUTED: u32 = 0x969696;
-pub(crate) const SELECTED_BG: u32 = 0x303030;
 pub(crate) const SURFACE: u32 = CONTENT;
 pub(crate) const SURFACE_HOVER: u32 = 0x282828;
 pub(crate) const BORDER: u32 = 0x303030;

@@ -1,7 +1,7 @@
 //! Flat tabs with insertion targets for reordering within the tab strip.
 use crate::app::{Crabdash, MainTab};
 use crate::components::{
-    common::{clipped_text, control_tooltip, lucide_icon},
+    common::{control_tooltip, lucide_icon},
     style,
 };
 use gpui::{prelude::*, *};
@@ -68,6 +68,12 @@ fn tab_button(
     hints: bool,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
+    let shortcut = || {
+        div()
+            .flex_none()
+            .text_size(rems(style::META / 16.0))
+            .child(tab.shortcut())
+    };
     div()
         .id(SharedString::from(format!("tab-{}", tab.label())))
         .h_full()
@@ -80,6 +86,7 @@ fn tab_button(
         .items_center()
         .gap(rems(4.0 / 16.0))
         .text_size(rems(style::TEXT / 16.0))
+        .line_height(relative(1.0))
         .whitespace_nowrap()
         .text_color(rgb(if active {
             style::TEXT_SELECTED
@@ -118,16 +125,50 @@ fn tab_button(
             reorder(app, drag, Some(tab), cx);
         }))
         .tooltip(move |_, cx| control_tooltip(format!("{} · drag to reorder", tab.label()), cx))
-        .child(tab_icon(tab))
-        .child(clipped_text(tab.label()))
-        // Preserve intrinsic width and label position as Alt hints appear.
+        // Equal side slots keep the title centered, using the shortcut's actual
+        // font width instead of a platform-specific estimate.
         .child(
             div()
                 .flex_none()
-                .opacity(if hints { 1.0 } else { 0.0 })
-                .text_size(rems(style::META / 16.0))
+                .min_w(rems(style::ICON / 16.0))
+                .h_full()
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(shortcut().opacity(0.0))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(tab_icon(tab)),
+                ),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_center()
+                .text_ellipsis()
+                .overflow_hidden()
+                .child(tab.label()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .min_w(rems(style::ICON / 16.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
                 .text_color(rgb(style::TEXT_MUTED))
-                .child(tab.shortcut()),
+                .child(shortcut().opacity(if hints { 1.0 } else { 0.0 })),
         )
         .on_click(cx.listener(move |app, _, _, cx| app.select_workspace_tab(tab, cx)))
         .on_drag(
