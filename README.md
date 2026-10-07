@@ -143,6 +143,11 @@ order and selection when migrated. Invalid saved files are preserved until
 explicit recovery; save, rename, and delete controls stay disabled until recovery
 successfully writes the reset layouts.
 
+Automatic table refresh updates Docker, Disks, and Services when their pages are
+visible, including unfocused split panes. Showing a hidden page refreshes it even
+with automatic refresh disabled. Ctrl+R refreshes all three tables and machine
+information; switching or rearranging tabs refreshes newly visible pages.
+
 The **System** tab samples the selected machine every two seconds by default while visible,
 including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,
 memory, network, disk activity, machine details, and a card for each graphics adapter.

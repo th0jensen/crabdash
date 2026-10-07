@@ -4,6 +4,7 @@ pub(crate) mod docker;
 pub(crate) mod logs;
 pub(crate) mod machines;
 pub(crate) mod notifications;
+pub(crate) mod polling;
 pub mod preferences;
 pub(crate) mod refresh;
 pub(crate) mod services;

@@ -65,6 +65,7 @@ pub struct Crabdash {
     pub(crate) disks_refresh: features::refresh::Requests,
     pub(crate) services_refresh: features::refresh::Requests,
     pub(crate) machine_refresh: features::refresh::Requests,
+    pub(crate) polling: features::polling::State,
     pub(crate) machine_selection_generation: u64,
     pub(crate) docker_log_refresh: features::refresh::Requests<(Uuid, String)>,
     pub(crate) service_log_refresh: features::refresh::Requests<(Uuid, String)>,
@@ -171,6 +172,7 @@ impl Crabdash {
             disks_refresh: Default::default(),
             services_refresh: Default::default(),
             machine_refresh: Default::default(),
+            polling: Default::default(),
             machine_selection_generation: 0,
             docker_log_refresh: Default::default(),
             service_log_refresh: Default::default(),
@@ -316,6 +318,7 @@ impl Render for Crabdash {
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
         ));
         self.apply_workspace_runtime(window, cx);
+        self.prepare_visible_domains(cx);
         self.prepare_system_resources(cx);
         self.resize_quake_terminal(window, cx);
 

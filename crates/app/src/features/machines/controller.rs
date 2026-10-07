@@ -31,14 +31,20 @@ impl Crabdash {
         else {
             return;
         };
+        if self.polling.metadata_replaced(&machine) {
+            self.machine_refresh.forget(&uuid);
+        }
         let Some(ticket) = self.machine_refresh.begin(uuid) else {
             return;
         };
+        let target = crate::features::polling::Target::from_machine(&machine);
+        let requested = std::time::Instant::now();
+        self.polling.record_metadata_request(&machine, requested);
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let result = cx
                 .background_spawn(async move {
-                    machine.sync_system_info().await?;
-                    Ok::<_, anyhow::Error>((machine.system_info, machine.kind))
+                    let changed = machine.sync_system_info().await?;
+                    Ok::<_, anyhow::Error>((machine.system_info, machine.kind, changed))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -46,20 +52,30 @@ impl Crabdash {
                     return;
                 }
                 match result {
-                    Ok((info, kind)) => {
+                    Ok((info, kind, changed)) => {
                         if let Some(machine) = this
                             .machine_store
                             .machines
                             .iter_mut()
                             .find(|m| m.uuid == uuid)
                         {
-                            machine.system_info = info;
-                            machine.kind = kind;
+                            if !target.matches(machine) {
+                                return;
+                            }
+                            if changed {
+                                machine.system_info = info;
+                                machine.kind = kind;
+                            }
+                            // Newly discovered platform metadata must not cause
+                            // another TTL request on the immediately following tick.
+                            this.polling.record_metadata_request(machine, requested);
+                            if changed {
+                                cx.notify();
+                            }
                         }
                     }
                     Err(error) => tracing::warn!(%error, "sync_system_info failed"),
                 }
-                cx.notify();
             })
             .ok();
         })
@@ -80,45 +96,64 @@ impl Crabdash {
                     Err(_) => break,
                 };
                 smol::Timer::after(std::time::Duration::from_secs(interval)).await;
-                match this.update(cx, |this, _| this.preferences.auto_refresh) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
+                // Heartbeats also run with table auto-refresh disabled. Snapshot
+                // only connection owners, avoiding clones of cached table data.
+                let machines = match this.update(cx, |this, _cx| {
+                    this.machine_store
+                        .machines
+                        .iter()
+                        .map(|machine| {
+                            let mut remote = machine.remote.clone();
+                            if let Some(remote) = remote.as_mut() {
+                                remote.auth = None;
+                            }
+                            (
+                                machine.uuid,
+                                crate::features::polling::Target::from_machine(machine),
+                                remote,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }) {
+                    Ok(m) => m,
                     Err(_) => break,
-                }
-
-                // Clone machines to check connection state outside the entity lock
-                let machines =
-                    match this.update(cx, |this, _cx| this.machine_store.machines.clone()) {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    };
+                };
 
                 // Check connected state for each remote machine asynchronously
                 let mut connected_states = Vec::with_capacity(machines.len());
-                for machine in &machines {
-                    let state = match machine.remote.as_ref() {
+                for (uuid, target, remote) in machines {
+                    let state = match remote.as_ref() {
                         Some(rc) => rc.has_active_session().await,
                         None => true,
                     };
-                    connected_states.push((machine.uuid, state));
+                    connected_states.push((uuid, target, state));
                 }
 
                 // Apply connected states (shared Arc, so clones see this too) and refresh
                 this.update(cx, |this, cx| {
-                    for (uuid, connected) in connected_states {
+                    let mut changed = false;
+                    for (uuid, target, connected) in connected_states {
                         if let Some(m) = this
                             .machine_store
                             .machines
                             .iter_mut()
                             .find(|m| m.uuid == uuid)
                         {
+                            if !target.matches(m) {
+                                continue;
+                            }
                             if let Some(rc) = m.remote.as_ref() {
                                 rc.set_connected(connected);
                             }
+                            changed |= this.polling.publish_connection(m);
                         }
                     }
-                    this.refresh_services(cx);
-                    cx.notify();
+                    if this.preferences.auto_refresh {
+                        this.refresh_visible_tables(cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
                 })
                 .ok();
             }
@@ -155,6 +190,7 @@ impl Crabdash {
                         }
                         this.system.remove(uuid);
                         this.machine_refresh.forget(&uuid);
+                        this.polling.forget(uuid);
                         this.disks_refresh.forget(&uuid);
                         this.services_refresh.forget(&uuid);
                         this.docker_refresh.forget(&uuid);

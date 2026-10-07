@@ -221,7 +221,6 @@ impl Crabdash {
         self.sync_workspace_store(cx);
         if self.workspaces.layout_mut().show(tab.into()) {
             self.active_tab = tab;
-            self.refresh_services(cx);
             self.persist_workspace(cx);
         }
     }
@@ -263,7 +262,6 @@ impl Crabdash {
             .drop_tab(tab.into(), target, placement)
         {
             self.active_tab = self.workspaces.layout().active().into();
-            self.refresh_services(cx);
             self.persist_workspace(cx);
         }
     }
@@ -299,7 +297,7 @@ impl Crabdash {
         if self.quake_terminal_open != terminal_open {
             self.set_quake_terminal_open(terminal_open, window, cx);
         }
-        self.refresh_services(cx);
+        // Render refreshes newly visible domains after applying this layout.
         self.persist_workspace(cx);
         self.focus_handle.focus(window);
     }
