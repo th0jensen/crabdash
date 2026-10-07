@@ -159,7 +159,7 @@ Preferences has **General**, **Terminal**, and **Interface** sections:
 
 - General: login/background behavior, automatic refresh, refresh interval, and recent log limits.
 - Terminal: installed monospaced font, font size, line height, TERM/terminfo, true-colour advertisement, scrollback buffer, and initial panel rows. Font changes update existing terminals and log views; environment and buffer settings affect new sessions.
-- Interface: system or installed font, font size, sidebar width, equal tab widths, and persistent shortcut hints. Controls scale with the interface font size.
+- Interface: system or installed font, font size, sidebar width, minimum equal tab widths, and persistent shortcut hints. Tabs expand together to fit their titles and shortcuts; showing hints does not move them. Controls scale with the interface font size.
 
 Docker, disk, and service tables share rounded cards, neutral controls and consistent labels,
 status filters, and a live search field. Click a data-column heading to sort;

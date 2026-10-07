@@ -41,7 +41,7 @@ impl Field {
             Self::Scrollback => "Scrollback buffer",
             Self::TerminalRows => "Initial panel height",
             Self::SidebarWidth => "Sidebar width",
-            Self::TabWidth => "Tab width",
+            Self::TabWidth => "Minimum tab width",
         }
     }
     fn hint(self) -> &'static str {
@@ -57,7 +57,7 @@ impl Field {
             Self::Scrollback => "0–100,000 lines · new terminal sessions",
             Self::TerminalRows => "4–48 rows · initial height",
             Self::SidebarWidth => "Pixels · 180–420",
-            Self::TabWidth => "Pixels · 120–240; all tabs use the same width",
+            Self::TabWidth => "Pixels · 120–240; equal widths expand to fit titles and shortcuts",
         }
     }
 }

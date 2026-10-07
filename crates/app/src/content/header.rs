@@ -48,6 +48,43 @@ fn tab_icon(tab: MainTab) -> Div {
     }
 }
 
+fn text_width(app: &Crabdash, text: &str, size: f32, window: &Window) -> Pixels {
+    let family = if app.preferences.interface_font.is_empty() {
+        SharedString::from(".SystemUIFont")
+    } else {
+        app.preferences.interface_font.clone().into()
+    };
+    window
+        .text_system()
+        .shape_line(
+            text.to_owned().into(),
+            window.rem_size() * (size / 16.0),
+            &[TextRun {
+                len: text.len(),
+                font: font(family),
+                color: rgb(style::TEXT_PRIMARY).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        )
+        .width
+}
+
+fn tab_width(app: &Crabdash, window: &Window) -> Pixels {
+    let scale = window.rem_size() / 16.0;
+    Tab::ALL
+        .iter()
+        .fold(scale * app.preferences.tab_width, |width, tab| {
+            let tab: MainTab = (*tab).into();
+            let title = text_width(app, tab.label(), style::TEXT, window);
+            let hint = text_width(app, tab.shortcut(), style::META, window);
+            let margin = (hint + scale * 8.0).max(scale * (style::ICON + 13.0));
+            width.max(title + margin * 2.0)
+        })
+}
+
 fn reorder(
     app: &mut Crabdash,
     drag: &DraggedTab,
@@ -76,6 +113,8 @@ fn tab_button(
     tab: MainTab,
     active: bool,
     hints: bool,
+    width: Pixels,
+    title_width: Pixels,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
     let owner = cx.entity().downgrade();
@@ -92,7 +131,7 @@ fn tab_button(
         )))
         .h_full()
         .min_w_0()
-        .w(rems(app.preferences.tab_width / 16.0))
+        .w(width)
         .flex_none()
         .px(rems(8.0 / 16.0))
         .relative()
@@ -162,7 +201,7 @@ fn tab_button(
                 .child(
                     div()
                         .min_w_0()
-                        .max_w(rems((app.preferences.tab_width - 72.0).max(0.0) / 16.0))
+                        .max_w(title_width)
                         .text_ellipsis()
                         .overflow_hidden()
                         .child(tab.label()),
@@ -217,6 +256,7 @@ pub(super) fn render(
 ) -> Stateful<Div> {
     let hints =
         app.preferences.always_show_shortcuts || window.modifiers().alt || app.open_menu.is_some();
+    let width = tab_width(app, window);
     div()
         .id(SharedString::from(format!("pane-{pane}-tab-strip")))
         .h(rems(style::BAR / 16.0))
@@ -235,7 +275,19 @@ pub(super) fn render(
             }),
         )
         .children(tabs.iter().enumerate().map(|(index, tab)| {
-            tab_button(app, pane, index, (*tab).into(), *tab == active, hints, cx)
+            let hint = text_width(app, MainTab::from(*tab).shortcut(), style::META, window);
+            let title_width = width - (hint + window.rem_size() * 0.5) * 2.0;
+            tab_button(
+                app,
+                pane,
+                index,
+                (*tab).into(),
+                *tab == active,
+                hints,
+                width,
+                title_width,
+                cx,
+            )
         }))
         .child(
             div()
