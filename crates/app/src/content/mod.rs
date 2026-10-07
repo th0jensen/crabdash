@@ -97,7 +97,12 @@ fn render_node(
             );
             div()
                 .id(SharedString::from(format!("workspace-pane-{pane}")))
-                .size_full()
+                // Percentage heights can resolve against System's intrinsic
+                // scroll content in a nested block wrapper. Honor the split's
+                // allocated geometry so each domain scrolls inside its pane.
+                .w(width)
+                .h(height)
+                .flex_none()
                 .min_w_0()
                 .min_h_0()
                 .relative()
@@ -177,7 +182,9 @@ fn render_node(
                 );
             div()
                 .id(SharedString::from(format!("workspace-split-{id}")))
-                .size_full()
+                .w(width)
+                .h(height)
+                .flex_none()
                 .min_w_0()
                 .min_h_0()
                 .flex()
