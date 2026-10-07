@@ -88,17 +88,25 @@ pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
         .gap(px(12.0))
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
                         .text_size(gpui::rems(style::TEXT / 16.0))
                         .text_color(rgb(style::TEXT_PRIMARY))
                         .child(title.to_string()),
                 )
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
                         .text_size(gpui::rems(style::META / 16.0))
                         .text_color(rgb(style::TEXT_MUTED))
                         .child(description.to_string()),
