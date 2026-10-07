@@ -100,7 +100,6 @@ pub struct Crabdash {
     pub(crate) logs_open_services: HashSet<(Uuid, String)>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
-    pub(crate) services_scroll_handle: ScrollHandle,
     pub(crate) quake_terminals: HashMap<Uuid, features::terminal::QuakeTerminal>,
     pub(crate) quake_terminal_open: bool,
     pub(crate) quake_height: Pixels,
@@ -226,7 +225,6 @@ impl Crabdash {
             logs_open_services: HashSet::default(),
             docker_scroll_handle: ScrollHandle::new(),
             disks_scroll_handle: ScrollHandle::new(),
-            services_scroll_handle: ScrollHandle::new(),
             quake_terminals: HashMap::default(),
             quake_terminal_open: false,
             quake_height: px(crate::components::style::BAR * settings.interface_font_size

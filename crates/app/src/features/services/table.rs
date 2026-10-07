@@ -31,17 +31,19 @@ pub(crate) struct State {
     pub filter: Filter,
     pub sort: Sort<Column>,
     pub search: Search,
+    pub(super) list: super::virtual_list::State,
 }
 impl State {
     pub fn new(cx: &mut Context<Crabdash>) -> Self {
         Self {
             filter: Filter::All,
             sort: Sort::new(Column::Name),
-            search: Search::new(
+            search: Search::with_reset(
                 "Filter services…",
-                |app| app.services_scroll_handle.clone(),
+                |app| app.services_table.list.scroll_to_top(),
                 cx,
             ),
+            list: super::virtual_list::State::new(),
         }
     }
     pub fn visible<'a>(&self, rows: &'a [ServiceItem], query: &str) -> Vec<&'a ServiceItem> {

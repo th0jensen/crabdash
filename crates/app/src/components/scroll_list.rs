@@ -3,6 +3,32 @@ use gpui::*;
 
 use crate::app::Crabdash;
 
+/// Fixed chrome around a body that owns its own bounded scrolling, such as a
+/// variable-height GPUI list. Do not add another scrolling ancestor here.
+pub(crate) fn bounded(header: AnyElement, body: impl IntoElement, is_scrolled: bool) -> Div {
+    div()
+        .relative()
+        .size_full()
+        .min_h_0()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .w_full()
+                .flex_none()
+                .pb(px(12.0))
+                .border_b_1()
+                .border_color(if is_scrolled {
+                    rgb(crate::components::style::BORDER)
+                } else {
+                    rgba(0x00000000)
+                })
+                .child(header),
+        )
+        .child(div().flex_1().min_h_0().min_w_0().w_full().child(body))
+}
+
 pub fn render(
     id: impl Into<ElementId>,
     scroll_handle: &ScrollHandle,

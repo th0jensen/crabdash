@@ -13,8 +13,7 @@ use crate::{
 use super::table::{Column, Filter, metadata as service_metadata};
 use crate::components::table::{
     ACTIONS_WIDTH, clipped_text, error_panel, filter_chip, fixed_column, placeholder_card,
-    responsive_row, responsive_status_column, sort_heading, status_label, table_card,
-    table_heading, toolbar,
+    responsive_row, responsive_status_column, sort_heading, status_label, table_heading, toolbar,
 };
 
 fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) -> Div {
@@ -47,8 +46,7 @@ fn stats_chip(
     filter_chip(id, label, value.parse().unwrap_or(0), active).on_click(cx.listener(
         move |this, _, _, cx| {
             this.services_table.filter = filter;
-            this.services_scroll_handle
-                .set_offset(point(px(0.0), px(0.0)));
+            this.services_table.list.scroll_to_top();
             cx.notify();
         },
     ))
@@ -70,8 +68,7 @@ fn table_header(
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.services_table.sort.select(Column::Name);
-                    this.services_scroll_handle
-                        .set_offset(point(px(0.0), px(0.0)));
+                    this.services_table.list.scroll_to_top();
                     cx.notify();
                 })),
             ),
@@ -86,8 +83,7 @@ fn table_header(
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.services_table.sort.select(Column::Details);
-                        this.services_scroll_handle
-                            .set_offset(point(px(0.0), px(0.0)));
+                        this.services_table.list.scroll_to_top();
                         cx.notify();
                     })),
                 ),
@@ -105,8 +101,7 @@ fn table_header(
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.services_table.sort.select(Column::Status);
-                    this.services_scroll_handle
-                        .set_offset(point(px(0.0), px(0.0)));
+                    this.services_table.list.scroll_to_top();
                     cx.notify();
                 }))
                 .justify_center(),
@@ -301,7 +296,7 @@ pub fn render(
     let show_details = panel_width
         >= px(720.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let machine = app.selected_machine();
-    let services = machine.services.systemd.clone();
+    let services = &machine.services.systemd;
 
     if let Some(error) = machine.services.systemd_error.clone() {
         return error_panel("Unable to load services", error);
@@ -322,83 +317,158 @@ pub fn render(
         .count();
     let visible_services = app
         .services_table
-        .visible(&services, &app.services_table.search.query(cx));
+        .visible(services, &app.services_table.search.query(cx));
 
-    scroll_list::render(
-        "services-scroll",
-        &app.services_scroll_handle,
-        Some(
-            toolbar(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(stats_chip(
-                        "service-filter-total",
-                        "All",
-                        total_count.to_string(),
-                        app.services_table.filter == Filter::All,
-                        Filter::All,
-                        cx,
+    let settings = crate::features::preferences::current(cx);
+    // Only the height is needed here; resolving terminal glyph advances for
+    // every sample would add work even when every log panel is collapsed.
+    let line_height = (settings.terminal_font_size * settings.terminal_line_height).ceil();
+    let rows = visible_services
+        .iter()
+        .map(|service| {
+            let key = (machine.uuid, service.name.clone());
+            super::virtual_list::Row {
+                name: service.name.clone(),
+                description: service.description.as_ref().is_some_and(|description| {
+                    !description.trim().is_empty() && description.as_str() != service.name
+                }),
+                logs: app.logs_open_services.contains(&key).then(|| {
+                    f32::from(crate::features::logs::content_height(
+                        app.expanded_service_logs.get(&key),
+                        line_height,
                     ))
-                    .child(stats_chip(
-                        "service-filter-active",
-                        "Active",
-                        running_count.to_string(),
-                        app.services_table.filter == Filter::Active,
-                        Filter::Active,
-                        cx,
-                    ))
-                    .child(stats_chip(
-                        "service-filter-inactive",
-                        "Inactive",
-                        inactive_count.to_string(),
-                        app.services_table.filter == Filter::Inactive,
-                        Filter::Inactive,
-                        cx,
-                    ))
-                    .child(stats_chip(
-                        "service-filter-failed",
-                        "Failed",
-                        failed_count.to_string(),
-                        app.services_table.filter == Filter::Failed,
-                        Filter::Failed,
-                        cx,
-                    )),
-                &app.services_table.search,
-                panel_width
-                    < px(620.0 * app.preferences.interface_font_size
-                        / crate::components::style::TEXT),
-            )
-            .into_any_element(),
-        ),
-        div()
-            .flex()
-            .flex_col()
-            .when(total_count == 0, |this| {
-                this.child(placeholder_card(
-                    "No services",
-                    "No system services have been loaded for this machine yet.",
+                    .to_bits()
+                }),
+            }
+        })
+        .collect();
+    let target = (machine.uuid, app.machine_selection_generation);
+    app.services_table.list.prepare(
+        target,
+        rows,
+        super::virtual_list::Metrics {
+            compact,
+            interface_font: app.preferences.interface_font.clone(),
+            interface_size: app.preferences.interface_font_size.to_bits(),
+            log_line_height: line_height.to_bits(),
+        },
+    );
+
+    let body = if total_count == 0 {
+        placeholder_card(
+            "No services",
+            "No system services have been loaded for this machine yet.",
+        )
+    } else if visible_services.is_empty() {
+        placeholder_card(
+            "No matching services",
+            "Try another status filter or clear the search field.",
+        )
+    } else {
+        let snapshot: Vec<ServiceItem> = visible_services.into_iter().cloned().collect();
+        let count = snapshot.len();
+        let owner = cx.entity().downgrade();
+        let list = list(
+            app.services_table.list.handle.clone(),
+            move |index, _, cx| {
+                if index == count + 1 {
+                    return div().h(px(32.0)).into_any_element();
+                }
+                let rendered = owner.update(cx, |app, cx| {
+                    // A callback must never render a captured row for a new target.
+                    if (
+                        app.selected_machine().uuid,
+                        app.machine_selection_generation,
+                    ) != target
+                    {
+                        return div().into_any_element();
+                    }
+                    if index == 0 {
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .bg(rgb(style::SURFACE))
+                            .border_t_1()
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(rgb(style::BORDER))
+                            .rounded_t(px(style::CARD_RADIUS))
+                            .child(table_header(show_details, compact, app, cx))
+                            .into_any_element()
+                    } else if let Some(service) = snapshot.get(index - 1) {
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .bg(rgb(style::SURFACE))
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(rgb(style::BORDER))
+                            .when(index == count, |this| {
+                                this.border_b_1().rounded_b(px(style::CARD_RADIUS))
+                            })
+                            .child(system_service_row(app, cx, service, show_details, compact))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }
+                });
+                match rendered {
+                    Ok(element) => element,
+                    Err(_) => div().into_any_element(),
+                }
+            },
+        )
+        .size_full();
+        div().size_full().min_h_0().min_w_0().child(list)
+    };
+
+    scroll_list::bounded(
+        toolbar(
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.0))
+                .child(stats_chip(
+                    "service-filter-total",
+                    "All",
+                    total_count.to_string(),
+                    app.services_table.filter == Filter::All,
+                    Filter::All,
+                    cx,
                 ))
-            })
-            .when(total_count > 0 && visible_services.is_empty(), |this| {
-                this.child(placeholder_card(
-                    "No matching services",
-                    "Try another status filter or clear the search field.",
+                .child(stats_chip(
+                    "service-filter-active",
+                    "Active",
+                    running_count.to_string(),
+                    app.services_table.filter == Filter::Active,
+                    Filter::Active,
+                    cx,
                 ))
-            })
-            .when(!visible_services.is_empty(), |this| {
-                this.child(
-                    table_card()
-                        .child(table_header(show_details, compact, app, cx))
-                        .children(visible_services.iter().map(|service| {
-                            system_service_row(app, cx, service, show_details, compact)
-                        })),
-                )
-            }),
-        cx,
+                .child(stats_chip(
+                    "service-filter-inactive",
+                    "Inactive",
+                    inactive_count.to_string(),
+                    app.services_table.filter == Filter::Inactive,
+                    Filter::Inactive,
+                    cx,
+                ))
+                .child(stats_chip(
+                    "service-filter-failed",
+                    "Failed",
+                    failed_count.to_string(),
+                    app.services_table.filter == Filter::Failed,
+                    Filter::Failed,
+                    cx,
+                )),
+            &app.services_table.search,
+            panel_width
+                < px(620.0 * app.preferences.interface_font_size / crate::components::style::TEXT),
+        )
+        .into_any_element(),
+        body,
+        app.services_table.list.is_scrolled(),
     )
 }

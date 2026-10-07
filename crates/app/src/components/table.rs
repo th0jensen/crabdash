@@ -294,6 +294,20 @@ impl Search {
         scroll: fn(&crate::app::Crabdash) -> ScrollHandle,
         cx: &mut Context<crate::app::Crabdash>,
     ) -> Self {
+        Self::with_reset(
+            placeholder,
+            move |app| {
+                scroll(app).set_offset(point(px(0.0), px(0.0)));
+            },
+            cx,
+        )
+    }
+
+    pub fn with_reset(
+        placeholder: &'static str,
+        reset: impl Fn(&crate::app::Crabdash) + 'static,
+        cx: &mut Context<crate::app::Crabdash>,
+    ) -> Self {
         let field = cx.new(|cx| {
             crate::components::text_field::TextField::new("", placeholder, 0, cx).compact()
         });
@@ -302,7 +316,7 @@ impl Search {
             let query = field.read(cx).text().trim().to_lowercase();
             if query != previous_query {
                 previous_query = query;
-                scroll(this).set_offset(point(px(0.0), px(0.0)));
+                reset(this);
                 cx.notify();
             }
         });

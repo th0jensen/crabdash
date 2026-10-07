@@ -9,6 +9,17 @@ use crate::{
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 
+/// Shared with variable-height lists so offscreen log panels invalidate their
+/// cached height using the same trimmed content and cap as their presentation.
+pub(crate) fn content_height(state: Option<&TerminalState>, line_height: f32) -> Pixels {
+    let rows = state.map(|state| state.rendered.as_slice()).unwrap_or(&[]);
+    let end = rows
+        .iter()
+        .rposition(|row| !row.is_empty())
+        .map_or(0, |i| i + 1);
+    px((end.max(1) as f32 * line_height).min(300.0))
+}
+
 pub(crate) fn render(
     id: impl Into<SharedString>,
     state: Option<&TerminalState>,
@@ -28,7 +39,7 @@ pub(crate) fn render(
         .unwrap_or_default();
     let wheel_handle = scroll_handle.clone();
     let line_height = terminal::cell_metrics(&crate::features::preferences::current(cx), cx).1;
-    let height = px((rows.len().max(1) as f32 * line_height).min(300.0));
+    let height = content_height(state, line_height);
 
     let content = if loading || rows.is_empty() {
         div()
