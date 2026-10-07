@@ -8,9 +8,9 @@ use crate::features::{
     notifications as toast, preferences,
 };
 use crate::{
-    AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
-    OpenPreferences, RefreshServices, ToggleAppMenu, ToggleFullScreen, ToggleSidebar,
-    ToggleTerminal, ZoomWindow, content, features, show_about_dialog,
+    AboutCrabdash, CloseWindow, DismissModal, MinimizeWindow, OpenAddMachine, OpenPreferences,
+    RefreshServices, ToggleAppMenu, ToggleFullScreen, ToggleSidebar, ToggleTerminal, ZoomWindow,
+    content, features, show_about_dialog,
 };
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
@@ -56,9 +56,6 @@ pub struct Crabdash {
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
     pub(crate) workspaces: features::workspaces::State,
-    pub(crate) detached_windows:
-        HashMap<(Uuid, u32), WindowHandle<crate::desktop::window::DetachedWorkspace>>,
-    pub(crate) detached_reconcile_scheduled: bool,
     pub(crate) docker_refresh_generation: HashMap<Uuid, u64>,
     pub(crate) docker_table: features::docker::table::State,
     pub(crate) disks_table: features::disks::table::State,
@@ -88,8 +85,6 @@ pub struct Crabdash {
     pub(crate) services_scroll_handle: ScrollHandle,
     pub(crate) quake_terminals: HashMap<Uuid, features::terminal::QuakeTerminal>,
     pub(crate) quake_terminal_open: bool,
-    pub(crate) terminal_window: Option<WindowId>,
-    pub(crate) overlay_window: Option<WindowId>,
     pub(crate) quake_height: Pixels,
     pub(crate) docker_run_config: DockerRunConfig,
     pub(crate) docker_run_modal_open: bool,
@@ -139,7 +134,7 @@ impl Crabdash {
         cx.set_global(settings.clone());
         let preference_changes =
             cx.observe_global::<crate::features::preferences::Preferences>(|this, cx| {
-                this.update_saved_preferences(crate::features::preferences::current(cx));
+                this.update_saved_preferences(crate::features::preferences::current(cx), cx);
                 cx.notify();
             });
         let mut preference_editor = preferences::Editor::new(&settings, cx);
@@ -153,8 +148,6 @@ impl Crabdash {
             selected_machine: 0,
             active_tab,
             workspaces,
-            detached_windows: HashMap::new(),
-            detached_reconcile_scheduled: false,
             docker_refresh_generation: HashMap::new(),
             docker_table: features::docker::table::State::new(cx),
             disks_table: features::disks::table::State::new(cx),
@@ -184,9 +177,8 @@ impl Crabdash {
             services_scroll_handle: ScrollHandle::new(),
             quake_terminals: HashMap::default(),
             quake_terminal_open: false,
-            terminal_window: None,
-            overlay_window: None,
-            quake_height: px(36.0
+            quake_height: px(crate::components::style::BAR * settings.interface_font_size
+                / crate::components::style::TEXT
                 + 26.0
                 + f32::from(settings.terminal_rows)
                     * (settings.terminal_font_size * settings.terminal_line_height).ceil()),
@@ -208,55 +200,59 @@ impl Crabdash {
         };
         app.refresh_services(cx);
         app.start_update_loop(cx);
+        cx.on_release(|app, _| {
+            for terminal in app.quake_terminals.values() {
+                if let Some(controller) = &terminal.controller
+                    && let Err(error) = controller.shutdown()
+                {
+                    tracing::debug!(%error, "Failed to shut down a released dashboard terminal");
+                }
+            }
+        })
+        .detach();
         app
     }
 
-    pub(crate) fn dismiss_add_machine_modal_action(
+    pub(crate) fn dismiss_modal_action(
         &mut self,
-        _: &DismissAddMachineModal,
+        _: &DismissModal,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.docker_removal.take().is_some() {
-            self.focus_handle.focus(window);
-            cx.notify();
+        if self.docker_run_modal_open {
+            if self.docker_run_config.busy {
+                return;
+            }
+            self.docker_run_modal_open = false;
+        } else if self.preferences_open {
+            if self.preference_editor.busy {
+                return;
+            }
+            self.preferences_open = false;
+        } else if self.docker_removal.take().is_some() {
         } else if self.add_machine_modal_open {
             self.close_add_machine_modal(window, cx);
+            return;
+        } else if self.workspaces.open {
+            self.workspaces.open = false;
+            self.workspaces.rename = None;
+        } else if self.open_menu.take().is_none() {
+            return;
         }
+        self.focus_handle.focus(window);
+        cx.notify();
     }
 }
 
-impl Crabdash {
-    pub(crate) fn render_workspace(
-        &mut self,
-        detached: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let title = if detached.is_some() {
-            format!("Crabdash — {}", self.workspaces.store.current().name)
-        } else {
-            "Crabdash".into()
-        };
-        window.set_window_title(&title);
-        if detached.is_none() {
-            if self.quake_terminal_open
-                && !cx
-                    .windows()
-                    .iter()
-                    .any(|handle| Some(handle.window_id()) == self.terminal_window)
-            {
-                self.terminal_window = Some(window.window_handle().window_id());
-            }
-            self.apply_workspace_runtime(window, cx);
-        }
-        crate::desktop::window::schedule_workspace_windows(self, cx);
-        window.set_rem_size(px(16.0 * self.preferences.interface_font_size / 13.0));
+impl Render for Crabdash {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_window_title("Crabdash");
+        window.set_rem_size(px(
+            16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
+        ));
+        self.apply_workspace_runtime(window, cx);
         self.resize_quake_terminal(window, cx);
 
-        let overlay_here = self
-            .overlay_window
-            .is_none_or(|id| id == window.window_handle().window_id());
         let root = div()
             .font_family(if self.preferences.interface_font.is_empty() {
                 SharedString::from(".SystemUIFont")
@@ -278,9 +274,10 @@ impl Crabdash {
                 show_about_dialog(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenPreferences, window, cx| {
-                this.preference_editor = preferences::Editor::new(&this.preferences, cx);
+                if !this.preference_editor.busy {
+                    this.preference_editor = preferences::Editor::new(&this.preferences, cx);
+                }
                 this.preferences_open = true;
-                this.overlay_window = Some(window.window_handle().window_id());
                 this.login_startup = crate::desktop::startup::LoginStartup::load();
                 window.focus(&this.focus_handle);
                 cx.notify();
@@ -291,21 +288,9 @@ impl Crabdash {
                 } else {
                     Some(0)
                 };
-                this.overlay_window = Some(window.window_handle().window_id());
                 this.menu_item = 0;
                 window.focus(&this.focus_handle);
                 cx.notify();
-            }))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.preferences_open
-                    && this.overlay_window == Some(window.window_handle().window_id())
-                    && !this.preference_editor.busy
-                    && event.keystroke.key == "escape"
-                {
-                    this.preferences_open = false;
-                    cx.stop_propagation();
-                    cx.notify();
-                }
             }))
             .on_modifiers_changed(cx.listener(|_, _: &ModifiersChangedEvent, _, cx| {
                 cx.notify();
@@ -326,7 +311,7 @@ impl Crabdash {
             .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
                 this.open_add_machine_modal(window, cx);
             }))
-            .on_action(cx.listener(Crabdash::dismiss_add_machine_modal_action))
+            .on_action(cx.listener(Crabdash::dismiss_modal_action))
             .on_action(cx.listener(Crabdash::submit_add_machine_action))
             .on_action(|_: &MinimizeWindow, window, _| {
                 window.minimize_window();
@@ -353,7 +338,7 @@ impl Crabdash {
                             .min_h_0()
                             .min_w_0()
                             .flex()
-                            .when(detached.is_none() && !self.sidebar_collapsed, |this| {
+                            .when(!self.sidebar_collapsed, |this| {
                                 this.on_drag_move(cx.listener(
                                     |this,
                                      event: &DragMoveEvent<sidebar::DraggedSidebarResize>,
@@ -363,17 +348,14 @@ impl Crabdash {
                                     },
                                 ))
                             })
-                            .when(detached.is_none() && !self.sidebar_collapsed, |this| {
+                            .when(!self.sidebar_collapsed, |this| {
                                 this.child(sidebar::render(self, cx))
                             })
-                            .child(match detached {
-                                Some(id) => content::render_detached(self, id, window, cx),
-                                None => content::render(self, window, cx),
-                            }),
+                            .child(content::render(self, window, cx)),
                     ),
             )
             .child(crate::desktop::window::resize_handles(window))
-            .when(self.terminal_is_open_in(window), |this| {
+            .when(self.quake_terminal_open, |this| {
                 this.child(features::terminal::render_quake(self, window, cx))
             })
             .when_some(self.status_message.as_ref(), |this, message| {
@@ -385,30 +367,24 @@ impl Crabdash {
                         .child(toast::render(message.clone(), cx)),
                 )
             })
-            .when(overlay_here && self.preferences_open, |this| {
+            .when(self.preferences_open, |this| {
                 this.child(preferences::render(self, window, cx))
             })
-            .when(overlay_here && self.workspaces.open, |this| {
-                this.child(features::workspaces::popup(self, cx))
+            .when(self.workspaces.open, |this| {
+                this.child(features::workspaces::popup(self, window, cx))
             })
-            .when(overlay_here && self.open_menu.is_some(), |this| {
+            .when(self.open_menu.is_some(), |this| {
                 this.child(crate::desktop::menus::popup(self, window, cx))
             })
-            .when(overlay_here && self.add_machine_modal_open, |this| {
+            .when(self.add_machine_modal_open, |this| {
                 this.child(modal::render(self, cx))
             })
-            .when(overlay_here && self.docker_run_modal_open, |this| {
+            .when(self.docker_run_modal_open, |this| {
                 this.child(features::docker::run_modal::render(self, window, cx))
             })
-            .when(overlay_here && self.docker_removal.is_some(), |this| {
+            .when(self.docker_removal.is_some(), |this| {
                 this.child(features::docker::remove_modal::render(self, cx))
             });
         crate::desktop::appearance::frame(root, window)
-    }
-}
-
-impl Render for Crabdash {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_workspace(None, window, cx)
     }
 }

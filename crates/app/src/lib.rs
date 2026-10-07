@@ -33,7 +33,7 @@ actions!(
     [
         AboutCrabdash,
         CloseWindow,
-        DismissAddMachineModal,
+        DismissModal,
         DismissDockerLogModal,
         Hide,
         HideOthers,

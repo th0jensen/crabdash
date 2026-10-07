@@ -10,7 +10,7 @@ pub(crate) fn button(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div
     let name = app.workspaces.store.current().name.clone();
     div()
         .id("workspace-switcher")
-        .size(rems(style::CONTROL / 16.0))
+        .size(rems(style::CHROME_CONTROL / 16.0))
         .flex_none()
         .rounded(px(style::RADIUS))
         .flex()
@@ -27,18 +27,23 @@ pub(crate) fn button(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div
         })
         .tooltip(move |_, cx| control_tooltip(format!("Workspaces · {name}"), cx))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(lucide_icon(Icon::LayoutGrid, style::ICON))
+        .child(lucide_icon(Icon::PanelsTopLeft, style::ICON))
         .on_click(cx.listener(|app, _, window, cx| {
             app.sync_workspace_store(cx);
             app.workspaces.open = !app.workspaces.open;
-            app.overlay_window = Some(window.window_handle().window_id());
             app.workspaces.rename = None;
             app.focus_handle.focus(window);
             cx.notify();
         }))
 }
 
-pub(crate) fn popup(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+    let scale = f32::from(window.rem_size()) / 16.0;
+    let viewport = window.viewport_size();
+    let width = px(324.0 * scale).min((viewport.width - px(24.0)).max(px(0.0)));
+    let right = px(92.0).min((viewport.width - width - px(12.0)).max(px(12.0)));
+    let top = px((style::TITLE_BAR + 6.0) * scale);
+    let max_height = px(440.0 * scale).min((viewport.height - top - px(12.0)).max(px(0.0)));
     let rows = app
         .workspaces
         .store
@@ -67,7 +72,7 @@ pub(crate) fn popup(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div>
                     if active {
                         Icon::Check
                     } else {
-                        Icon::LayoutGrid
+                        Icon::PanelsTopLeft
                     },
                     style::ICON,
                 ))
@@ -147,10 +152,11 @@ pub(crate) fn popup(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div>
     div()
         .id("workspace-popup")
         .absolute()
-        .right(px(92.0))
-        .top(rems((style::TITLE_BAR + 6.0) / 16.0))
-        .w(rems(324.0 / 16.0))
-        .max_h(rems(440.0 / 16.0))
+        .right(right)
+        .top(top)
+        .w(width)
+        .max_h(max_height)
+        .overflow_y_scroll()
         .flex()
         .flex_col()
         .gap(px(8.0))
@@ -230,15 +236,7 @@ pub(crate) fn popup(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div>
                 .pt(px(8.0))
                 .flex()
                 .items_center()
-                .justify_between()
-                .child(
-                    surface_button(
-                        "workspace-reset-grid",
-                        Some(Icon::PanelsTopLeft),
-                        Some("Reset grid"),
-                    )
-                    .on_click(cx.listener(|app, _, _, cx| app.reset_workspace_grid(cx))),
-                )
+                .justify_end()
                 .child(
                     surface_button("workspace-save-as", Some(Icon::Plus), Some("Save as…"))
                         .on_click(

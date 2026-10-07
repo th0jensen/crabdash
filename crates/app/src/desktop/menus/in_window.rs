@@ -99,7 +99,6 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                     },
                 )]))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.overlay_window = Some(window.window_handle().window_id());
                     this.open_menu = if this.open_menu == Some(index) {
                         None
                     } else {
@@ -225,7 +224,6 @@ pub fn handle_key(
             _ => None,
         };
         if let Some(index) = index.filter(|index| *index < menus.len()) {
-            app.overlay_window = Some(window.window_handle().window_id());
             app.open_menu = Some(index);
             app.menu_item = 0;
             cx.stop_propagation();

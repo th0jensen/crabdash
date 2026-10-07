@@ -13,8 +13,8 @@ use crate::components::text_field::{
 use gpui::*;
 
 use crate::{
-    CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine, OpenPreferences,
-    RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
+    CloseWindow, DismissModal, MinimizeWindow, OpenAddMachine, OpenPreferences, RefreshServices,
+    SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
 };
 impl Crabdash {
     pub fn bind_keys(cx: &mut App) {
@@ -74,8 +74,8 @@ impl Crabdash {
                 ToggleFullScreen,
                 None,
             ),
-            KeyBinding::new("escape", DismissAddMachineModal, None),
-            KeyBinding::new("escape", DismissAddMachineModal, Some("CrabdashTextField")),
+            KeyBinding::new("escape", DismissModal, None),
+            KeyBinding::new("escape", DismissModal, Some("CrabdashTextField")),
             KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
             KeyBinding::new("return", SubmitAddMachineModal, Some("CrabdashTextField")),
             KeyBinding::new("backspace", FieldBackspace, Some("CrabdashTextField")),

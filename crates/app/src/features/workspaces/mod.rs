@@ -1,4 +1,4 @@
-//! Docking layouts, saved workspaces, and their compact switcher.
+//! Ordered feature tabs, saved workspaces, and their compact switcher.
 pub(crate) mod model;
 mod store;
 mod view;
@@ -7,7 +7,7 @@ pub(crate) use view::{button, popup};
 use crate::app::{Crabdash, MainTab};
 use crate::components::text_field::TextField;
 use gpui::{AppContext, Context, Entity, Global, Subscription, Window};
-use model::{Drop, Layout, Tab};
+use model::{Layout, Tab};
 use store::{Store, validate_name};
 use uuid::Uuid;
 
@@ -42,7 +42,6 @@ impl Global for SharedStore {}
 pub(crate) struct State {
     pub store: Store,
     pub open: bool,
-    pub dragging_tab: bool,
     pub rename: Option<Uuid>,
     pub name: Entity<TextField>,
     pub error: Option<String>,
@@ -55,7 +54,9 @@ pub(crate) struct State {
 impl State {
     pub(crate) fn load(cx: &mut Context<Crabdash>) -> Self {
         if cx.try_global::<SharedStore>().is_none() {
-            let (store, error, read_only) = match Store::load() {
+            let (store, error, read_only) = match Store::load(
+                crate::features::preferences::current(cx).sidebar_width,
+            ) {
                 Ok(store) => (store, None, false),
                 Err(error) => (
                     Store::default(),
@@ -81,7 +82,6 @@ impl State {
         Self {
             store: shared.store,
             open: false,
-            dragging_tab: false,
             rename: None,
             name: cx.new(|cx| TextField::new("Workspace name", "Workspace name", 1, cx).compact()),
             error: shared.error,
@@ -128,7 +128,7 @@ impl Crabdash {
         self.sidebar_width = gpui::px(workspace.sidebar_width);
         self.active_tab = workspace.layout.active().into();
         if desired != self.quake_terminal_open {
-            self.toggle_quake_terminal(window, cx);
+            self.set_quake_terminal_open(desired, window, cx);
         }
     }
 
@@ -147,10 +147,10 @@ impl Crabdash {
             return;
         }
         if self.workspaces.revision != cx.global::<SharedStore>().revision {
+            self.sync_workspace_store(cx);
             self.workspaces.error = Some(
                 "Another window updated the saved layouts. Reopen Workspaces and try again.".into(),
             );
-            self.sync_workspace_store(cx);
             cx.notify();
             return;
         }
@@ -176,39 +176,30 @@ impl Crabdash {
 
     pub(crate) fn select_workspace_tab(&mut self, tab: MainTab, cx: &mut Context<Self>) {
         self.sync_workspace_store(cx);
-        self.workspaces.layout_mut().show(tab.into());
-        self.active_tab = tab;
-        self.refresh_services(cx);
-        self.persist_workspace(cx);
-    }
-
-    pub(crate) fn select_pane_tab(&mut self, pane: u32, tab: MainTab, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        if self.workspaces.layout().focused == pane
-            && self.workspaces.layout().active() == Tab::from(tab)
-        {
-            return;
-        }
-        if self.workspaces.layout_mut().select(pane, tab.into()) {
+        if self.workspaces.layout_mut().show(tab.into()) {
             self.active_tab = tab;
+            self.refresh_services(cx);
             self.persist_workspace(cx);
         }
     }
 
-    pub(crate) fn drop_workspace_tab(
+    pub(crate) fn reorder_workspace_tab(
         &mut self,
         tab: MainTab,
-        target: u32,
-        drop: Drop,
+        insertion_index: usize,
         cx: &mut Context<Self>,
     ) {
         self.sync_workspace_store(cx);
-        if self
+        let reordered = self
             .workspaces
             .layout_mut()
-            .move_tab(tab.into(), target, drop)
-        {
-            self.active_tab = self.workspaces.layout().active().into();
+            .reorder(tab.into(), insertion_index);
+        let activated = self.workspaces.layout_mut().select(tab.into());
+        if activated {
+            self.active_tab = tab;
+            self.refresh_services(cx);
+        }
+        if reordered || activated {
             self.persist_workspace(cx);
         }
     }
@@ -240,7 +231,7 @@ impl Crabdash {
         self.workspaces.open = false;
         self.workspaces.rename = None;
         if self.quake_terminal_open != terminal_open {
-            self.toggle_quake_terminal(window, cx);
+            self.set_quake_terminal_open(terminal_open, window, cx);
         }
         self.refresh_services(cx);
         self.persist_workspace(cx);
@@ -346,38 +337,5 @@ impl Crabdash {
             .retain(|workspace| workspace.id != id);
         self.workspaces.rename = None;
         self.persist_workspace(cx);
-    }
-
-    pub(crate) fn reset_workspace_grid(&mut self, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        self.workspaces.layout_mut().root = Layout::default().root;
-        self.workspaces.layout_mut().focused = 1;
-        self.workspaces.layout_mut().detached.clear();
-        self.active_tab = MainTab::Docker;
-        self.persist_workspace(cx);
-    }
-
-    pub(crate) fn detach_workspace_tab(
-        &mut self,
-        tab: MainTab,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.sync_workspace_store(cx);
-        let Some(id) = self.workspaces.layout_mut().detach(tab.into()) else {
-            return;
-        };
-        self.persist_workspace(cx);
-        let owner = cx.entity();
-        if let Err(error) = crate::desktop::window::open_detached_workspace_window(
-            owner,
-            self.workspaces.store.active,
-            id,
-            cx,
-        ) {
-            self.workspaces.layout_mut().move_back(id);
-            self.workspaces.error = Some(error.to_string());
-            self.persist_workspace(cx);
-        }
     }
 }

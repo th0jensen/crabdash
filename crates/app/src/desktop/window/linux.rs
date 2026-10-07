@@ -22,7 +22,7 @@ fn window_button(
                 cx,
             )
         })
-        .size(gpui::rems(style::CONTROL / 16.0))
+        .size(gpui::rems(style::CHROME_CONTROL / 16.0))
         .flex_none()
         .rounded(px(style::RADIUS))
         .window_control_area(area)
@@ -209,3 +209,7 @@ pub(super) fn register_lifecycle(cx: &mut App) {
     .detach();
 }
 pub(super) const LEADING_PADDING: f32 = 0.0;
+
+pub(super) fn hide_to_tray(window: &mut Window) {
+    window.minimize_window();
+}

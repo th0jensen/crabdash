@@ -1,7 +1,3 @@
-mod workspace;
-pub(crate) use workspace::{
-    DetachedWorkspace, Quitting, open_detached_workspace_window, schedule_workspace_windows,
-};
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -48,10 +44,11 @@ pub(crate) fn register_lifecycle(cx: &mut App) {
 pub(crate) fn activate_window(window: &mut Window, token: Option<&str>) {
     platform::activate_window(window, token);
 }
+/// Hide only this dashboard while keeping its sessions available to the tray.
+pub(crate) fn hide_to_tray(window: &mut Window) {
+    platform::hide_to_tray(window);
+}
 pub(crate) fn close_window(window: &mut Window, cx: &mut App) {
-    if workspace::close_detached(window) {
-        return;
-    }
     if crate::desktop::tray::should_close(window, cx) {
         window.remove_window();
     }

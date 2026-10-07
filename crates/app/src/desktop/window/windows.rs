@@ -6,7 +6,7 @@ use crate::components::{
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows_sys::Win32::UI::WindowsAndMessaging::{SW_RESTORE, ShowWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_RESTORE, ShowWindow};
 
 pub(super) const LEADING_PADDING: f32 = 0.0;
 pub(super) fn configure(_: &mut WindowOptions) {}
@@ -74,7 +74,7 @@ fn control(
     div()
         .id(id)
         .tooltip(move |_, cx| control_tooltip(tooltip, cx))
-        .size(gpui::rems(style::CONTROL / 16.0))
+        .size(gpui::rems(style::CHROME_CONTROL / 16.0))
         .flex_none()
         .rounded(px(style::RADIUS))
         .window_control_area(area)
@@ -98,4 +98,16 @@ fn control(
 // GPUI's Windows WM_NCHITTEST already provides native resize edges.
 pub(crate) fn resize_handles(_: &Window) -> Div {
     div().absolute().inset_0().size_full()
+}
+
+pub(super) fn hide_to_tray(window: &mut Window) {
+    if let Ok(handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            unsafe {
+                ShowWindow(handle.hwnd.get() as _, SW_HIDE);
+            }
+            return;
+        }
+    }
+    window.minimize_window();
 }

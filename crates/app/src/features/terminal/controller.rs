@@ -13,13 +13,23 @@ impl Crabdash {
         self.quake_terminals.get_mut(&machine_uuid)
     }
 
-    pub(crate) fn terminal_is_open_in(&self, window: &Window) -> bool {
-        self.quake_terminal_open && self.terminal_window == Some(window.window_handle().window_id())
+    pub(crate) fn set_quake_terminal_open(
+        &mut self,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if open {
+            self.open_quake_terminal(window, cx);
+        } else {
+            self.close_quake_terminal(window, cx);
+        }
+        self.persist_workspace(cx);
     }
 
     pub(crate) fn toggle_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
-        if self.terminal_is_open_in(window) {
+        if self.quake_terminal_open {
             self.close_quake_terminal(window, cx);
         } else {
             self.open_quake_terminal(window, cx);
@@ -36,7 +46,7 @@ impl Crabdash {
         let rows = terminal::quake_rows_for_height(
             self.quake_height,
             cell_height,
-            f32::from(window.rem_size()) * 36.0 / 16.0,
+            f32::from(window.rem_size()) * crate::components::style::BAR / 16.0,
         );
         TerminalSize {
             columns,
@@ -55,7 +65,7 @@ impl Crabdash {
         cx: &mut Context<Self>,
     ) {
         let (_, cell_height) = terminal::cell_metrics(&self.preferences, cx);
-        let header_height = f32::from(window.rem_size()) * 36.0 / 16.0;
+        let header_height = f32::from(window.rem_size()) * crate::components::style::BAR / 16.0;
         let snapped = terminal::quake_height_for_rows(
             terminal::quake_rows_for_height(height, cell_height, header_height),
             cell_height,
@@ -70,7 +80,7 @@ impl Crabdash {
     }
 
     pub(crate) fn resize_quake_terminal(&mut self, window: &Window, cx: &App) {
-        if !self.terminal_is_open_in(window) {
+        if !self.quake_terminal_open {
             return;
         }
 
@@ -104,9 +114,7 @@ impl Crabdash {
     }
 
     pub(crate) fn open_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.activate_window();
         self.quake_terminal_open = true;
-        self.terminal_window = Some(window.window_handle().window_id());
         let machine = self.selected_machine().clone();
         let machine_uuid = machine.uuid;
 
@@ -148,8 +156,13 @@ impl Crabdash {
             }
         };
         let input = cx.new(TerminalInput::new);
+        let input_id = input.entity_id();
         let input_events = cx.subscribe(&input, move |this, _, event: &TerminalInputEvent, cx| {
-            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
+            let Some(quake) = this
+                .quake_terminals
+                .get_mut(&machine_uuid)
+                .filter(|quake| quake.input.entity_id() == input_id)
+            else {
                 return;
             };
             let data = match event {
@@ -210,7 +223,7 @@ impl Crabdash {
                     Ok(session) => session,
                     Err(error) => {
                         this.update(&mut cx, move |this, cx| {
-                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) {
+                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) {
                                 quake.status = terminal::QuakeTerminalStatus::Failed;
                                 quake.terminal.feed_string(format!(
                                     "\r\n[crabdash] Failed to open terminal: {error}\r\n"
@@ -227,20 +240,24 @@ impl Crabdash {
                 let events = session.events;
                 let accepted = this
                     .update(&mut cx, |this, cx| {
-                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
+                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) else {
                             return false;
                         };
-                        quake.controller = Some(controller.clone());
-                        quake.input.update(cx, |input, cx| {
-                            input.set_controller(Some(controller.clone()), cx);
-                        });
                         if quake.size != size
                             && let Err(error) = controller.resize(quake.size)
                         {
                             quake.status = terminal::QuakeTerminalStatus::Failed;
+                            quake.terminal.feed_string(format!(
+                                "\r\n[crabdash] Failed to apply terminal size: {error}\r\n"
+                            ));
                             tracing::warn!(%error, "Failed to apply current terminal size");
+                            cx.notify();
                             return false;
                         }
+                        quake.controller = Some(controller.clone());
+                        quake.input.update(cx, |input, cx| {
+                            input.set_controller(Some(controller.clone()), cx);
+                        });
                         quake.status = terminal::QuakeTerminalStatus::Connected;
                         cx.notify();
                         true
@@ -257,7 +274,7 @@ impl Crabdash {
                 while let Ok(event) = events.recv().await {
                     let should_continue = this
                         .update(&mut cx, |this, cx| {
-                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
+                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) else {
                                 return false;
                             };
 
@@ -311,9 +328,7 @@ impl Crabdash {
     }
 
     pub(crate) fn close_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.activate_window();
         self.quake_terminal_open = false;
-        self.terminal_window = None;
         window.focus(&self.focus_handle);
         cx.notify();
     }

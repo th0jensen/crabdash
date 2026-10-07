@@ -1,5 +1,5 @@
 //! Real AppKit material only behind the top navigation chrome. Data remains opaque.
-use gpui::{Div, Hsla, Window, rgba};
+use gpui::{Div, Hsla, Pixels, Window, px, rgba};
 use objc2::{
     MainThreadMarker, MainThreadOnly, msg_send,
     rc::{Allocated, Retained},
@@ -18,7 +18,7 @@ pub(crate) fn root_background() -> Hsla {
     rgba(0x00000000).into()
 }
 pub(crate) fn titlebar_background() -> Hsla {
-    rgba(0x18181830).into()
+    rgba(0x20202030).into()
 }
 fn native_view(window: &Window) -> Option<&NSView> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -118,4 +118,9 @@ pub(super) fn prepare(window: &Window) {
     // AppKit owns the backing after insertion; placing it below the GPU view
     // preserves GPUI hit testing, keyboard focus, menus and traffic-light controls.
     parent.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(view));
+}
+
+/// AppKit owns the outer frame; GPUI adds no border inside the client area.
+pub(crate) fn frame_inset(_: &Window) -> Pixels {
+    px(0.0)
 }

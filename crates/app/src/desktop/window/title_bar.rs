@@ -31,7 +31,7 @@ pub(crate) fn render(
             window.show_window_menu(event.position);
         })
         .h(platform_title_bar_height(window))
-        .px(px(10.0))
+        .px(rems(8.0 / 16.0))
         .border_b_1()
         .border_color(rgb(style::BORDER))
         .bg(crate::desktop::appearance::titlebar_background())
@@ -43,7 +43,7 @@ pub(crate) fn render(
                 .pl(px(super::platform::LEADING_PADDING))
                 .flex()
                 .items_center()
-                .gap(px(8.0))
+                .gap(rems(4.0 / 16.0))
                 .child(
                     div()
                         .id("toggle-sidebar")
@@ -56,14 +56,17 @@ pub(crate) fn render(
                                 cx,
                             )
                         })
-                        .size(gpui::rems(style::CONTROL / 16.0))
+                        .size(rems(style::CHROME_CONTROL / 16.0))
                         .rounded(px(style::RADIUS))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(rgb(0xA0A0A0))
+                        .text_color(rgb(style::TEXT_MUTED))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0x2A2A2A)).text_color(rgb(0xD4D4D4)))
+                        .hover(|this| {
+                            this.bg(rgb(style::SURFACE_HOVER))
+                                .text_color(rgb(style::TEXT_SELECTED))
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })
@@ -73,7 +76,7 @@ pub(crate) fn render(
                             } else {
                                 Icon::PanelLeftClose
                             },
-                            14.0,
+                            style::ICON,
                         ))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_sidebar(cx);
@@ -83,8 +86,7 @@ pub(crate) fn render(
                     this.child(
                         div()
                             .text_size(gpui::rems(style::TEXT / 16.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0xC8C8C8))
+                            .text_color(rgb(style::TEXT_PRIMARY))
                             .child("Crabdash"),
                     )
                 })
@@ -96,7 +98,7 @@ pub(crate) fn render(
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(rems(4.0 / 16.0))
                 .child(
                     div()
                         .id("refresh-button")
@@ -106,18 +108,21 @@ pub(crate) fn render(
                                 cx,
                             )
                         })
-                        .size(gpui::rems(style::CONTROL / 16.0))
+                        .size(rems(style::CHROME_CONTROL / 16.0))
                         .rounded(px(style::RADIUS))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(rgb(0xA0A0A0))
+                        .text_color(rgb(style::TEXT_MUTED))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0x2A2A2A)).text_color(rgb(0xE8E8E8)))
+                        .hover(|this| {
+                            this.bg(rgb(style::SURFACE_HOVER))
+                                .text_color(rgb(style::TEXT_SELECTED))
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })
-                        .child(lucide_icon(Icon::RefreshCw, 14.0))
+                        .child(lucide_icon(Icon::RefreshCw, style::ICON))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.refresh_services(cx);
                             cx.notify();
@@ -135,23 +140,26 @@ pub(crate) fn render(
                                 cx,
                             )
                         })
-                        .size(gpui::rems(style::CONTROL / 16.0))
+                        .size(rems(style::CHROME_CONTROL / 16.0))
                         .flex_none()
                         .rounded(px(style::RADIUS))
                         .flex()
                         .items_center()
                         .justify_center()
                         .text_size(gpui::rems(style::TEXT / 16.0))
-                        .text_color(if app.terminal_is_open_in(window) {
-                            rgb(0xD4D4D4)
+                        .text_color(if app.quake_terminal_open {
+                            rgb(style::TEXT_SELECTED)
                         } else {
-                            rgb(0xA0A0A0)
+                            rgb(style::TEXT_MUTED)
                         })
-                        .when(app.terminal_is_open_in(window), |this| {
-                            this.bg(rgb(0x2A2A2A))
+                        .when(app.quake_terminal_open, |this| {
+                            this.bg(rgb(style::CONTROL_SELECTED_BG))
                         })
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0x2A2A2A)).text_color(rgb(0xD4D4D4)))
+                        .hover(|this| {
+                            this.bg(rgb(style::SURFACE_HOVER))
+                                .text_color(rgb(style::TEXT_SELECTED))
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })

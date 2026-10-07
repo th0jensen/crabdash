@@ -2,15 +2,11 @@ use crate::{Crabdash, NewWindow, OpenRepository, Quit, ReportIssue};
 use gpui::*;
 const REPOSITORY_URL: &str = "https://github.com/th0jensen/crabdash";
 const ISSUES_URL: &str = "https://github.com/th0jensen/crabdash/issues";
-fn open_window_with_owner(
-    cx: &mut App,
-    minimised: bool,
-    owner: Option<Entity<Crabdash>>,
-) -> anyhow::Result<()> {
+fn open_window(cx: &mut App, minimised: bool) -> anyhow::Result<()> {
     let options = super::window::options(cx, minimised);
     cx.open_window(options, |window, cx| {
         super::window::prepare(window, cx);
-        let view = owner.unwrap_or_else(|| cx.new(|cx| Crabdash::new(cx)));
+        let view = cx.new(|cx| Crabdash::new(cx));
         let focus = view.read(cx).focus_handle.clone();
         window.focus(&focus);
         if minimised {
@@ -19,10 +15,6 @@ fn open_window_with_owner(
         view
     })?;
     Ok(())
-}
-
-fn open_window(cx: &mut App, minimised: bool) -> anyhow::Result<()> {
-    open_window_with_owner(cx, minimised, None)
 }
 
 fn primary_window(cx: &App) -> Option<AnyWindowHandle> {
@@ -37,12 +29,7 @@ fn show_window(cx: &mut App, token: Option<String>) {
             super::window::activate_window(window, token.as_deref());
         });
     } else {
-        let owner = cx.windows().into_iter().find_map(|handle| {
-            handle
-                .downcast::<super::window::DetachedWorkspace>()
-                .and_then(|handle| handle.read(cx).ok().map(|pane| pane.owner()))
-        });
-        if let Err(error) = open_window_with_owner(cx, false, owner) {
+        if let Err(error) = open_window(cx, false) {
             tracing::error!(%error, "Unable to open Crabdash window");
         }
     }
@@ -85,7 +72,7 @@ pub fn run() {
                                     }
                                 }
                             }
-                            super::tray::TrayCommand::Quit => { cx.set_global(super::window::Quitting); cx.quit(); },
+                            super::tray::TrayCommand::Quit => cx.quit(),
                         })
                         .is_err()
                     {
@@ -97,11 +84,11 @@ pub fn run() {
         }
         super::window::register_lifecycle(cx);
         cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
-        cx.on_action(|_: &Quit, cx| { cx.set_global(super::window::Quitting); cx.quit(); });
+        cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &NewWindow, cx| { if let Err(error) = open_window(cx, false) { tracing::error!(%error, "Unable to open Crabdash window"); } });
         cx.on_action(|_: &OpenRepository, cx| cx.open_url(REPOSITORY_URL));
         cx.on_action(|_: &ReportIssue, cx| cx.open_url(ISSUES_URL));
         super::menus::install(cx);
-        if let Err(error) = open_window(cx, minimised) { tracing::error!(%error, "Unable to open Crabdash window"); cx.set_global(super::window::Quitting); cx.quit(); }
+        if let Err(error) = open_window(cx, minimised) { tracing::error!(%error, "Unable to open Crabdash window"); cx.quit(); }
     });
 }

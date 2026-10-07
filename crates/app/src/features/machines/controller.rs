@@ -155,7 +155,6 @@ impl Crabdash {
 
     pub(crate) fn open_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_modal_open = true;
-        self.overlay_window = Some(window.window_handle().window_id());
         self.add_machine_error = None;
         window.focus(&self.remote_host_field.focus_handle(cx));
         cx.notify();

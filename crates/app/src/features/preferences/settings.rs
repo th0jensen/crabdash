@@ -43,7 +43,7 @@ impl Default for Preferences {
             scrollback_lines: 5000,
             terminal_rows: 16,
             interface_font: String::new(),
-            interface_font_size: 13.0,
+            interface_font_size: 14.0,
             sidebar_width: 240.0,
             tab_width: 144.0,
             always_show_shortcuts: false,

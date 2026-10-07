@@ -254,7 +254,7 @@ pub(crate) fn render_quake(
                         .hover(|style| style.bg(rgb(0x2A2D2E)).text_color(white()))
                         .child(lucide_icon(Icon::X, 14.0))
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.close_quake_terminal(window, cx);
+                            this.set_quake_terminal_open(false, window, cx);
                         })),
                 ),
         )

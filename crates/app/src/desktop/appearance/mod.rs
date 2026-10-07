@@ -11,6 +11,6 @@ use linux as platform;
 use macos as platform;
 #[cfg(target_os = "macos")]
 pub(super) use macos::prepare;
-pub(crate) use platform::{frame, root_background, titlebar_background};
+pub(crate) use platform::{frame, frame_inset, root_background, titlebar_background};
 #[cfg(target_os = "windows")]
 use windows as platform;
