@@ -83,12 +83,12 @@ fn tab_width(app: &Crabdash, window: &Window) -> Pixels {
             let title = text_width(app, tab.label(), style::TEXT, window);
             let hint = text_width(app, tab.shortcut(), style::META, window);
             let margin = shortcut_reserve(hint, scale);
-            width.max(title + scale * (style::ICON + 4.0) + margin * 2.0)
+            width.max(title + margin * 2.0)
         })
 }
 
 fn shortcut_reserve(hint: Pixels, scale: Pixels) -> Pixels {
-    (hint + scale * 8.0).max(scale * 8.0)
+    (hint + scale * 8.0).max(scale * (style::ICON + 4.0 + 8.0))
 }
 
 fn reorder(
@@ -192,27 +192,31 @@ fn tab_button(
                 control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
             })
         })
-        // Center the visible icon and title together. Shortcut hints overlay
-        // a reserved margin so holding Alt never moves the label.
+        // Keep the title itself centered. The icon sits beside the measured
+        // label; symmetric margins reserve room for it and the Alt shortcut.
         .child(
             div()
-                .min_w_0()
+                .relative()
                 .flex_none()
+                .w(title_width)
                 .h_full()
                 .flex()
                 .items_center()
-                .justify_center()
-                .gap(rems(4.0 / 16.0))
                 .child(
                     div()
-                        .flex_none()
+                        .absolute()
+                        .left(-rems((style::ICON + 4.0) / 16.0))
+                        .top_0()
+                        .bottom_0()
                         .w(rems(style::ICON / 16.0))
+                        .flex()
+                        .items_center()
                         .child(tab_icon(tab)),
                 )
                 .child(
                     div()
+                        .w_full()
                         .min_w_0()
-                        .max_w(title_width)
                         .text_ellipsis()
                         .overflow_hidden()
                         .child(tab.label()),
@@ -284,9 +288,8 @@ pub(super) fn render(
         .children(tabs.iter().enumerate().map(|(index, tab)| {
             let hint = text_width(app, MainTab::from(*tab).shortcut(), style::META, window);
             let scale = window.rem_size() / 16.0;
-            let title_width =
-                (width - shortcut_reserve(hint, scale) * 2.0 - scale * (style::ICON + 4.0))
-                    .max(px(0.0));
+            let title_width = text_width(app, MainTab::from(*tab).label(), style::TEXT, window)
+                .min((width - shortcut_reserve(hint, scale) * 2.0).max(px(0.0)));
             tab_button(
                 app,
                 pane,
