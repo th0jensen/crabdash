@@ -7,7 +7,7 @@ use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IsIconic, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, ShowWindow, ShowWindowAsync,
+    IsIconic, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, ShowWindowAsync,
 };
 
 pub(super) const LEADING_PADDING: f32 = 0.0;
@@ -28,14 +28,19 @@ pub(super) fn activate_window(window: &mut Window, _: Option<&str>) {
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
             unsafe {
                 let hwnd = handle.hwnd.get() as _;
-                ShowWindow(
-                    hwnd,
-                    if IsIconic(hwnd) != 0 {
-                        SW_RESTORE
-                    } else {
-                        SW_SHOW
-                    },
-                );
+                let command = if IsIconic(hwnd) != 0 {
+                    SW_RESTORE
+                } else {
+                    SW_SHOW
+                };
+                // Post the transition to the owning window's queue. A synchronous
+                // restore can deliver WM_SIZE while GPUI still holds its App borrow.
+                if ShowWindowAsync(hwnd, command) == 0 {
+                    tracing::warn!(
+                        "Unable to restore the native Windows window from the tray: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
             }
         }
     }
@@ -138,10 +143,15 @@ pub(crate) fn resize_handles(_: &Window) -> Div {
 pub(super) fn hide_to_tray(window: &mut Window) {
     if let Ok(handle) = HasWindowHandle::window_handle(window) {
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-            unsafe {
-                ShowWindow(handle.hwnd.get() as _, SW_HIDE);
+            // Closing-to-tray runs inside GPUI's close callback; defer native
+            // window messages until that callback releases its borrowed state.
+            if unsafe { ShowWindowAsync(handle.hwnd.get() as _, SW_HIDE) } != 0 {
+                return;
             }
-            return;
+            tracing::warn!(
+                "Unable to hide the native Windows window to the tray: {}",
+                std::io::Error::last_os_error()
+            );
         }
     }
     window.minimize_window();
