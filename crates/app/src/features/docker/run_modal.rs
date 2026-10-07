@@ -45,6 +45,10 @@ fn toggle_btn(
         .hover(|s| s.bg(rgb(0x3A3A3C)))
         .child(label)
         .on_click(cx.listener(move |this, _, _, cx| {
+            if this.docker_run_config.busy {
+                return;
+            }
+            this.docker_run_config.error = None;
             on_click(this, cx);
         }))
 }
@@ -83,6 +87,10 @@ fn list_remove_btn(
         .hover(|s| s.bg(rgb(0x3A3A3C)).text_color(rgb(0xFF453A)))
         .child(lucide_icon(Icon::X, 11.0))
         .on_click(cx.listener(move |this, _, _, cx| {
+            if this.docker_run_config.busy {
+                return;
+            }
+            this.docker_run_config.error = None;
             on_click(this, cx);
         }))
 }
@@ -111,6 +119,10 @@ fn add_entry_btn(
         .child(lucide_icon(Icon::Plus, 11.0))
         .child(label)
         .on_click(cx.listener(move |this, _, _, cx| {
+            if this.docker_run_config.busy {
+                return;
+            }
+            this.docker_run_config.error = None;
             on_click(this, cx);
         }))
 }
@@ -163,18 +175,8 @@ fn section_behavior(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                 .flex_wrap()
                 .gap(px(6.0))
                 .child(toggle_btn(
-                    "run-toggle-detach",
-                    "Detach (-d)",
-                    app.docker_run_config.detach,
-                    cx,
-                    |this, cx| {
-                        this.docker_run_config.detach = !this.docker_run_config.detach;
-                        cx.notify();
-                    },
-                ))
-                .child(toggle_btn(
                     "run-toggle-interactive",
-                    "Interactive (-it)",
+                    "Keep stdin open (-i)",
                     app.docker_run_config.interactive,
                     cx,
                     |this, cx| {
@@ -253,8 +255,7 @@ fn section_ports(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             "Add port (host:container[/tcp|udp])",
             cx,
             |this, cx| {
-                let field = cx.new(|cx| TextField::new("", "8080:80", 0, cx));
-                this.docker_run_config.ports.push(field);
+                this.docker_run_config.add_field("port", cx);
                 cx.notify();
             },
         ))
@@ -293,8 +294,7 @@ fn section_volumes(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             "Add volume (/host/path:/container/path[:ro])",
             cx,
             |this, cx| {
-                let field = cx.new(|cx| TextField::new("", "/host/path:/container/path", 0, cx));
-                this.docker_run_config.volumes.push(field);
+                this.docker_run_config.add_field("volume", cx);
                 cx.notify();
             },
         ))
@@ -333,8 +333,7 @@ fn section_env(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             "Add variable (KEY=VALUE)",
             cx,
             |this, cx| {
-                let field = cx.new(|cx| TextField::new("", "KEY=VALUE", 0, cx));
-                this.docker_run_config.env_vars.push(field);
+                this.docker_run_config.add_field("env", cx);
                 cx.notify();
             },
         ))
@@ -408,12 +407,20 @@ fn section_advanced(app: &Crabdash) -> Div {
 }
 
 fn command_preview(app: &Crabdash, cx: &App) -> Div {
-    let args = app.docker_run_config.build_args(cx);
-    let preview = format!("docker run {}", args.join(" "));
+    let preview = match app.docker_run_config.build_args(cx) {
+        Ok(args) => format!(
+            "docker run {}",
+            shell_words::join(args.iter().map(String::as_str))
+        ),
+        Err(error) => error,
+    };
+    let preview = app.docker_run_config.error.clone().unwrap_or(preview);
 
     div()
         .w_full()
         .p(px(10.0))
+        .max_h(px(72.0))
+        .overflow_hidden()
         .rounded(px(6.0))
         .bg(rgb(0x151517))
         .border_1()
@@ -568,11 +575,16 @@ pub fn render(app: &Crabdash, _window: &Window, cx: &mut Context<Crabdash>) -> i
                                             button(
                                                 "run-modal-submit",
                                                 Some(Icon::Play),
-                                                Some("Run Container"),
+                                                Some(if app.docker_run_config.busy {
+                                                    "Running…"
+                                                } else {
+                                                    "Run Container"
+                                                }),
                                                 true,
                                             )
                                             .on_click(
-                                                cx.listener(|this, _, _, cx| {
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.focus_handle.focus(window);
                                                     this.submit_docker_run(cx);
                                                 }),
                                             ),

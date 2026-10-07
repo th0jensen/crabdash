@@ -49,7 +49,9 @@ impl Docker for Machine {
 
     async fn run_container(&mut self, args: &Args) -> Result<Output> {
         let docker = self.find_docker().await;
-        self.run(&docker, args).await
+        let mut command = args!["run"];
+        command.0.extend(args.iter().cloned());
+        self.run(&docker, &command).await
     }
 
     async fn remove_container(&mut self, id: &str, force: bool) -> Result<Output> {
@@ -136,6 +138,34 @@ esac
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn run_uses_the_subcommand_and_preserves_each_parameter() {
+        let mut fixture = Fixture::new("exited", false);
+        let script = fixture.directory.join("docker");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}/calls'\n",
+                fixture.directory.display()
+            ),
+        )
+        .unwrap();
+        smol::block_on(fixture.machine.run_container(&args![
+            "-d",
+            "-e",
+            "MESSAGE=hello world",
+            "alpine",
+            "sh",
+            "-c",
+            "echo hello"
+        ]))
+        .unwrap();
+        assert_eq!(
+            fixture.calls(),
+            "run\n-d\n-e\nMESSAGE=hello world\nalpine\nsh\n-c\necho hello\n"
+        );
     }
 
     #[test]

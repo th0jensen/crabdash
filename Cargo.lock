@@ -94,6 +94,7 @@ dependencies = [
  "serde",
  "serde_json",
  "services",
+ "shell-words",
  "smol",
  "tracing",
  "unicode-segmentation",

@@ -4,6 +4,7 @@ mod view;
 pub(crate) use view::*;
 pub(crate) mod remove_modal;
 mod run;
+mod run_parameters;
 pub(crate) mod run_modal;
 pub(crate) use run::DockerRunConfig;
 

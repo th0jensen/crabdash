@@ -11,63 +11,72 @@ impl Crabdash {
     }
 
     pub(crate) fn close_docker_run_modal(&mut self, cx: &mut Context<Self>) {
+        if self.docker_run_config.busy {
+            return;
+        }
         self.docker_run_modal_open = false;
         cx.notify();
     }
 
     pub(crate) fn submit_docker_run(&mut self, cx: &mut Context<Self>) {
-        let image = self.docker_run_config.image.read(cx).text();
-        if image.trim().is_empty() {
-            self.set_status_error("Image name is required.");
-            cx.notify();
+        if self.docker_run_config.busy {
             return;
         }
-
+        let args = match self.docker_run_config.build_args(cx) {
+            Ok(args) => args,
+            Err(error) => {
+                self.docker_run_config.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
         let mut machine = self.selected_machine().clone();
-        let machine_index = self.selected_machine;
-
-        let args = self.docker_run_config.build_args(cx);
-
-        self.docker_run_modal_open = false;
-        self.docker_run_config.reset(cx);
+        let machine_uuid = machine.uuid;
+        self.docker_run_config.busy = true;
+        self.docker_run_config.error = None;
         cx.notify();
-
-        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                let result = machine.run_container(&args).await;
-
+        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+            let result = cx
+                .background_spawn(async move {
+                    match machine.run_container(&args).await {
+                        Ok(_) => Ok(machine.list_docker().await),
+                        Err(error) => Err(error),
+                    }
+                })
+                .await;
+            this.update(cx, move |this, cx| {
+                this.docker_run_config.busy = false;
                 match result {
-                    Ok(_) => {
-                        let containers = machine.list_docker().await;
-                        this.update(&mut cx, move |this, cx| {
+                    Ok(containers) => {
+                        if let Some(machine) = this
+                            .machine_store
+                            .machines
+                            .iter_mut()
+                            .find(|m| m.uuid == machine_uuid)
+                        {
                             match containers {
                                 Ok(containers) => {
-                                    if let Some(m) =
-                                        this.machine_store.machines.get_mut(machine_index)
-                                    {
-                                        m.services.docker = containers;
-                                        m.services.docker_error = None;
-                                    }
+                                    machine.services.docker = containers;
+                                    machine.services.docker_error = None;
                                 }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "Failed to refresh docker after run");
+                                Err(error) => {
+                                    machine.services.docker_error =
+                                        Some(format!("Unable to refresh Docker: {error}"));
                                 }
                             }
-                            this.clear_status_message();
-                            cx.notify();
-                        })
-                        .ok();
+                        }
+                        this.docker_run_modal_open = false;
+                        this.docker_run_config.reset(cx);
+                        this.clear_status_message();
                     }
-                    Err(err) => {
-                        this.update(&mut cx, move |this, cx| {
-                            this.set_status_error(format!("docker run failed: {err}"));
-                            cx.notify();
-                        })
-                        .ok();
+                    Err(error) => {
+                        this.docker_run_config.error =
+                            Some(format!("Docker could not run the container: {error}"));
                     }
                 }
-            }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }

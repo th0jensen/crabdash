@@ -169,3 +169,11 @@ Remove, with Total/Running/Paused/Stopped filters. Run remains available with an
 empty list. Removal asks for confirmation, stops active containers gracefully,
 and keeps images, volumes and bind-mounted files. Force removal is an explicit
 option. Pending actions are tracked separately for each machine.
+
+Run creates detached containers, with optional open stdin. The preview quotes
+individual arguments; the command field supports shell-style quoting without
+shell expansion. Invalid resource limits and conflicting options are rejected
+before submission. Docker errors remain in the modal and preserve the form for
+retry. Parameter validation lives in `features/docker/run_parameters.rs`, form
+state in `run.rs`, presentation in `run_modal.rs`, and CLI dispatch in
+`machines/src/docker.rs`; local and SSH machines use the same arguments.
