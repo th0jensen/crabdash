@@ -81,8 +81,7 @@ fn tab_width(app: &Crabdash, window: &Window) -> Pixels {
             let title = text_width(app, tab.label(), style::TEXT, window);
             let hint = text_width(app, tab.shortcut(), style::META, window);
             let margin = shortcut_reserve(hint, scale);
-            let content = title + scale * (style::ICON + 4.0);
-            width.max(content + margin * 2.0)
+            width.max(title + margin * 2.0)
         })
 }
 
@@ -191,8 +190,8 @@ fn tab_button(
                 control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
             })
         })
-        // Center the visible icon and title together. Shortcut space remains
-        // symmetric and reserved even when Alt hints are hidden.
+        // Center the title itself, balancing the leading icon and gap with
+        // an equal trailing slot. Alt hints never change the title's position.
         .child(
             div()
                 .min_w_0()
@@ -215,7 +214,8 @@ fn tab_button(
                         .text_ellipsis()
                         .overflow_hidden()
                         .child(tab.label()),
-                ),
+                )
+                .child(div().flex_none().w(rems(style::ICON / 16.0))),
         )
         .child(
             div()
@@ -281,9 +281,7 @@ pub(super) fn render(
         .children(tabs.iter().enumerate().map(|(index, tab)| {
             let hint = text_width(app, MainTab::from(*tab).shortcut(), style::META, window);
             let scale = window.rem_size() / 16.0;
-            let title_width =
-                (width - shortcut_reserve(hint, scale) * 2.0 - scale * (style::ICON + 4.0))
-                    .max(px(0.0));
+            let title_width = (width - shortcut_reserve(hint, scale) * 2.0).max(px(0.0));
             tab_button(
                 app,
                 pane,
