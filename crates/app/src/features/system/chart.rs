@@ -11,6 +11,15 @@ pub(super) struct Series {
     pub dashed: bool,
 }
 
+fn paint_is_visible(bounds: Bounds<Pixels>, mask: Bounds<Pixels>) -> bool {
+    mask.size.width > px(0.0)
+        && mask.size.height > px(0.0)
+        && bounds.size.width > px(0.0)
+        && bounds.size.height > px(0.0)
+        // The 1.5px stroke can extend beyond the canvas; preserve its edge pixels.
+        && bounds.dilate(px(1.0)).intersects(&mask)
+}
+
 fn fraction(captured_at: Instant, start: Instant, end: Instant) -> Option<f32> {
     let span = end.saturating_duration_since(start).as_secs_f64();
     (span > 0.0).then(|| {
@@ -79,6 +88,9 @@ fn swatch(color: u32, dashed: bool) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
+            if !paint_is_visible(bounds, window.content_mask().bounds) {
+                return;
+            }
             let y = bounds.top() + bounds.size.height / 2.0;
             let mut path = PathBuilder::stroke(px(1.5));
             segment(
@@ -139,6 +151,9 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
     let plot = canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
+            if !paint_is_visible(bounds, window.content_mask().bounds) {
+                return;
+            }
             let Some((start, end)) = range else {
                 return;
             };
@@ -188,7 +203,8 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScalarPoint, elapsed_label, fraction, projected_segments};
+    use super::{ScalarPoint, elapsed_label, fraction, paint_is_visible, projected_segments};
+    use gpui::{Bounds, point, px, size};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -233,5 +249,16 @@ mod tests {
         assert_eq!(segments[1].0.y, 0.2);
         assert_eq!(segments[1].1.x, 1.0);
         assert_eq!(projected_segments(&samples, start, start, 100.0).count(), 0);
+    }
+
+    #[test]
+    fn visibility_respects_translated_masks_stroke_edges_and_empty_clips() {
+        let mask = Bounds::new(point(px(100.0), px(100.0)), size(px(200.0), px(200.0)));
+        let canvas = |y| Bounds::new(point(px(150.0), px(y)), size(px(56.0), px(56.0)));
+        assert!(paint_is_visible(canvas(250.0), mask));
+        assert!(paint_is_visible(canvas(300.5), mask));
+        assert!(!paint_is_visible(canvas(301.0), mask));
+        let empty = Bounds::new(point(px(150.0), px(150.0)), size(px(0.0), px(0.0)));
+        assert!(!paint_is_visible(canvas(150.0), empty));
     }
 }
