@@ -1,4 +1,4 @@
-//! Ordered feature tabs, saved workspaces, and their compact switcher.
+//! In-window dashboard panes, saved workspaces, and their compact switcher.
 pub(crate) mod model;
 mod store;
 mod view;
@@ -43,6 +43,8 @@ pub(crate) struct State {
     pub store: Store,
     pub open: bool,
     pub rename: Option<Uuid>,
+    pub drag_target: Option<(u32, model::Drop)>,
+    pub resizing_split: Option<u32>,
     pub name: Entity<TextField>,
     pub error: Option<String>,
     pub read_only: bool,
@@ -83,6 +85,8 @@ impl State {
             store: shared.store,
             open: false,
             rename: None,
+            drag_target: None,
+            resizing_split: None,
             name: cx.new(|cx| TextField::new("Workspace name", "Workspace name", 1, cx).compact()),
             error: shared.error,
             read_only: shared.read_only,
@@ -90,6 +94,10 @@ impl State {
             revision: shared.revision,
             _changes: changes,
         }
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(crate) fn layout(&self) -> &Layout {
@@ -107,6 +115,8 @@ impl Crabdash {
             return;
         }
         self.workspaces.apply_runtime = true;
+        self.workspaces.drag_target = None;
+        self.workspaces.resizing_split = None;
         self.workspaces.store = shared.store.clone();
         self.workspaces.revision = shared.revision;
         self.workspaces.read_only = shared.read_only;
@@ -183,23 +193,44 @@ impl Crabdash {
         }
     }
 
-    pub(crate) fn reorder_workspace_tab(
+    pub(crate) fn select_pane_tab(&mut self, pane: u32, tab: MainTab, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
+        if self
+            .workspaces
+            .layout()
+            .root
+            .pane(pane)
+            .is_some_and(|(tabs, _)| tabs.contains(&tab.into()))
+        {
+            self.select_workspace_tab(tab, cx);
+        }
+    }
+
+    pub(crate) fn focus_workspace_pane(&mut self, pane: u32, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
+        if self.workspaces.layout_mut().focus(pane) {
+            self.active_tab = self.workspaces.layout().active().into();
+            self.persist_workspace(cx);
+        }
+    }
+
+    pub(crate) fn drop_workspace_tab(
         &mut self,
         tab: MainTab,
-        insertion_index: usize,
+        target: u32,
+        placement: model::Drop,
         cx: &mut Context<Self>,
     ) {
         self.sync_workspace_store(cx);
-        let reordered = self
+        self.workspaces.drag_target = None;
+        self.workspaces.resizing_split = None;
+        if self
             .workspaces
             .layout_mut()
-            .reorder(tab.into(), insertion_index);
-        let activated = self.workspaces.layout_mut().select(tab.into());
-        if activated {
-            self.active_tab = tab;
+            .drop_tab(tab.into(), target, placement)
+        {
+            self.active_tab = self.workspaces.layout().active().into();
             self.refresh_services(cx);
-        }
-        if reordered || activated {
             self.persist_workspace(cx);
         }
     }
@@ -221,6 +252,8 @@ impl Crabdash {
             return;
         }
         self.persist_workspace(cx);
+        self.workspaces.drag_target = None;
+        self.workspaces.resizing_split = None;
         self.workspaces.store.active = id;
         let workspace = self.workspaces.store.current();
         self.sidebar_collapsed = workspace.sidebar_collapsed;

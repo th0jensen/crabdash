@@ -1,18 +1,26 @@
-//! Flat tabs with insertion targets for reordering within the tab strip.
+//! Pane tabs reorder within their strip and drag into content to split or join.
 use crate::app::{Crabdash, MainTab};
 use crate::components::{
     common::{control_tooltip, lucide_icon},
     style,
 };
+use crate::features::workspaces::model::{Drop, Tab};
 use gpui::{prelude::*, *};
 use uuid::Uuid;
 
 #[derive(Clone)]
-struct DraggedTab {
-    tab: MainTab,
+pub(super) struct DraggedTab {
+    pub(super) tab: MainTab,
+    source_pane: u32,
     source_index: usize,
     owner: EntityId,
     workspace: Uuid,
+}
+
+impl DraggedTab {
+    pub(super) fn belongs_to(&self, app: &Crabdash, cx: &Context<Crabdash>) -> bool {
+        self.owner == cx.entity_id() && self.workspace == app.workspaces.store.active
+    }
 }
 
 impl Render for DraggedTab {
@@ -43,31 +51,34 @@ fn tab_icon(tab: MainTab) -> Div {
 fn reorder(
     app: &mut Crabdash,
     drag: &DraggedTab,
+    pane: u32,
     target: Option<MainTab>,
     cx: &mut Context<Crabdash>,
 ) {
     app.sync_workspace_store(cx);
-    if drag.owner == cx.entity_id() && drag.workspace == app.workspaces.store.active {
-        let tabs = &app.workspaces.layout().tabs;
+    if drag.belongs_to(app, cx)
+        && let Some((tabs, _)) = app.workspaces.layout().pane(pane)
+    {
         let source = tabs.iter().position(|tab| *tab == drag.tab.into());
         let target = target.and_then(|target| tabs.iter().position(|tab| *tab == target.into()));
-        if let Some(source) = source {
-            let boundary =
-                target.map_or(tabs.len(), |target| target + usize::from(source < target));
-            app.reorder_workspace_tab(drag.tab, boundary, cx);
-        }
+        let boundary = target.map_or(tabs.len(), |target| {
+            target + usize::from(source.is_some_and(|source| source < target))
+        });
+        app.drop_workspace_tab(drag.tab, pane, Drop::Tab(boundary), cx);
     }
     cx.stop_propagation();
 }
 
 fn tab_button(
     app: &Crabdash,
+    pane: u32,
     index: usize,
     tab: MainTab,
     active: bool,
     hints: bool,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
+    let owner = cx.entity().downgrade();
     let shortcut = || {
         div()
             .flex_none()
@@ -75,21 +86,26 @@ fn tab_button(
             .child(tab.shortcut())
     };
     div()
-        .id(SharedString::from(format!("tab-{}", tab.label())))
+        .id(SharedString::from(format!(
+            "pane-{pane}-tab-{}",
+            tab.label()
+        )))
         .h_full()
         .min_w_0()
-        .max_w(rems(app.preferences.tab_width / 16.0))
+        .w(rems(app.preferences.tab_width / 16.0))
         .flex_none()
         .px(rems(8.0 / 16.0))
         .relative()
         .flex()
         .items_center()
-        .gap(rems(4.0 / 16.0))
+        .justify_center()
         .text_size(rems(style::TEXT / 16.0))
         .line_height(relative(1.0))
         .whitespace_nowrap()
-        .text_color(rgb(if active {
+        .text_color(rgb(if active && app.workspaces.layout().focused == pane {
             style::TEXT_SELECTED
+        } else if active {
+            style::TEXT_PRIMARY
         } else {
             style::TEXT_MUTED
         }))
@@ -111,7 +127,7 @@ fn tab_button(
                 .bg(rgb(0x383B3D))
                 .border_0()
                 .border_color(rgb(style::TAB_INDICATOR));
-            if index < drag.source_index {
+            if drag.source_pane != pane || index < drag.source_index {
                 this.border_l_2()
             } else if index > drag.source_index {
                 this.border_r_2()
@@ -122,71 +138,108 @@ fn tab_button(
         .on_drop(cx.listener(move |app, drag: &DraggedTab, _, cx| {
             // Our model uses boundaries in the original strip. Zed drops
             // before a target to the left and after a target to the right.
-            reorder(app, drag, Some(tab), cx);
+            reorder(app, drag, pane, Some(tab), cx);
         }))
-        .tooltip(move |_, cx| control_tooltip(format!("{} · drag to reorder", tab.label()), cx))
-        // Zed keeps the icon and title together with a four-pixel gap.
-        // Reserve only the trailing hint so Alt does not resize the tab.
+        .tooltip(move |_, cx| {
+            control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
+        })
+        // Symmetric icon slots center the title itself. The hint is positioned
+        // independently so showing shortcuts never moves the title or icon.
         .child(
             div()
                 .min_w_0()
                 .h_full()
                 .flex()
                 .items_center()
+                .justify_center()
                 .gap(rems(4.0 / 16.0))
-                .child(div().flex_none().child(tab_icon(tab)))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(rems(style::ICON / 16.0))
+                        .child(tab_icon(tab)),
+                )
                 .child(
                     div()
                         .min_w_0()
+                        .max_w(rems((app.preferences.tab_width - 72.0).max(0.0) / 16.0))
                         .text_ellipsis()
                         .overflow_hidden()
                         .child(tab.label()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(rems(style::ICON / 16.0))
+                        .h(rems(style::ICON / 16.0)),
                 ),
         )
         .child(
             div()
-                .flex_none()
-                .h_full()
+                .absolute()
+                .right(rems(4.0 / 16.0))
+                .top_0()
+                .bottom_0()
                 .flex()
                 .items_center()
                 .text_color(rgb(style::TEXT_MUTED))
                 .child(shortcut().opacity(if hints { 1.0 } else { 0.0 })),
         )
-        .on_click(cx.listener(move |app, _, _, cx| app.select_workspace_tab(tab, cx)))
+        .on_click(cx.listener(move |app, _, _, cx| app.select_pane_tab(pane, tab, cx)))
         .on_drag(
             DraggedTab {
                 tab,
+                source_pane: pane,
                 source_index: index,
                 owner: cx.entity_id(),
                 workspace: app.workspaces.store.active,
             },
-            |drag, _, _, cx| cx.new(|_| drag.clone()),
+            move |drag, _, _, cx| {
+                owner
+                    .update(cx, |app, cx| {
+                        app.workspaces.drag_target = None;
+                        cx.notify();
+                    })
+                    .ok();
+                cx.new(|_| drag.clone())
+            },
         )
 }
 
 pub(super) fn render(
     app: &Crabdash,
+    pane: u32,
+    tabs: &[Tab],
+    active: Tab,
     window: &Window,
     _width: Pixels,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
-    let layout = app.workspaces.layout();
     let hints =
         app.preferences.always_show_shortcuts || window.modifiers().alt || app.open_menu.is_some();
     div()
-        .id("tab-strip")
+        .id(SharedString::from(format!("pane-{pane}-tab-strip")))
         .h(rems(style::BAR / 16.0))
         .flex_none()
         .bg(rgb(0x202020))
         .flex()
         .items_center()
         .overflow_x_scroll()
-        .children(layout.tabs.iter().enumerate().map(|(index, tab)| {
-            tab_button(app, index, (*tab).into(), *tab == layout.active, hints, cx)
+        .on_drag_move(
+            cx.listener(|app, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                if event.bounds.contains(&event.event.position)
+                    && app.workspaces.drag_target.take().is_some()
+                {
+                    cx.notify();
+                }
+            }),
+        )
+        .children(tabs.iter().enumerate().map(|(index, tab)| {
+            tab_button(app, pane, index, (*tab).into(), *tab == active, hints, cx)
         }))
         .child(
             div()
-                .id("tab-strip-append")
+                .id(SharedString::from(format!("pane-{pane}-tab-strip-append")))
                 .flex_1()
                 .min_w(rems(24.0 / 16.0))
                 .h_full()
@@ -195,7 +248,7 @@ pub(super) fn render(
                 .child("")
                 .drag_over::<DraggedTab>(|this, _, _, _| this.bg(rgb(0x383B3D)))
                 .on_drop(cx.listener(move |app, drag: &DraggedTab, _, cx| {
-                    reorder(app, drag, None, cx);
+                    reorder(app, drag, pane, None, cx);
                 })),
         )
 }

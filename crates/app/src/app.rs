@@ -263,6 +263,17 @@ impl Crabdash {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if cx.stop_active_drag(window) {
+            self.workspaces.drag_target = None;
+            if self.workspaces.resizing_split.take().is_some() {
+                // A divider changes the current ratio as it moves. Finish
+                // that resize on Escape; tab drags have no pending mutation.
+                self.persist_workspace(cx);
+            } else {
+                cx.notify();
+            }
+            return;
+        }
         if self.docker_run_modal_open {
             if self.docker_run_config.busy {
                 return;
@@ -307,6 +318,12 @@ impl Render for Crabdash {
             })
             .text_size(gpui::rems(crate::components::style::TEXT / 16.0))
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && cx.has_active_drag() {
+                    this.dismiss_modal_action(&DismissModal, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &crate::ShowDocker, _, cx| {
                 this.select_workspace_tab(MainTab::Docker, cx);
             }))

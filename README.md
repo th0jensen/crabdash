@@ -128,14 +128,17 @@ The Linux tray icon opens the existing window and offers **Show Crabdash** and
 use Quit to exit. Without tray support, closing the last window exits normally.
 
 The **Workspaces** button beside Terminal saves and switches named workspaces.
-Drag tabs along the single tab strip to reorder them. The insertion marker shows
-where the tab will go. **Save as** creates a named workspace; edit its name in place
-with the pencil control.
+Drag tabs along a tab strip to reorder them. Drag onto the edge of a content pane
+to create a split, or onto its center to move the tab into that pane. The preview
+shows where the tab will land. Split dividers resize the panes, and empty panes
+collapse automatically. Tabs stay inside the dashboard window. **Save as** creates
+a named workspace; use the pencil control or Enter to save its name.
 
-Workspaces save tab order, the active tab, sidebar width and visibility, and terminal
-visibility in `workspaces.json` beside Preferences. Changes save automatically.
-Older saved layouts migrate to a single tab strip while preserving their feature
-tabs and selection. Invalid saved files are preserved until explicit recovery.
+Workspaces save pane arrangement, tab order and selection, split sizes, sidebar
+width and visibility, and terminal visibility in `workspaces.json` beside
+Preferences. Changes save automatically. Existing flat layouts retain their tab
+order and selection when migrated. Invalid saved files are preserved until
+explicit recovery.
 
 Preferences has **General**, **Terminal**, and **Interface** sections:
 
