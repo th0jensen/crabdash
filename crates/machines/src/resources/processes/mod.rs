@@ -56,7 +56,7 @@ pub(super) fn usage(
         .zip(previous.and_then(|p| p.total_cpu))
         .and_then(|(new, old)| new.checked_sub(old))
         .filter(|value| *value > 0);
-    let mut values: Vec<_> = sample
+    sample
         .entries
         .iter()
         .filter(|p| !p.start_id.is_empty())
@@ -111,42 +111,65 @@ pub(super) fn usage(
                 cpu_percent: percent,
             }
         })
-        .collect();
-    values.sort_by(|a, b| {
-        b.cpu_percent
-            .unwrap_or(-1.0)
-            .total_cmp(&a.cpu_percent.unwrap_or(-1.0))
-            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
-            .then_with(|| a.pid.cmp(&b.pid))
-    });
-    values.truncate(100);
-    values
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn process_results_are_bounded_after_ranking_not_before() {
-        let entries = (0..150)
+    fn complete_snapshot_retains_idle_processes_and_safe_cpu_baselines() {
+        let previous_entries: Vec<_> = (0..150)
             .map(|pid| ProcessSample {
                 pid,
-                start_id: pid.to_string(),
-                name: "process".into(),
+                start_id: format!("start-{pid}"),
+                name: format!("process-{pid}"),
                 user: None,
                 memory_bytes: Some(pid as u64),
-                cpu: ProcessCpu::Percent(pid as f64 / 2.0),
+                cpu: ProcessCpu::Counter(200),
             })
             .collect();
-        let sample = ProcessesSample {
-            entries,
-            total_cpu: None,
+        let mut entries = previous_entries.clone();
+        for entry in &mut entries {
+            entry.cpu = ProcessCpu::Counter(300);
+        }
+        entries[100].start_id = "reused-pid".into();
+        entries[101].cpu = ProcessCpu::Unknown;
+        entries[101].memory_bytes = None;
+        entries[149].name = "idle-target".into();
+        entries[149].cpu = ProcessCpu::Counter(200);
+        let previous = ProcessesSample {
+            entries: previous_entries,
+            total_cpu: Some(1000),
             total_count: 150,
             truncated: false,
         };
-        let usage = usage(&sample, None, None, 1);
-        assert_eq!(usage.len(), 100);
-        assert_eq!(usage[0].pid, 149);
-        assert_eq!(usage[99].pid, 50);
+        let sample = ProcessesSample {
+            entries,
+            total_cpu: Some(2000),
+            total_count: 150,
+            truncated: false,
+        };
+        let results = usage(&sample, Some(&previous), Some(1.0), 1);
+        assert_eq!(results.len(), 150);
+        assert_eq!(
+            results
+                .iter()
+                .map(|process| process.pid)
+                .collect::<Vec<_>>(),
+            (0..150).collect::<Vec<_>>()
+        );
+        assert_eq!(results[0].cpu_percent, Some(10.0));
+        assert_eq!(results[100].start_id, "reused-pid");
+        assert_eq!(results[100].cpu_percent, None);
+        assert_eq!(results[101].cpu_percent, None);
+        assert_eq!(results[101].memory_bytes, None);
+        assert_eq!(results[149].name, "idle-target");
+        assert_eq!(results[149].cpu_percent, Some(0.0));
+        assert!(
+            usage(&sample, None, None, 1)
+                .iter()
+                .all(|process| process.cpu_percent.is_none())
+        );
     }
 }
