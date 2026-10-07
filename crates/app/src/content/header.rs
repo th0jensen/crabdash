@@ -1,4 +1,5 @@
 //! Pane tabs reorder within their strip and drag into content to split or join.
+mod drag;
 mod scroll;
 
 use crate::app::{Crabdash, MainTab};
@@ -8,6 +9,7 @@ use crate::components::{
 };
 use crate::features::workspaces::model::{Drop, Tab};
 use gpui::{prelude::*, *};
+use std::{cell::Cell, rc::Rc};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -17,12 +19,39 @@ pub(super) struct DraggedTab {
     source_index: usize,
     owner: EntityId,
     workspace: Uuid,
+    revision: Rc<Cell<Option<u64>>>,
 }
 
 impl DraggedTab {
-    pub(super) fn belongs_to(&self, app: &Crabdash, cx: &Context<Crabdash>) -> bool {
-        self.owner == cx.entity_id() && self.workspace == app.workspaces.store.active
+    fn source(&self) -> drag::Source {
+        drag::Source {
+            workspace: self.workspace,
+            pane: self.source_pane,
+            index: self.source_index,
+            tab: self.tab.into(),
+        }
     }
+
+    pub(super) fn validate(&self, app: &mut Crabdash, cx: &mut Context<Crabdash>) -> bool {
+        app.sync_workspace_store(cx);
+        let valid = self.owner == cx.entity_id()
+            && self.source().accepts(
+                self.revision.get(),
+                app.workspaces.store.active,
+                app.workspaces.revision(),
+                app.workspaces.layout(),
+            );
+        if !valid && app.workspaces.drag_target.take().is_some() {
+            cx.notify();
+        }
+        valid
+    }
+}
+
+pub(super) fn valid_hover(owner: &WeakEntity<Crabdash>, drag: &DraggedTab, cx: &mut App) -> bool {
+    owner
+        .update(cx, |app, cx| drag.validate(app, cx))
+        .is_ok_and(|valid| valid)
 }
 
 impl Render for DraggedTab {
@@ -104,8 +133,7 @@ fn reorder(
     target: Option<MainTab>,
     cx: &mut Context<Crabdash>,
 ) {
-    app.sync_workspace_store(cx);
-    if drag.belongs_to(app, cx)
+    if drag.validate(app, cx)
         && let Some((tabs, _)) = app.workspaces.layout().pane(pane)
     {
         let source = tabs.iter().position(|tab| *tab == drag.tab.into());
@@ -130,6 +158,7 @@ fn tab_button(
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
     let owner = cx.entity().downgrade();
+    let hover_owner = owner.clone();
     let shortcut = || {
         div()
             .flex_none()
@@ -173,7 +202,10 @@ fn tab_button(
             }))
             .text_color(rgb(style::TEXT_SELECTED))
         })
-        .drag_over::<DraggedTab>(move |this, drag, _, _| {
+        .drag_over::<DraggedTab>(move |this, drag, _, cx| {
+            if !valid_hover(&hover_owner, drag, cx) {
+                return this;
+            }
             let this = this
                 .bg(rgb(0x383B3D))
                 .border_0()
@@ -236,10 +268,20 @@ fn tab_button(
                 source_index: index,
                 owner: cx.entity_id(),
                 workspace: app.workspaces.store.active,
+                revision: Rc::new(Cell::new(None)),
             },
             move |drag, _, _, cx| {
+                drag.revision.set(None);
                 owner
                     .update(cx, |app, cx| {
+                        app.sync_workspace_store(cx);
+                        if drag.owner == cx.entity_id() {
+                            drag.revision.set(drag.source().stamp(
+                                app.workspaces.store.active,
+                                app.workspaces.revision(),
+                                app.workspaces.layout(),
+                            ));
+                        }
                         app.workspaces.drag_target = None;
                         cx.notify();
                     })
@@ -262,6 +304,7 @@ pub(super) fn render(
         app.preferences.always_show_shortcuts || window.modifiers().alt || app.open_menu.is_some();
     let width = tab_width(app, window);
     let scroll = scroll::handle(app, pane, tabs, active, width, viewport, window, cx);
+    let hover_owner = cx.entity().downgrade();
     div()
         .id(SharedString::from(format!("pane-{pane}-tab-strip")))
         .h(rems(style::BAR / 16.0))
@@ -273,6 +316,10 @@ pub(super) fn render(
         .track_scroll(&scroll)
         .on_drag_move(
             cx.listener(|app, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                let drag = event.drag(cx).clone();
+                if !drag.validate(app, cx) {
+                    return;
+                }
                 if event.bounds.contains(&event.event.position)
                     && app.workspaces.drag_target.take().is_some()
                 {
@@ -284,8 +331,10 @@ pub(super) fn render(
             let hint = text_width(app, MainTab::from(*tab).shortcut(), style::META, window);
             let scale = window.rem_size() / 16.0;
             let title_width = text_width(app, MainTab::from(*tab).label(), style::TEXT, window)
-                .min((width - scale * (style::ICON + 4.0) - shortcut_reserve(hint, scale) * 2.0)
-                    .max(px(0.0)));
+                .min(
+                    (width - scale * (style::ICON + 4.0) - shortcut_reserve(hint, scale) * 2.0)
+                        .max(px(0.0)),
+                );
             tab_button(
                 app,
                 pane,
@@ -307,7 +356,13 @@ pub(super) fn render(
                 .border_b_1()
                 .border_color(rgb(style::BORDER))
                 .child("")
-                .drag_over::<DraggedTab>(|this, _, _, _| this.bg(rgb(0x383B3D)))
+                .drag_over::<DraggedTab>(move |this, drag, _, cx| {
+                    if valid_hover(&hover_owner, drag, cx) {
+                        this.bg(rgb(0x383B3D))
+                    } else {
+                        this
+                    }
+                })
                 .on_drop(cx.listener(move |app, drag: &DraggedTab, _, cx| {
                     reorder(app, drag, pane, None, cx);
                 })),

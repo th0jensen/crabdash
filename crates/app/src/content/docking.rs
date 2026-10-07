@@ -1,5 +1,5 @@
 //! Geometric in-window docking targets, matching Zed's edge-band behavior.
-use super::header::DraggedTab;
+use super::header::{DraggedTab, valid_hover};
 use crate::{app::Crabdash, components::style, features::workspaces::model::Drop};
 use gpui::{prelude::*, *};
 
@@ -48,14 +48,21 @@ pub(super) fn body(
         .drag_target
         .filter(|(id, _)| *id == pane)
         .map(|(_, drop)| drop);
+    let hover_owner = cx.entity().downgrade();
     let overlay = div()
         .id(SharedString::from(format!("pane-{pane}-dock-overlay")))
         .absolute()
         .inset_0()
         .opacity(0.0)
-        .drag_over::<DraggedTab>(|this, _, _, _| this.opacity(1.0))
         // Block content controls only while this pane is the current tab drop
         // target. Normal clicks and split-divider drags remain untouched.
+        .drag_over::<DraggedTab>(move |this, drag, _, cx| {
+            if valid_hover(&hover_owner, drag, cx) {
+                this.opacity(1.0)
+            } else {
+                this
+            }
+        })
         .when(cx.has_active_drag() && drop.is_some(), |this| {
             this.occlude()
         })
@@ -74,16 +81,17 @@ pub(super) fn body(
                 }),
         )
         .on_drop(cx.listener(move |app, drag: &DraggedTab, _, cx| {
-            app.sync_workspace_store(cx);
+            if !drag.validate(app, cx) {
+                cx.stop_propagation();
+                return;
+            }
             let drop = app
                 .workspaces
                 .drag_target
                 .filter(|(id, _)| *id == pane)
                 .map_or(Drop::Tab(center), |(_, drop)| drop);
             app.workspaces.drag_target = None;
-            if drag.belongs_to(app, cx) {
-                app.drop_workspace_tab(drag.tab, pane, drop, cx);
-            }
+            app.drop_workspace_tab(drag.tab, pane, drop, cx);
             cx.notify();
             cx.stop_propagation();
         }));
@@ -96,7 +104,8 @@ pub(super) fn body(
         .overflow_hidden()
         .on_drag_move(
             cx.listener(move |app, event: &DragMoveEvent<DraggedTab>, _, cx| {
-                let candidate = if event.drag(cx).belongs_to(app, cx) {
+                let drag = event.drag(cx).clone();
+                let candidate = if drag.validate(app, cx) {
                     target(event.bounds, event.event.position, center).map(|drop| (pane, drop))
                 } else {
                     None
