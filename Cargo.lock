@@ -3243,6 +3243,7 @@ version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-ssh2-lite",
+ "base64",
  "dirs 6.0.0",
  "indoc",
  "portable-pty",
@@ -6424,6 +6425,7 @@ dependencies = [
  "anyhow",
  "plist",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

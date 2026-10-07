@@ -1,6 +1,7 @@
-//! System service management on local or remote Linux/macOS machines.
+//! System service management dispatched by the selected machine platform.
 mod linux;
 mod macos;
+mod windows;
 
 use crate::machine::{Machine, MachineKind};
 use anyhow::{Result, bail};
@@ -12,6 +13,7 @@ impl Services for Machine {
         match self.kind {
             MachineKind::Linux => linux::service_action(self, service, action).await,
             MachineKind::MacOS => macos::service_action(self, service, action).await,
+            MachineKind::Windows => windows::service_action(self, service, action).await,
             MachineKind::Unknown => bail!("System does not yet support the services feature"),
         }
     }
@@ -19,6 +21,7 @@ impl Services for Machine {
         match self.kind {
             MachineKind::Linux => linux::service_logs(self, service, lines).await,
             MachineKind::MacOS => macos::service_logs(self, service, lines).await,
+            MachineKind::Windows => windows::service_logs(self, service, lines).await,
             MachineKind::Unknown => bail!("System does not yet support the services feature"),
         }
     }
@@ -26,6 +29,7 @@ impl Services for Machine {
         match self.kind {
             MachineKind::Linux => linux::list_services(self).await,
             MachineKind::MacOS => macos::list_services(self).await,
+            MachineKind::Windows => windows::list_services(self).await,
             MachineKind::Unknown => bail!("System does not yet support the services feature"),
         }
     }

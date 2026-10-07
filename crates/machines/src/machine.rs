@@ -67,7 +67,16 @@ impl Machine {
                 Ok(stdout)
             }
             None => {
-                let result = Command::new(cmd).args(args).output().await?;
+                let mut command = std::process::Command::new(cmd);
+                command.args(args);
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt as _;
+                    // Discovery/actions are background operations. Interactive
+                    // terminals use ConPTY separately and keep their console.
+                    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                }
+                let result = Command::from(command).output().await?;
                 if !result.status.success() {
                     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
                     let message = if !stderr.is_empty() {

@@ -1,6 +1,7 @@
 //! Disk discovery dispatched by the selected machine platform.
 mod linux;
 mod macos;
+mod windows;
 
 use crate::machine::{Machine, MachineKind};
 use anyhow::{Result, bail};
@@ -11,6 +12,7 @@ impl Disks for Machine {
         match self.kind {
             MachineKind::Linux => linux::list_disks(self).await,
             MachineKind::MacOS => macos::list_disks(self).await,
+            MachineKind::Windows => windows::list_disks(self).await,
             MachineKind::Unknown => bail!("System does not yet support the disks feature"),
         }
     }

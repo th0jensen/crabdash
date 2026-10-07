@@ -1,6 +1,7 @@
 //! Disk model and platform-independent formatting.
 pub mod linux;
 pub mod macos;
+pub mod windows;
 use anyhow::Result;
 #[derive(Clone, Debug, Default)]
 pub struct Disk {

@@ -70,7 +70,7 @@ fn machine_logo(machine: &Machine) -> Option<&'static Logo> {
             .as_ref()
             .and_then(|distribution| distro_logo(&distribution.id))
             .or_else(|| LOGOS.iter().find(|logo| logo.slug == "tux")),
-        MachineKind::Unknown => None,
+        MachineKind::Windows | MachineKind::Unknown => None,
     }
 }
 

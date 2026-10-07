@@ -50,7 +50,7 @@ pub fn machine_icon(kind: MachineKind) -> LucideIcon {
     match kind {
         MachineKind::MacOS => Icon::Laptop,
         MachineKind::Linux => Icon::Server,
-        MachineKind::Unknown => Icon::Monitor,
+        MachineKind::Windows | MachineKind::Unknown => Icon::Monitor,
     }
 }
 

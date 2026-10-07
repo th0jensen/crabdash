@@ -35,7 +35,7 @@ pub(super) async fn open_local_terminal(
             .take_writer()
             .context("failed to take pseudo-terminal writer")?;
 
-        let mut command = CommandBuilder::new_default_prog();
+        let mut command = shell_command();
         command.env("TERM", &options.terminal_type);
         if options.true_color {
             command.env("COLORTERM", "truecolor");
@@ -67,6 +67,28 @@ pub(super) async fn open_local_terminal(
         controller: TerminalController { commands },
         events: event_receiver,
     })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_command() -> CommandBuilder {
+    CommandBuilder::new_default_prog()
+}
+
+#[cfg(target_os = "windows")]
+fn shell_command() -> CommandBuilder {
+    // Windows PowerShell is bundled with supported Windows versions. Resolve
+    // it under SystemRoot so launching does not depend on an edited PATH.
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let shell =
+            std::path::PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        if shell.is_file() {
+            let mut command = CommandBuilder::new(shell);
+            command.arg("-NoLogo");
+            return command;
+        }
+    }
+    // portable-pty's Windows default resolves COMSPEC (normally cmd.exe).
+    CommandBuilder::new_default_prog()
 }
 
 enum LocalAction {

@@ -1,6 +1,7 @@
 //! Platform-neutral service model and platform-specific output parsing.
 pub mod linux;
 pub mod macos;
+pub mod windows;
 #[derive(Clone, Debug)]
 pub struct ServiceItem {
     pub id: String,

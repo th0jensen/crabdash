@@ -6,9 +6,7 @@ use async_ssh2_lite::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
-    env::var,
     fmt::{Debug, Formatter},
-    path::Path,
     path::PathBuf,
     sync::{
         Arc, OnceLock,
@@ -111,11 +109,11 @@ impl RemoteConnection {
 
                 {
                     let mut known_hosts = sess.known_hosts()?;
-                    let kh_path = format!("{}/.ssh/known_hosts", var("HOME")?);
+                    let kh_path = dirs::home_dir().ok_or_else(|| anyhow!("Could not locate the SSH home directory"))?.join(".ssh/known_hosts");
                     if let Err(e) =
-                        known_hosts.read_file(Path::new(&kh_path), KnownHostFileKind::OpenSSH)
+                        known_hosts.read_file(&kh_path, KnownHostFileKind::OpenSSH)
                     {
-                        tracing::warn!(error = %e, path = %kh_path, "known_hosts read failed (non-fatal)");
+                        tracing::warn!(error = %e, path = %kh_path.display(), "known_hosts read failed (non-fatal)");
                     }
                 }
 

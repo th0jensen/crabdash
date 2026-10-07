@@ -155,9 +155,11 @@ mod tests {
     fn terminal_round_trip(options: super::TerminalOptions, expected: &str) -> anyhow::Result<()> {
         smol::block_on(async {
             let session = open_local_terminal(TerminalSize::default(), options).await?;
-            session
-                .controller
-                .write(b"printf 'crabdash-terminal-ok\\ncrabdash-env=%s:%s\\n' \"$TERM\" \"${COLORTERM-}\"; exit\r".to_vec())?;
+            #[cfg(not(target_os = "windows"))]
+            let command = b"printf 'crabdash-terminal-ok\\ncrabdash-env=%s:%s\\n' \"$TERM\" \"${COLORTERM-}\"; exit\r".to_vec();
+            #[cfg(target_os = "windows")]
+            let command = b"Write-Output 'crabdash-terminal-ok'; Write-Output ('crabdash-env=' + $env:TERM + ':' + $env:COLORTERM); exit\r".to_vec();
+            session.controller.write(command)?;
 
             let mut output = Vec::new();
             loop {
