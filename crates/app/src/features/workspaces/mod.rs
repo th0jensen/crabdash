@@ -1,5 +1,6 @@
 //! In-window dashboard panes, saved workspaces, and their compact switcher.
 pub(crate) mod model;
+mod rename;
 mod store;
 mod view;
 pub(crate) use view::button;
@@ -8,7 +9,7 @@ use crate::app::{Crabdash, MainTab};
 use crate::components::text_field::TextField;
 use gpui::{AppContext, Context, Entity, Global, ScrollHandle, Subscription, Window};
 use model::{Layout, Tab};
-use store::{Store, validate_name};
+use store::Store;
 use uuid::Uuid;
 
 impl From<MainTab> for Tab {
@@ -45,7 +46,9 @@ impl Global for SharedStore {}
 pub(crate) struct State {
     pub store: Store,
     pub open: bool,
-    pub rename: Option<Uuid>,
+    pub rename: Option<rename::Draft>,
+    pub(crate) rename_error: Option<String>,
+    pending_rename_focus: bool,
     pub drag_target: Option<(u32, model::Drop)>,
     pub resizing_split: Option<u32>,
     pub tab_reveal: Option<(Tab, u64)>,
@@ -92,6 +95,8 @@ impl State {
             store: shared.store,
             open: false,
             rename: None,
+            rename_error: None,
+            pending_rename_focus: false,
             drag_target: None,
             resizing_split: None,
             tab_reveal: None,
@@ -132,13 +137,30 @@ impl Crabdash {
         self.workspaces.read_only = shared.read_only;
         self.workspaces.error = shared.error.clone();
         self.workspaces.save_error = shared.save_error.clone();
+        if let Some(conflict) =
+            rename::reconcile(&self.workspaces.store, &mut self.workspaces.rename)
+        {
+            self.workspaces.rename_error = Some(conflict.message().into());
+            if conflict == rename::Conflict::Deleted {
+                self.workspaces.pending_rename_focus = true;
+            }
+        } else if self.workspaces.rename.is_some() {
+            // The target name may have returned to the draft's original value.
+            self.workspaces.rename_error = None;
+        }
         let workspace = self.workspaces.store.current();
         self.sidebar_collapsed = workspace.sidebar_collapsed;
         self.sidebar_width = gpui::px(workspace.sidebar_width);
         self.active_tab = workspace.layout.active().into();
+        cx.notify();
     }
 
     pub(crate) fn apply_workspace_runtime(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.workspaces.pending_rename_focus)
+            && gpui::Focusable::focus_handle(self.workspaces.name.read(cx), cx).is_focused(window)
+        {
+            self.focus_handle.focus(window);
+        }
         if !self.workspaces.apply_runtime {
             return;
         }
@@ -173,6 +195,7 @@ impl Crabdash {
         self.workspaces.error = None;
         self.workspaces.save_error = None;
         self.workspaces.rename = None;
+        self.workspaces.rename_error = None;
         self.workspaces.revision = self.workspaces.revision.saturating_add(1);
         cx.set_global(SharedStore {
             store: self.workspaces.store.clone(),
@@ -304,6 +327,7 @@ impl Crabdash {
         self.active_tab = workspace.layout.active().into();
         self.workspaces.open = false;
         self.workspaces.rename = None;
+        self.workspaces.rename_error = None;
         if self.quake_terminal_open != terminal_open {
             self.set_quake_terminal_open(terminal_open, window, cx);
         }
@@ -358,7 +382,12 @@ impl Crabdash {
         self.workspaces
             .name
             .update(cx, |field, cx| field.set_text(&name, cx));
-        self.workspaces.rename = Some(id);
+        self.workspaces.rename = Some(rename::Draft {
+            id,
+            original_name: name,
+        });
+        self.workspaces.rename_error = None;
+        self.workspaces.pending_rename_focus = false;
         if let Some(index) = self
             .workspaces
             .store
@@ -378,27 +407,32 @@ impl Crabdash {
 
     pub(crate) fn finish_workspace_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_workspace_store(cx);
+        self.apply_workspace_runtime(window, cx);
+        let Some(draft) = self.workspaces.rename.as_ref() else {
+            return;
+        };
         if self.workspaces.read_only {
             cx.notify();
             return;
         }
-        let name = self.workspaces.name.read(cx).text().trim().to_string();
-        if let Err(error) = validate_name(&name) {
-            self.workspaces.error = Some(error.to_string());
+        let name = self.workspaces.name.read(cx).text();
+        if let Err(error) = rename::commit(&mut self.workspaces.store, draft, &name) {
+            match error {
+                rename::Failure::Conflict(conflict) => {
+                    self.workspaces.rename_error = Some(conflict.message().into());
+                    if conflict == rename::Conflict::Deleted {
+                        self.workspaces.rename = None;
+                        self.workspaces.pending_rename_focus = true;
+                        self.apply_workspace_runtime(window, cx);
+                    }
+                }
+                rename::Failure::InvalidName(error) => self.workspaces.error = Some(error),
+            }
             cx.notify();
             return;
         }
-        if let Some(id) = self.workspaces.rename.take() {
-            if let Some(workspace) = self
-                .workspaces
-                .store
-                .workspaces
-                .iter_mut()
-                .find(|workspace| workspace.id == id)
-            {
-                workspace.name = name;
-            }
-        }
+        self.workspaces.rename = None;
+        self.workspaces.rename_error = None;
         self.workspaces.error = None;
         self.persist_workspace(cx);
         self.focus_handle.focus(window);
@@ -435,6 +469,7 @@ impl Crabdash {
             .workspaces
             .retain(|workspace| workspace.id != id);
         self.workspaces.rename = None;
+        self.workspaces.rename_error = None;
         self.persist_workspace(cx);
     }
 }

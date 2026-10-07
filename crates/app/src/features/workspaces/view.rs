@@ -87,6 +87,7 @@ pub(crate) fn button(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>
             app.sync_workspace_store(cx);
             app.workspaces.open = !app.workspaces.open;
             app.workspaces.rename = None;
+            app.workspaces.rename_error = None;
             if app.workspaces.open
                 && let Some(index) = app
                     .workspaces
@@ -133,8 +134,9 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
     let read_only = app.workspaces.read_only;
     let error = app
         .workspaces
-        .error
+        .rename_error
         .as_ref()
+        .or(app.workspaces.error.as_ref())
         .or(app.workspaces.save_error.as_ref());
     let footer = if read_only {
         "The saved layout file is preserved. Reset saved layouts to enable saving."
@@ -172,7 +174,11 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
         .map(|workspace| {
             let id = workspace.id;
             let active = id == app.workspaces.store.active;
-            let editing = app.workspaces.rename == Some(id);
+            let editing = app
+                .workspaces
+                .rename
+                .as_ref()
+                .is_some_and(|draft| draft.id == id);
             div()
                 .id(SharedString::from(format!("workspace-{id}")))
                 .w_full()
@@ -299,8 +305,12 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .child(div().font_weight(FontWeight::SEMIBOLD).child("Workspaces"))
                 .child(
                     surface_button("workspace-close", Some(Icon::X), None).on_click(cx.listener(
-                        |app, _, _, cx| {
+                        |app, _, window, cx| {
                             app.workspaces.open = false;
+                            app.workspaces.rename = None;
+                            app.workspaces.rename_error = None;
+                            app.workspaces.pending_rename_focus = true;
+                            app.apply_workspace_runtime(window, cx);
                             cx.notify();
                         },
                     )),

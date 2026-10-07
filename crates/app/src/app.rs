@@ -322,6 +322,7 @@ impl Crabdash {
                 self.workspaces.open = false;
             }
             self.workspaces.error = None;
+            self.workspaces.rename_error = None;
         } else if self.open_menu.take().is_none() {
             return;
         }
