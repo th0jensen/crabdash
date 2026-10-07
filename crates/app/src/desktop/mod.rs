@@ -4,6 +4,7 @@ pub(crate) mod appearance;
 pub(crate) mod controls;
 pub(crate) mod menus;
 mod runtime;
+pub(crate) mod shell;
 pub(crate) mod startup;
 pub(crate) mod tray;
 pub(crate) mod window;

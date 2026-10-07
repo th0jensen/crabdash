@@ -266,7 +266,7 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
     let frame = crate::desktop::appearance::frame_inset(window) * 2.0;
     let width = (window.viewport_size().width
         - frame
-        - if app.sidebar_collapsed {
+        - if app.sidebar_collapsed || crate::desktop::shell::is_native(app) {
             px(0.0)
         } else {
             app.sidebar_width
@@ -274,7 +274,11 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
     .max(px(0.0));
     let height = (window.viewport_size().height
         - frame
-        - px(f32::from(window.rem_size()) * style::TITLE_BAR / 16.0))
+        - if crate::desktop::shell::is_native(app) {
+            px(0.0)
+        } else {
+            px(f32::from(window.rem_size()) * style::TITLE_BAR / 16.0)
+        })
     .max(px(0.0));
     div()
         .flex_1()

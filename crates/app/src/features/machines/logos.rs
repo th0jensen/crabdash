@@ -74,6 +74,11 @@ fn machine_logo(machine: &Machine) -> Option<&'static Logo> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn machine_svg_bytes(machine: &Machine) -> Option<&'static [u8]> {
+    machine_logo(machine).map(|logo| logo.bytes)
+}
+
 pub(super) fn platform_label(machine: &Machine) -> &str {
     if let Some(logo) = machine_logo(machine)
         && logo.slug != "tux"

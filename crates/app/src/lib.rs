@@ -58,6 +58,7 @@ actions!(
         ToggleFullScreen,
         ToggleSidebar,
         ToggleTerminal,
+        ToggleWorkspaces,
         ZoomWindow
     ]
 );

@@ -8,7 +8,9 @@ fn open_window(cx: &mut App, minimised: bool) -> anyhow::Result<()> {
         super::window::prepare(window, cx);
         let view = cx.new(|cx| Crabdash::new(cx));
         view.update(cx, |view, cx| {
-            view.attach_dashboard_visibility(window, minimised, cx)
+            view.attach_dashboard_visibility(window, minimised, cx);
+            #[cfg(target_os = "macos")]
+            view.install_native_shell(window, cx);
         });
         let focus = view.read(cx).focus_handle.clone();
         window.focus(&focus);

@@ -9,10 +9,6 @@ mod windows;
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
-#[cfg(target_os = "macos")]
-pub(super) use macos::prepare;
-#[cfg(target_os = "macos")]
-pub(crate) use macos::reduced_transparency;
 pub(crate) use platform::{frame, frame_inset, root_background, titlebar_background};
 #[cfg(target_os = "windows")]
 use windows as platform;

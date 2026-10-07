@@ -8,7 +8,7 @@ use lucide_icons::Icon;
 
 const INFO_LINE: f32 = 18.0;
 
-fn row_height(window: &Window) -> Pixels {
+pub(super) fn row_height(window: &Window) -> Pixels {
     window.rem_size() * ((style::CONTROL + 10.0) / 16.0)
 }
 
@@ -84,27 +84,7 @@ pub(crate) fn button(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(lucide_icon(Icon::PanelsTopLeft, style::ICON))
         .on_click(cx.listener(|app, _, window, cx| {
-            app.sync_workspace_store(cx);
-            app.workspaces.open = !app.workspaces.open;
-            app.workspaces.rename = None;
-            app.workspaces.rename_error = None;
-            if app.workspaces.open
-                && let Some(index) = app
-                    .workspaces
-                    .store
-                    .workspaces
-                    .iter()
-                    .position(|workspace| workspace.id == app.workspaces.store.active)
-            {
-                // Before the first paint GPUI's scroll handle still reports
-                // Overflow::Hidden, so scroll_to_item cannot reveal the row.
-                app.workspaces
-                    .scroll
-                    .set_offset(point(px(0.0), -(row_height(window) * index as f32)));
-                app.workspaces.scroll.scroll_to_item(index);
-            }
-            app.focus_handle.focus(window);
-            cx.notify();
+            app.toggle_workspace_popup(window, cx);
         }))
         .when(popup_visible, |this| {
             this.child(
@@ -125,11 +105,36 @@ pub(crate) fn button(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>
         })
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn native_popup(
+    app: &Crabdash,
+    window: &Window,
+    cx: &mut Context<Crabdash>,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .size(px(0.0))
+        .child(deferred(
+            anchored()
+                .position_mode(AnchoredPositionMode::Window)
+                .anchor(Corner::TopRight)
+                .position(point(window.viewport_size().width - px(12.0), px(6.0)))
+                .snap_to_window_with_margin(px(12.0))
+                .child(popup(app, window, cx)),
+        ))
+}
+
 fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Stateful<Div> {
     let scale = f32::from(window.rem_size()) / 16.0;
     let viewport = window.viewport_size();
     let width = px(324.0 * scale).min((viewport.width - px(24.0)).max(px(0.0)));
-    let top = px((style::TITLE_BAR + 6.0) * scale);
+    let top = px((if crate::desktop::shell::is_native(app) {
+        6.0
+    } else {
+        style::TITLE_BAR + 6.0
+    }) * scale);
     let max_height = px(440.0 * scale).min((viewport.height - top - px(12.0)).max(px(0.0)));
     let read_only = app.workspaces.read_only;
     let error = app

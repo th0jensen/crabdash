@@ -4,9 +4,11 @@ use objc2_app_kit::{NSView, NSWindow};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 pub(super) fn configure(options: &mut WindowOptions) {
     options.window_background = WindowBackgroundAppearance::Transparent;
+    if let Some(titlebar) = options.titlebar.as_mut() {
+        titlebar.traffic_light_position = None;
+    }
 }
 pub(super) fn prepare(window: &mut Window, cx: &mut App) {
-    crate::desktop::appearance::prepare(window);
     window.on_window_should_close(cx, crate::desktop::tray::should_close);
 }
 pub(super) fn register_lifecycle(_: &mut App) {}

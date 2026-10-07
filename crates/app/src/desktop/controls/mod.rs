@@ -42,13 +42,6 @@ impl Control {
             }
         }
     }
-    #[cfg(target_os = "macos")]
-    fn action(self) -> Box<dyn Action> {
-        match self {
-            Self::Refresh => Box::new(crate::RefreshServices),
-            Self::Terminal => Box::new(crate::ToggleTerminal),
-        }
-    }
 }
 
 pub(crate) fn render(

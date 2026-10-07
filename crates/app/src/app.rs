@@ -56,6 +56,8 @@ impl MainTab {
 }
 
 pub struct Crabdash {
+    #[cfg(target_os = "macos")]
+    pub(crate) native_shell: Option<crate::desktop::shell::State>,
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
@@ -181,6 +183,8 @@ impl Crabdash {
         let sidebar_collapsed = workspaces.store.current().sidebar_collapsed;
         let sidebar_width = px(workspaces.store.current().sidebar_width);
         let mut app = Self {
+            #[cfg(target_os = "macos")]
+            native_shell: None,
             machine_store,
             selected_machine: 0,
             active_tab,
@@ -338,6 +342,8 @@ impl Render for Crabdash {
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
         ));
         self.apply_workspace_runtime(window, cx);
+        #[cfg(target_os = "macos")]
+        self.synchronize_native_shell(window, cx);
         self.prepare_visible_domains(cx);
         self.prepare_system_resources(cx);
         self.resize_quake_terminal(window, cx);
@@ -409,6 +415,11 @@ impl Render for Crabdash {
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
                 this.toggle_quake_terminal(window, cx);
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::ToggleWorkspaces, window, cx| {
+                    this.toggle_workspace_popup(window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &OpenAddMachine, window, cx| {
                 this.open_add_machine_modal(window, cx);
             }))
@@ -432,26 +443,32 @@ impl Render for Crabdash {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(crate::desktop::window::render(self, window, cx))
+                    .when(!crate::desktop::shell::is_native(self), |this| {
+                        this.child(crate::desktop::window::render(self, window, cx))
+                    })
                     .child(
                         div()
                             .flex_1()
                             .min_h_0()
                             .min_w_0()
                             .flex()
-                            .when(!self.sidebar_collapsed, |this| {
-                                this.on_drag_move(cx.listener(
-                                    |this,
-                                     event: &DragMoveEvent<sidebar::DraggedSidebarResize>,
-                                     _window,
-                                     cx| {
-                                        this.set_sidebar_width(event.event.position.x, cx);
-                                    },
-                                ))
-                            })
-                            .when(!self.sidebar_collapsed, |this| {
-                                this.child(sidebar::render(self, cx))
-                            })
+                            .when(
+                                !self.sidebar_collapsed && !crate::desktop::shell::is_native(self),
+                                |this| {
+                                    this.on_drag_move(cx.listener(
+                                        |this,
+                                         event: &DragMoveEvent<sidebar::DraggedSidebarResize>,
+                                         _window,
+                                         cx| {
+                                            this.set_sidebar_width(event.event.position.x, cx);
+                                        },
+                                    ))
+                                },
+                            )
+                            .when(
+                                !self.sidebar_collapsed && !crate::desktop::shell::is_native(self),
+                                |this| this.child(sidebar::render(self, cx)),
+                            )
                             .child(content::render(self, window, cx)),
                     ),
             )
@@ -483,6 +500,13 @@ impl Render for Crabdash {
             .when(self.docker_removal.is_some(), |this| {
                 this.child(features::docker::remove_modal::render(self, cx))
             });
+        #[cfg(target_os = "macos")]
+        let root = root.when(
+            crate::desktop::shell::is_native(self)
+                && self.workspaces.open
+                && !crate::desktop::shell::macos_popup_blocked(self),
+            |this| this.child(features::workspaces::native_popup(self, window, cx)),
+        );
         crate::desktop::appearance::frame(root, window)
     }
 }

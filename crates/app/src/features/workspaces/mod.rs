@@ -4,6 +4,8 @@ mod rename;
 mod store;
 mod view;
 pub(crate) use view::button;
+#[cfg(target_os = "macos")]
+pub(crate) use view::native_popup;
 
 use crate::app::{Crabdash, MainTab};
 use crate::components::text_field::TextField;
@@ -11,6 +13,31 @@ use gpui::{AppContext, Context, Entity, Global, ScrollHandle, Subscription, Wind
 use model::{Layout, Tab};
 use store::Store;
 use uuid::Uuid;
+
+impl Crabdash {
+    pub(crate) fn toggle_workspace_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
+        self.workspaces.open = !self.workspaces.open;
+        self.workspaces.rename = None;
+        self.workspaces.rename_error = None;
+        if self.workspaces.open
+            && let Some(index) = self
+                .workspaces
+                .store
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.id == self.workspaces.store.active)
+        {
+            self.workspaces.scroll.set_offset(gpui::point(
+                gpui::px(0.0),
+                -(view::row_height(window) * index as f32),
+            ));
+            self.workspaces.scroll.scroll_to_item(index);
+        }
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+}
 
 impl From<MainTab> for Tab {
     fn from(tab: MainTab) -> Self {
