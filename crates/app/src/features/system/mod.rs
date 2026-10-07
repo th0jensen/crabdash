@@ -1,5 +1,6 @@
 //! Live resource usage belongs to the selected machine, independently of tables.
 mod chart;
+mod clock;
 mod controller;
 mod history;
 #[cfg(test)]
@@ -301,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn pausing_rejects_pending_samples_and_resets_the_counter_baseline() -> anyhow::Result<()> {
+    fn pausing_rejects_pending_samples_and_marks_a_history_gap() -> anyhow::Result<()> {
         let mut state = State::default();
         let uuid = Uuid::new_v4();
         let now = Instant::now();
@@ -319,6 +320,140 @@ mod tests {
         assert!(machine.sampling_due(now + Duration::from_secs(2), Duration::from_secs(60)));
         assert_eq!(machine.history.back().and_then(|point| point.memory), None);
         assert!(machine.usage.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_results_are_rejected_and_all_counter_rates_rebaseline() -> anyhow::Result<()> {
+        use machines::resources::{
+            CpuCoreCounter, CpuCounter, DiskCounter, NetworkCounter, ProcessCpu, ProcessSample,
+            ProcessesSample,
+        };
+        let start = clock::Reading::now();
+        let counters = |seconds, ticks| {
+            let mut sample = sample("boot", seconds as f64);
+            sample.captured_at = start.instant + Duration::from_secs(seconds);
+            let counter = CpuCounter {
+                total: ticks,
+                idle: ticks / 4,
+            };
+            sample.cpu = CpuSample::Counters {
+                aggregate: counter,
+                cores: vec![CpuCoreCounter {
+                    name: "0".into(),
+                    counter,
+                }],
+            };
+            sample.network = Some(vec![NetworkCounter {
+                id: "eth0".into(),
+                received_bytes: ticks,
+                sent_bytes: ticks * 2,
+            }]);
+            sample.disks = Some(vec![DiskCounter {
+                id: "disk".into(),
+                read_bytes: ticks,
+                written_bytes: ticks * 3,
+            }]);
+            sample.processes = Some(ProcessesSample {
+                total_cpu: None,
+                total_count: 1,
+                truncated: false,
+                entries: vec![ProcessSample {
+                    pid: 42,
+                    start_id: "first".into(),
+                    name: "worker".into(),
+                    user: None,
+                    memory_bytes: None,
+                    cpu: ProcessCpu::TimedCounter {
+                        ticks,
+                        ticks_per_second: 100,
+                    },
+                }],
+            });
+            sample
+        };
+        let mut state = State {
+            clock: clock::SamplingClock::new(start),
+            ..State::default()
+        };
+        let uuid = Uuid::new_v4();
+        let mut machine = MachineState::default();
+        machine.record(counters(0, 100))?;
+        machine.record(counters(2, 300))?;
+        assert_eq!(
+            machine.history.back().and_then(|point| point.cpu),
+            Some(75.0)
+        );
+        assert_eq!(
+            machine.history.back().and_then(|point| point.network_rx),
+            Some(100.0)
+        );
+        machine.loading = true;
+        state.machines.insert(uuid, machine);
+        let stale = state.requests.restart(uuid);
+        // Both clocks count the interruption; a completion can arrive before a heartbeat.
+        assert!(state.observe_clock(clock::Reading {
+            instant: start.instant + Duration::from_secs(10),
+            wall: start.wall + Duration::from_secs(10),
+        }));
+        let fresh = state.requests.begin(uuid);
+        assert!(!state.requests.complete(&uuid, stale));
+        assert!(fresh.is_some_and(|ticket| state.requests.complete(&uuid, ticket)));
+        let machine = state
+            .machines
+            .get_mut(&uuid)
+            .ok_or_else(|| anyhow::anyhow!("Missing fixture"))?;
+        machine.record(counters(10, 10_000))?;
+        let baseline = machine
+            .usage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing usage"))?;
+        assert!(baseline.cpu_percent.is_none());
+        assert!(
+            baseline
+                .network
+                .as_ref()
+                .is_some_and(|rows| rows[0].received_bytes_per_second.is_none())
+        );
+        assert!(
+            baseline
+                .disks
+                .as_ref()
+                .is_some_and(|rows| rows[0].written_bytes_per_second.is_none())
+        );
+        assert!(
+            baseline
+                .processes
+                .as_ref()
+                .is_some_and(|rows| rows[0].cpu_percent.is_none())
+        );
+        machine.record(counters(12, 10_200))?;
+        let restored = machine
+            .usage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing usage"))?;
+        assert_eq!(restored.cpu_percent, Some(75.0));
+        assert_eq!(
+            restored
+                .network
+                .as_ref()
+                .and_then(|rows| rows[0].received_bytes_per_second),
+            Some(100.0)
+        );
+        assert_eq!(
+            restored
+                .disks
+                .as_ref()
+                .and_then(|rows| rows[0].written_bytes_per_second),
+            Some(300.0)
+        );
+        assert_eq!(
+            restored
+                .processes
+                .as_ref()
+                .and_then(|rows| rows[0].cpu_percent),
+            Some(100.0)
+        );
         Ok(())
     }
 
@@ -359,6 +494,7 @@ mod tests {
 #[derive(Default)]
 pub(crate) struct State {
     requests: Requests,
+    clock: clock::SamplingClock,
     pub machines: HashMap<Uuid, MachineState>,
     visible_machine: Option<Uuid>,
     pub processes: Option<processes::State>,
@@ -370,6 +506,17 @@ impl State {
             ..Self::default()
         }
     }
+    fn observe_clock(&mut self, now: clock::Reading) -> bool {
+        if !self.clock.observe(now) {
+            return false;
+        }
+        let uuids: Vec<_> = self.machines.keys().copied().collect();
+        for uuid in uuids {
+            self.pause(uuid, now.instant);
+        }
+        true
+    }
+
     fn pause(&mut self, uuid: Uuid, captured_at: Instant) {
         // Reject pending capture-start samples before adding the later gap.
         self.requests.forget(&uuid);

@@ -15,6 +15,7 @@ fn system_is_visible(node: &Node) -> bool {
 impl Crabdash {
     /// Render calls this to start sampling immediately after tab/machine changes.
     pub(crate) fn prepare_system_resources(&mut self, cx: &mut Context<Self>) {
+        let interrupted = self.system.observe_clock(super::clock::Reading::now());
         let invalid: Vec<_> = self
             .system
             .machines
@@ -40,9 +41,12 @@ impl Crabdash {
         let target =
             system_is_visible(&self.workspaces.layout().root).then(|| self.selected_machine().uuid);
         if self.system.visible_machine == target {
+            if interrupted && let Some(uuid) = target {
+                self.refresh_system_resources_for(uuid, cx);
+            }
             return;
         }
-        if let Some(previous) = self.system.visible_machine {
+        if !interrupted && let Some(previous) = self.system.visible_machine {
             self.system.pause(previous, std::time::Instant::now());
         }
         self.system.visible_machine = target;
@@ -59,6 +63,7 @@ impl Crabdash {
                     .update(cx, |this, cx| {
                         // Resource sampling is live while visible, even if automatic
                         // table refresh is disabled in Preferences.
+                        this.system.observe_clock(super::clock::Reading::now());
                         let uuid = this.selected_machine().uuid;
                         let due = this.system.machines.get(&uuid).is_none_or(|state| {
                             state.sampling_due(
@@ -127,7 +132,12 @@ impl Crabdash {
                 .background_spawn(async move { machine.sample_resources().await })
                 .await;
             this.update(cx, |this, cx| {
+                let interrupted = this.system.observe_clock(super::clock::Reading::now());
                 if !this.system.requests.complete(&uuid, ticket) {
+                    if interrupted && system_is_visible(&this.workspaces.layout().root) {
+                        this.refresh_system_resources(cx);
+                        cx.notify();
+                    }
                     return;
                 }
                 if !this

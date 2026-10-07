@@ -150,7 +150,8 @@ the sampled process set. CPU and throughput start with **Sampling…** until two
 snapshots are available. Resource sampling is independent of
 automatic table refresh; **Preferences → System → Sample interval** adjusts it
 from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; charts use actual elapsed sample times, with solid/dashed legends for paired I/O and gaps for unavailable samples. Live history stays in memory and resets after a reboot
-or replacement connection. Existing workspaces gain System in the focused pane
+or replacement connection. Hiding System or a sleep/clock interruption breaks the
+history and rebaselines cumulative counters before live rates resume. Existing workspaces gain System in the focused pane
 without changing their selection or split sizes.
 
 Resource collectors live beside each other in `machines/src/resources/`: Linux
