@@ -46,7 +46,11 @@ Unavailable startup/tray capabilities remain visible in Preferences.
 Selected-machine operations live in `machines/src/{docker,disks,services,terminal}`.
 Disk and system-service modules dispatch to sibling Linux/macOS/Windows backends using the
 **selected machine's platform**, so machine backends are compiled on every host for
-SSH management. Terminal sessions share one API with `local.rs` (portable PTY on
+SSH management. Linux service inventory uses one `systemctl show` query for all
+loaded services, including inactive and failed units, instead of starting a
+process for each unit's properties. Its property parser preserves unit identity
+and reports malformed output without publishing a partial inventory.
+Terminal sessions share one API with `local.rs` (portable PTY on
 Unix hosts, ConPTY on Windows) and `ssh.rs` transports. Corresponding output parsers live in
 `utils/src/{disks,services}/{linux,macos,windows}.rs`; raw `Output` has no domain parsing.
 
