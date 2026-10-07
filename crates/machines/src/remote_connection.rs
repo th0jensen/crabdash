@@ -41,6 +41,12 @@ pub struct RemoteConnection {
 }
 
 impl RemoteConnection {
+    /// Whether two snapshots share the same runtime SSH session owner. This
+    /// remains stable across clones, while a replacement connection differs.
+    pub fn shares_session_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.session, &other.session)
+    }
+
     pub fn connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
     }

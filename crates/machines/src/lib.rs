@@ -4,6 +4,7 @@ mod docker;
 pub mod machine;
 mod powershell;
 pub mod remote_connection;
+pub mod resources;
 mod services;
 pub mod store;
 mod system_info;
