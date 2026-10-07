@@ -17,16 +17,8 @@ $rows = @($all | Select-Object -First 8192 | ForEach-Object {
 [pscustomobject]@{ count = $all.Count; rows = $rows } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(crate) async fn sample(
-    machine: &mut Machine,
-    uptime_seconds: f64,
-    logical_cpus: usize,
-) -> Result<ProcessesSample> {
-    parse(
-        &powershell::run(machine, SCRIPT).await?,
-        uptime_seconds,
-        logical_cpus,
-    )
+pub(crate) async fn sample(machine: &mut Machine) -> Result<ProcessesSample> {
+    parse(&powershell::run(machine, SCRIPT).await?)
 }
 #[derive(Deserialize)]
 struct Row {
@@ -41,13 +33,7 @@ struct Snapshot {
     count: usize,
     rows: Vec<Row>,
 }
-fn parse(output: &str, uptime_seconds: f64, logical_cpus: usize) -> Result<ProcessesSample> {
-    ensure!(
-        uptime_seconds.is_finite() && uptime_seconds >= 0.0 && logical_cpus > 0,
-        "Invalid Windows process clock"
-    );
-    let clock = uptime_seconds * 10_000_000.0 * logical_cpus as f64;
-    ensure!(clock < u64::MAX as f64, "Windows process clock overflow");
+fn parse(output: &str) -> Result<ProcessesSample> {
     let snapshot: Snapshot = serde_json::from_str(output.trim_start_matches('\u{feff}'))
         .context("Invalid Windows process response")?;
     ensure!(
@@ -70,7 +56,10 @@ fn parse(output: &str, uptime_seconds: f64, logical_cpus: usize) -> Result<Proce
                     .context("Invalid Windows process CPU time")
             })
             .transpose()?
-            .map_or(ProcessCpu::Unknown, ProcessCpu::Counter);
+            .map_or(ProcessCpu::Unknown, |ticks| ProcessCpu::TimedCounter {
+                ticks,
+                ticks_per_second: 10_000_000,
+            });
         let memory_bytes = row
             .memory
             .map(|value| {
@@ -89,7 +78,7 @@ fn parse(output: &str, uptime_seconds: f64, logical_cpus: usize) -> Result<Proce
         });
     }
     Ok(ProcessesSample {
-        total_cpu: Some(clock.round() as u64),
+        total_cpu: None,
         entries,
         total_count: snapshot.count,
         truncated,
@@ -102,16 +91,82 @@ mod tests {
     fn preserves_creation_identity_unknown_counters_and_total_count() -> Result<()> {
         let sample = parse(
             r#"{"count":4,"rows":[{"pid":0,"name":"Idle","start":"boot","cpu":"999","memory":"0"},{"pid":12,"name":"app.exe","start":"2026-10-07T12:00:00Z","cpu":"123456789","memory":"9007199254740993"},{"pid":13,"name":"protected.exe","start":"start","cpu":null,"memory":null}]}"#,
-            10.0,
-            4,
         )?;
-        assert_eq!(sample.total_cpu, Some(400_000_000));
+        assert_eq!(sample.total_cpu, None);
+        assert!(matches!(
+            sample.entries[0].cpu,
+            ProcessCpu::TimedCounter {
+                ticks: 123456789,
+                ticks_per_second: 10_000_000
+            }
+        ));
         assert_eq!(sample.total_count, 4);
         assert!(sample.truncated);
         assert_eq!(sample.entries.len(), 2);
         assert_eq!(sample.entries[0].memory_bytes, Some(9_007_199_254_740_993));
         assert!(matches!(sample.entries[1].cpu, ProcessCpu::Unknown));
-        assert!(parse("{}", 10.0, 4).is_err());
+        assert!(parse("{}").is_err());
+        Ok(())
+    }
+    #[test]
+    fn parsed_100ns_time_uses_monotonic_interval_and_resets_pid_or_boot_identity() -> Result<()> {
+        use super::super::super::{CpuSample, MemorySample, ResourceMonitor, ResourceSample};
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        let snapshot = |ticks: u64,
+                        elapsed_millis: u64,
+                        identity: &str,
+                        boot: &str|
+         -> Result<ResourceSample> {
+            let output=serde_json::json!({"count":1,"rows":[{"pid":42,"name":"app.exe","start":identity,"cpu":ticks.to_string(),"memory":"4096"}]}).to_string();
+            Ok(ResourceSample {
+                cpu: CpuSample::Sampled { percent: 10.0 },
+                logical_cpus: 4,
+                memory: MemorySample {
+                    total_bytes: 4096,
+                    available_bytes: 1024,
+                    estimated: false,
+                },
+                swap: None,
+                load_average: None,
+                // Holding target uptime constant proves the process denominator
+                // comes from monotonic capture time, not a rounded wall clock.
+                uptime_seconds: 100.0,
+                boot_id: boot.into(),
+                captured_at: started + Duration::from_millis(elapsed_millis),
+                processes: Some(parse(&output)?),
+                network: None,
+                disks: None,
+                gpus: None,
+            })
+        };
+        let mut monitor = ResourceMonitor::default();
+        let percent = |usage: super::super::super::ResourceUsage| {
+            usage
+                .processes
+                .and_then(|values| values.first().and_then(|value| value.cpu_percent))
+        };
+        assert_eq!(
+            percent(monitor.update(snapshot(100_000_000, 0, "start", "boot")?)?),
+            None
+        );
+        // 1.25 seconds of CPU over 1.25 elapsed seconds on four logical CPUs.
+        assert_eq!(
+            percent(monitor.update(snapshot(112_500_000, 1250, "start", "boot")?)?),
+            Some(25.0)
+        );
+        assert_eq!(
+            percent(monitor.update(snapshot(125_000_000, 2500, "reused", "boot")?)?),
+            None
+        );
+        assert_eq!(
+            percent(monitor.update(snapshot(137_500_000, 3750, "reused", "newboot")?)?),
+            None
+        );
+        assert_eq!(
+            percent(monitor.update(snapshot(10, 5000, "reused", "newboot")?)?),
+            None
+        );
         Ok(())
     }
 }

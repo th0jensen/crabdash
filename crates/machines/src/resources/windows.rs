@@ -30,10 +30,7 @@ pub(super) async fn sample(machine: &mut Machine) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
     let output = powershell::run(machine, SCRIPT).await?;
     let mut sample = parse(&output)?;
-    sample.processes =
-        super::processes::windows::sample(machine, sample.uptime_seconds, sample.logical_cpus)
-            .await
-            .ok();
+    sample.processes = super::processes::windows::sample(machine).await.ok();
     sample.network = super::network::windows::sample(machine).await.ok();
     sample.disks = super::disks::windows::sample(machine).await.ok();
     sample.gpus = super::gpu::windows::sample(machine).await.ok();
