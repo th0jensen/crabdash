@@ -180,8 +180,12 @@ fn tab_button(
             // before a target to the left and after a target to the right.
             reorder(app, drag, pane, Some(tab), cx);
         }))
-        .tooltip(move |_, cx| {
-            control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
+        .when(!cx.has_active_drag(), |this| {
+            // GPUI tooltip tasks retain their original bounds. Removing the
+            // builder cancels a pending tooltip before a drag moves this tab.
+            this.tooltip(move |_, cx| {
+                control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
+            })
         })
         // Balance the leading icon with an equal trailing slot so the title
         // itself is centered. Alt hints stay independent of this layout.
