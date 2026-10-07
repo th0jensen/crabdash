@@ -55,7 +55,16 @@ pub(super) fn valid_hover(owner: &WeakEntity<Crabdash>, drag: &DraggedTab, cx: &
 }
 
 impl Render for DraggedTab {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // GPUI shares the active drag across windows. Its preview belongs to
+        // the source window, just like this tab's drop targets.
+        if window
+            .root::<Crabdash>()
+            .flatten()
+            .is_none_or(|view| view.entity_id() != self.owner)
+        {
+            return div();
+        }
         div()
             .h(rems(style::BAR / 16.0))
             .px(px(12.0))
