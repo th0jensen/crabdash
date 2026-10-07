@@ -311,6 +311,10 @@ impl Search {
             _changes: changes,
         }
     }
+    pub fn clear(&self, cx: &mut App) {
+        self.field.update(cx, |field, cx| field.clear(cx));
+    }
+
     pub fn query(&self, cx: &App) -> String {
         self.field.read(cx).text().trim().to_lowercase()
     }

@@ -645,7 +645,61 @@ fn process_card(
     let Some(state) = app.system.processes.as_ref() else {
         return card().child("Preparing process list…");
     };
-    let rows = state.visible(processes, &state.search.query(cx));
+    let query = state.search.query(cx);
+    let rows = state.visible(processes, &query);
+    let count = rows.len();
+    let card = card()
+        .child(heading(
+            "Processes",
+            format!(
+                "{count} / {}",
+                usage.process_count.unwrap_or(processes.len())
+            ),
+            if usage.processes_truncated
+                || usage
+                    .process_count
+                    .is_some_and(|total| processes.len() < total)
+            {
+                format!("Top {} sampled · % of total CPU capacity", processes.len())
+            } else {
+                "% of total CPU capacity".into()
+            },
+        ))
+        .child(state.search.render().w_full().min_w_0());
+    if count == 0 {
+        let (title, description) = if processes.is_empty() {
+            (
+                "No processes sampled",
+                "The latest sample did not report any processes.",
+            )
+        } else {
+            (
+                "No matching sampled processes",
+                "Try another name, PID, or user. Search covers the latest sampled processes.",
+            )
+        };
+        return card.child(
+            table::placeholder_card(title, description)
+                .flex_col()
+                .items_start()
+                .when(!query.is_empty(), |this| {
+                    this.child(
+                        div().w_full().flex().justify_end().child(
+                            surface_button(
+                                "system-process-clear-filter",
+                                Some(Icon::X),
+                                Some("Clear filter"),
+                            )
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                if let Some(state) = app.system.processes.as_ref() {
+                                    state.search.clear(cx);
+                                }
+                            })),
+                        ),
+                    )
+                }),
+        );
+    }
     let compact = width < 460.0;
     let heading_row = if compact {
         div()
@@ -688,7 +742,6 @@ fn process_card(
             .child(fixed_column(64.0).child(process_heading(app, Column::Cpu, "CPU", cx)))
             .child(fixed_column(88.0).child(process_heading(app, Column::Memory, "Memory", cx)))
     };
-    let count = rows.len();
     let snapshot: Vec<ProcessUsage> = rows.into_iter().cloned().collect();
     let scroll = state.scroll.clone();
     let list = uniform_list("system-process-list", count, move |range, _, _| {
@@ -719,38 +772,8 @@ fn process_card(
         .min_h_0()
         .min_w_0()
         .overflow_hidden()
-        .child(if count > 0 {
-            list.into_any_element()
-        } else {
-            div()
-                .p(px(12.0))
-                .text_color(rgb(style::TEXT_MUTED))
-                .child(if processes.is_empty() {
-                    "No processes in the latest sample."
-                } else {
-                    "No matching processes."
-                })
-                .into_any_element()
-        });
-    card()
-        .child(heading(
-            "Processes",
-            format!(
-                "{count} / {}",
-                usage.process_count.unwrap_or(processes.len())
-            ),
-            if usage.processes_truncated
-                || usage
-                    .process_count
-                    .is_some_and(|total| processes.len() < total)
-            {
-                format!("Top {} sampled · % of total CPU capacity", processes.len())
-            } else {
-                "% of total CPU capacity".into()
-            },
-        ))
-        .child(state.search.render().w_full().min_w_0())
-        .child(table::table_card().min_w_0().child(heading_row).child(body))
+        .child(list);
+    card.child(table::table_card().min_w_0().child(heading_row).child(body))
 }
 
 pub(crate) fn render(
