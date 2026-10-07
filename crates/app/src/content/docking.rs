@@ -2,6 +2,7 @@
 use super::header::{DraggedTab, valid_hover};
 use crate::{app::Crabdash, components::style, features::workspaces::model::Drop};
 use gpui::{prelude::*, *};
+use std::{cell::Cell, rc::Rc};
 
 fn target(bounds: Bounds<Pixels>, position: Point<Pixels>, center: usize) -> Option<Drop> {
     if !bounds.contains(&position) {
@@ -49,6 +50,14 @@ pub(super) fn body(
         .filter(|(id, _)| *id == pane)
         .map(|(_, drop)| drop);
     let hover_owner = cx.entity().downgrade();
+    let body_bounds = Rc::new(Cell::new(None));
+    let drop_bounds = body_bounds.clone();
+    let measure = canvas(
+        move |bounds, _, _| body_bounds.set(Some(bounds)),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0();
     let overlay = div()
         .id(SharedString::from(format!("pane-{pane}-dock-overlay")))
         .absolute()
@@ -80,16 +89,20 @@ pub(super) fn body(
                     _ => this.inset_0(),
                 }),
         )
-        .on_drop(cx.listener(move |app, drag: &DraggedTab, _, cx| {
+        .on_drop(cx.listener(move |app, drag: &DraggedTab, window, cx| {
             if !drag.validate(app, cx) {
                 cx.stop_propagation();
                 return;
             }
-            let drop = app
-                .workspaces
-                .drag_target
-                .filter(|(id, _)| *id == pane)
-                .map_or(Drop::Tab(center), |(_, drop)| drop);
+            // A quick drag can start on its final move, after GPUI's capture
+            // phase has run. Resolve from the release location rather than a
+            // missing or stale hover target.
+            let Some(drop) = drop_bounds
+                .get()
+                .and_then(|bounds| target(bounds, window.mouse_position(), center))
+            else {
+                return;
+            };
             app.workspaces.drag_target = None;
             app.drop_workspace_tab(drag.tab, pane, drop, cx);
             cx.notify();
@@ -133,6 +146,7 @@ pub(super) fn body(
                 .child(panel),
         )
         .child(overlay)
+        .child(measure)
 }
 
 #[cfg(test)]
