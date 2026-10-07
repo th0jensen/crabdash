@@ -110,6 +110,7 @@ impl Crabdash {
         let state = self.system.machines.entry(uuid).or_default();
         state.target = Some(target.clone());
         state.loading = true;
+        let show_initial_loading = state.usage.is_none();
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let result = cx
                 .background_spawn(async move { machine.sample_resources().await })
@@ -143,7 +144,11 @@ impl Crabdash {
             .ok();
         })
         .detach();
-        cx.notify();
+        // Once live data exists, no visible state changes until the sample
+        // completes. Avoid rendering the same mosaic twice per interval.
+        if show_initial_loading {
+            cx.notify();
+        }
     }
 }
 

@@ -69,10 +69,11 @@ fn panel(
         MainTab::Disks => disks::render(app, window, cx, width),
         MainTab::Services => services::render(app, window, cx, width),
         MainTab::System => div()
-            .size_full()
+            .w(width)
+            .h_full()
             .min_w_0()
             .min_h_0()
-            .child(system::render(app, window, cx)),
+            .child(system::render(app, window, cx, width)),
     }
 }
 

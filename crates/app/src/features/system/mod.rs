@@ -1,5 +1,6 @@
 //! Live resource usage belongs to the selected machine, independently of tables.
 mod controller;
+mod processes;
 mod view;
 pub(crate) use view::render;
 
@@ -19,6 +20,25 @@ const HISTORY_LIMIT: usize = 60;
 pub(crate) struct HistoryPoint {
     pub cpu: Option<f64>,
     pub memory: f64,
+    pub network_rx: Option<f64>,
+    pub network_tx: Option<f64>,
+    pub disk_read: Option<f64>,
+    pub disk_write: Option<f64>,
+}
+fn sum_rates(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+    let values: Vec<_> = values.collect();
+    if values.is_empty() {
+        return None;
+    }
+    values
+        .into_iter()
+        .try_fold(0.0, |sum, value| Some(sum + value?))
+}
+fn append<T>(history: &mut VecDeque<T>, value: T) {
+    history.push_back(value);
+    while history.len() > HISTORY_LIMIT {
+        history.pop_front();
+    }
 }
 
 #[derive(Default)]
@@ -28,6 +48,7 @@ pub(crate) struct MachineState {
     boot_id: Option<String>,
     pub usage: Option<ResourceUsage>,
     pub history: VecDeque<HistoryPoint>,
+    pub gpu_history: HashMap<String, VecDeque<Option<f64>>>,
     pub error: Option<String>,
     pub updated: Option<Instant>,
     pub loading: bool,
@@ -70,14 +91,45 @@ impl MachineState {
                 .is_some_and(|previous| usage.uptime_seconds < previous.uptime_seconds)
         {
             self.history.clear();
+            self.gpu_history.clear();
         }
         self.boot_id = Some(boot_id);
         self.history.push_back(HistoryPoint {
             cpu: usage.cpu_percent,
             memory: usage.memory.used_percent(),
+            network_rx: usage
+                .network
+                .as_ref()
+                .and_then(|v| sum_rates(v.iter().map(|v| v.received_bytes_per_second))),
+            network_tx: usage
+                .network
+                .as_ref()
+                .and_then(|v| sum_rates(v.iter().map(|v| v.sent_bytes_per_second))),
+            disk_read: usage
+                .disks
+                .as_ref()
+                .and_then(|v| sum_rates(v.iter().map(|v| v.read_bytes_per_second))),
+            disk_write: usage
+                .disks
+                .as_ref()
+                .and_then(|v| sum_rates(v.iter().map(|v| v.written_bytes_per_second))),
         });
         while self.history.len() > HISTORY_LIMIT {
             self.history.pop_front();
+        }
+        self.gpu_history.retain(|id, _| {
+            usage
+                .gpus
+                .as_ref()
+                .is_some_and(|values| values.iter().any(|value| &value.id == id))
+        });
+        if let Some(values) = &usage.gpus {
+            for value in values {
+                append(
+                    self.gpu_history.entry(value.id.clone()).or_default(),
+                    value.busy_percent,
+                );
+            }
         }
         self.usage = Some(usage);
         self.error = None;
@@ -130,6 +182,51 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_io_and_gpu_histories_are_bounded_removed_and_reset_with_boot() -> anyhow::Result<()>
+    {
+        use machines::resources::{DiskCounter, GpuSample, NetworkCounter};
+        let mut state = MachineState::default();
+        let start = Instant::now();
+        for index in 0..100 {
+            let mut sample = sample("boot", index as f64);
+            sample.captured_at = start + Duration::from_secs(index);
+            sample.network = Some(vec![NetworkCounter {
+                id: "eth0".into(),
+                received_bytes: index * 100,
+                sent_bytes: index * 200,
+            }]);
+            sample.disks = Some(vec![DiskCounter {
+                id: "disk0".into(),
+                read_bytes: index * 300,
+                written_bytes: index * 400,
+            }]);
+            sample.gpus = Some(vec![GpuSample {
+                id: "gpu0".into(),
+                name: "GPU".into(),
+                vendor: "AMD".into(),
+                driver: None,
+                busy_percent: Some(25.0),
+                memory_used_bytes: None,
+                memory_total_bytes: None,
+                temperature_celsius: None,
+            }]);
+            state.record(sample)?;
+        }
+        assert_eq!(state.history.len(), HISTORY_LIMIT);
+        assert_eq!(
+            state.gpu_history.get("gpu0").map(VecDeque::len),
+            Some(HISTORY_LIMIT)
+        );
+        assert_eq!(state.history.back().and_then(|v| v.network_rx), Some(100.0));
+        assert_eq!(state.history.back().and_then(|v| v.disk_write), Some(400.0));
+        state.record(sample("boot", 101.0))?;
+        assert!(state.gpu_history.is_empty());
+        state.record(sample("newboot", 0.0))?;
+        assert_eq!(state.history.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn removing_a_machine_rejects_its_pending_sample_and_removes_history() {
         let mut state = State::default();
         let uuid = Uuid::new_v4();
@@ -168,8 +265,15 @@ pub(crate) struct State {
     requests: Requests,
     pub machines: HashMap<Uuid, MachineState>,
     visible_machine: Option<Uuid>,
+    pub processes: Option<processes::State>,
 }
 impl State {
+    pub(crate) fn new(cx: &mut gpui::Context<crate::app::Crabdash>) -> Self {
+        Self {
+            processes: Some(processes::State::new(cx)),
+            ..Self::default()
+        }
+    }
     pub(crate) fn remove(&mut self, uuid: Uuid) {
         self.requests.forget(&uuid);
         self.machines.remove(&uuid);

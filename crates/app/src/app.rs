@@ -166,7 +166,7 @@ impl Crabdash {
             selected_machine: 0,
             active_tab,
             workspaces,
-            system: features::system::State::default(),
+            system: features::system::State::new(cx),
             docker_refresh: Default::default(),
             disks_refresh: Default::default(),
             services_refresh: Default::default(),
