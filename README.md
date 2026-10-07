@@ -75,7 +75,7 @@ distributions use Tux, and saved machines without distro metadata migrate on ref
 - [x] Remote machine support via SSH (keyless, SSH key, and Tailscale)
 - [x] Disk and mount inspection
 - [x] System keychain integration for credential storage
-- [ ] System health and stats
+- [x] Live CPU, memory, process, network, disk and GPU statistics
 - [x] System service management (`systemd`, `launchd`, Windows services)
 - [ ] Docker inspect and logs
 - [ ] Quick command execution and logs
@@ -142,18 +142,26 @@ order and selection when migrated. Invalid saved files are preserved until
 explicit recovery.
 
 The **System** tab samples the selected machine every two seconds while visible,
-including in an unfocused split. It shows interval CPU usage, per-core usage where
-available, memory and swap, load averages, and uptime. CPU starts with **Sampling…**
-until two counter snapshots are available. Resource sampling is independent of
+including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,
+memory, network, disk activity, machine details, and a card for each graphics adapter.
+The process table supports filtering and sorting; CPU percentages measure a share
+of the machine's total CPU capacity. Up to 100 processes are displayed after ranking
+the sampled process set. CPU and throughput start with **Sampling…** until two counter
+snapshots are available. Resource sampling is independent of
 automatic table refresh; live history stays in memory and resets after a reboot
 or replacement connection. Existing workspaces gain System in the focused pane
 without changing their selection or split sizes.
 
 Resource collectors live beside each other in `machines/src/resources/`: Linux
 reads procfs (including WSL), Windows uses CIM counters, and macOS uses built-in
-tools. These command collectors also work through SSH from any supported host;
+tools. Processes, network, disks and GPUs each declare their own domain module,
+with Linux, macOS and Windows collectors beside each other. These command collectors
+also work through SSH from any supported host;
 native desktop integrations remain selected by host `cfg`. macOS reports estimated
-available memory and aggregate CPU; Windows has no Unix load average.
+available memory and aggregate CPU; Windows has no Unix load average. GPU telemetry
+depends on the adapter and driver: missing measurements are shown as unavailable.
+Linux reads DRM/sysfs and optionally NVIDIA's installed tools. Windows keeps GPU
+performance-counter identities separate, and macOS reads driver telemetry when exposed.
 
 Preferences has **General**, **Terminal**, and **Interface** sections:
 
