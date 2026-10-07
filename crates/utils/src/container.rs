@@ -1,3 +1,5 @@
+pub mod details;
+
 #[derive(Clone, Debug, Default)]
 pub struct Container {
     pub id: String,

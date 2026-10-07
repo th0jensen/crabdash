@@ -1,6 +1,10 @@
 use anyhow::Result;
 use lucide_icons::Icon;
-use utils::{args::Args, container::Container, output::Output};
+use utils::{
+    args::Args,
+    container::{Container, details::ContainerDetails},
+    output::Output,
+};
 
 pub trait Docker {
     /// Finds the Docker executable
@@ -15,6 +19,8 @@ pub trait Docker {
     /// * `Ok(Vec<ServiceItem>)`: The containers on the machine
     /// * `Err(anyhow::Error)`: Any errors that occurred
     fn list_docker(&mut self) -> impl Future<Output = Result<Vec<Container>>>;
+    /// Reads configuration and current state for a single container.
+    fn inspect_container(&mut self, id: &str) -> impl Future<Output = Result<ContainerDetails>>;
     /// Runs a Docker container
     ///
     /// # Arguments

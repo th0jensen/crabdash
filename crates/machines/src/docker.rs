@@ -4,9 +4,14 @@ use crate::{
     powershell,
     store::MachineStore,
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use services::docker::{Docker, DockerAction, DockerNotInstalled};
-use utils::{args, args::Args, container::Container, output::Output};
+use utils::{
+    args,
+    args::Args,
+    container::{Container, details::ContainerDetails},
+    output::Output,
+};
 
 const DOCKER_PATHS: &[&str] = &[
     "/opt/homebrew/bin/docker",
@@ -111,6 +116,10 @@ fn posix_command(docker: &str, args: &Args) -> Args {
     command
 }
 
+fn inspect_command(id: &str) -> Args {
+    args!["inspect", "--type", "container", "--", id]
+}
+
 async fn run_docker(machine: &mut Machine, docker: &str, args: &Args) -> Result<Output> {
     if machine.remote.is_some() && matches!(machine.kind, MachineKind::Windows) {
         powershell::run_native(machine, docker, args).await
@@ -194,11 +203,28 @@ impl Docker for Machine {
     }
 
     async fn list_docker(&mut self) -> Result<Vec<Container>> {
-        let args = args!["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
+        let args = args![
+            "ps",
+            "-a",
+            "--no-trunc",
+            "--format",
+            "{{.ID}}\t{{.Names}}\t{{.State}}"
+        ];
         let docker = self.find_docker().await?;
         Ok(utils::container::parse(
             &run_docker(self, &docker, &args).await?,
         ))
+    }
+
+    async fn inspect_container(&mut self, id: &str) -> Result<ContainerDetails> {
+        let docker = self.find_docker().await?;
+        let output = run_docker(self, &docker, &inspect_command(id)).await?;
+        let details = utils::container::details::parse(&output)?;
+        ensure!(
+            details.id == id,
+            "Docker inspection returned a different container ID"
+        );
+        Ok(details)
     }
 
     async fn container_action(&mut self, id: &str, action: DockerAction) -> Result<Output> {
@@ -256,6 +282,8 @@ mod docker_tests {
     use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
 
+    const INSPECT_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     struct Fixture {
         directory: std::path::PathBuf,
         machine: Machine,
@@ -303,6 +331,100 @@ esac
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.directory);
         }
+    }
+
+    fn inspection_fixture(response: &str) -> Result<Fixture> {
+        let fixture = Fixture::new("exited", false)?;
+        std::fs::write(fixture.directory.join("response"), response)?;
+        std::fs::write(
+            fixture.directory.join("docker"),
+            format!(
+                "#!/bin/sh\nprintf '%s\\0' \"$@\" > '{}/inspect-args'\ncat '{}/response'\n",
+                fixture.directory.display(),
+                fixture.directory.display()
+            ),
+        )?;
+        Ok(fixture)
+    }
+
+    fn inspection_response() -> String {
+        format!(r#"[{{"Id":"{INSPECT_ID}","Name":"/fixture","State":{{"Status":"exited"}}}}]"#)
+    }
+
+    fn assert_inspection_arguments(fixture: &Fixture, id: &str) -> Result<()> {
+        let expected = ["inspect", "--type", "container", "--", id]
+            .into_iter()
+            .flat_map(|arg| arg.as_bytes().iter().copied().chain(std::iter::once(0)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            std::fs::read(fixture.directory.join("inspect-args"))?,
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_is_read_only_and_uses_the_exact_container_identifier() -> Result<()> {
+        let mut fixture = inspection_fixture(&inspection_response())?;
+        let details = smol::block_on(fixture.machine.inspect_container(INSPECT_ID))?;
+        assert_eq!(details.id, INSPECT_ID);
+        assert_eq!(details.name, "fixture");
+        assert_inspection_arguments(&fixture, INSPECT_ID)?;
+        assert!(!fixture.directory.join("calls").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_requests_full_container_identifiers() -> Result<()> {
+        let mut fixture = Fixture::new("exited", false)?;
+        smol::block_on(fixture.machine.list_docker())?;
+        assert_eq!(
+            fixture.calls()?,
+            "ps -a --no-trunc --format {{.ID}}\t{{.Names}}\t{{.State}}\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_preserves_identifiers_as_one_literal_argument_on_local_and_posix_transports()
+    -> Result<()> {
+        let mut fixture = inspection_fixture(&inspection_response())?;
+        let marker = fixture.directory.join("injected");
+        let id = format!(
+            "--format=json; touch {}; $(touch {}) user's `literal`\nnext",
+            marker.display(),
+            marker.display()
+        );
+        // The fixture returns a valid but different ID, which must be rejected.
+        assert!(smol::block_on(fixture.machine.inspect_container(&id)).is_err());
+        assert_inspection_arguments(&fixture, &id)?;
+        assert!(!marker.exists());
+
+        let docker = fixture.directory.join("docker");
+        let command = posix_command(&docker.to_string_lossy(), &inspect_command(&id));
+        smol::block_on(Machine::default().run("sh", &command))?;
+        assert_inspection_arguments(&fixture, &id)?;
+        assert!(!marker.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_rejects_a_mismatched_response_and_propagates_cli_errors() -> Result<()> {
+        let mut fixture = inspection_fixture(&inspection_response())?;
+        let error = smol::block_on(fixture.machine.inspect_container("different-id"))
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("Expected identifier mismatch"))?;
+        assert!(error.to_string().contains("different container ID"));
+        std::fs::write(
+            fixture.directory.join("docker"),
+            "#!/bin/sh\necho 'No such container' >&2\nexit 1\n",
+        )?;
+        let error = smol::block_on(fixture.machine.inspect_container(INSPECT_ID))
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("Expected Docker error"))?;
+        assert!(error.to_string().contains("No such container"));
+        assert!(!error.is::<DockerNotInstalled>());
+        Ok(())
     }
 
     #[test]
