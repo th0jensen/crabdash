@@ -362,7 +362,7 @@ pub(crate) fn should_close(window: &mut Window, cx: &mut App) -> bool {
             .try_global::<TrayState>()
             .is_some_and(|state| state.available.load(Ordering::Acquire))
     {
-        crate::desktop::window::hide_to_tray(window);
+        crate::desktop::window::hide_to_tray(window, cx);
         return false;
     }
     true

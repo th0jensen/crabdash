@@ -5,6 +5,9 @@ use std::time::Instant;
 
 impl Crabdash {
     pub(crate) fn prepare_visible_domains(&mut self, cx: &mut Context<Self>) {
+        if !self.dashboard_visibility.is_visible() {
+            return;
+        }
         for machine in &self.machine_store.machines {
             self.polling.publish_connection(machine);
         }
@@ -47,6 +50,9 @@ impl Crabdash {
     }
 
     pub(crate) fn refresh_visible_tables(&mut self, cx: &mut Context<Self>) {
+        if !self.dashboard_visibility.is_visible() {
+            return;
+        }
         let domains = Domains::visible(&self.workspaces.layout().root);
         self.refresh_domains(domains, cx);
         if self

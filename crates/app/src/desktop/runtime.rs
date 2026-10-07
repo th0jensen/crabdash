@@ -7,6 +7,9 @@ fn open_window(cx: &mut App, minimised: bool) -> anyhow::Result<()> {
     cx.open_window(options, |window, cx| {
         super::window::prepare(window, cx);
         let view = cx.new(|cx| Crabdash::new(cx));
+        view.update(cx, |view, cx| {
+            view.attach_dashboard_visibility(window, minimised, cx)
+        });
         let focus = view.read(cx).focus_handle.clone();
         window.focus(&focus);
         if minimised {
@@ -25,8 +28,8 @@ fn primary_window(cx: &App) -> Option<AnyWindowHandle> {
 
 fn show_window(cx: &mut App, token: Option<String>) {
     if let Some(handle) = primary_window(cx) {
-        let _ = handle.update(cx, |_, window, _| {
-            super::window::activate_window(window, token.as_deref());
+        let _ = handle.update(cx, |_, window, cx| {
+            super::window::activate_window(window, token.as_deref(), cx);
         });
     } else {
         if let Err(error) = open_window(cx, false) {

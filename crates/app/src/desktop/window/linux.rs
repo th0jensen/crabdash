@@ -59,7 +59,7 @@ pub(super) fn controls(window: &Window) -> Div {
                 "window-minimize",
                 Icon::Minus,
                 WindowControlArea::Min,
-                |_, window, _| window.minimize_window(),
+                |_, window, cx| super::minimize(window, cx),
             ))
         })
         .when(controls.maximize, |this| {
@@ -215,4 +215,10 @@ pub(super) const LEADING_PADDING: f32 = 0.0;
 
 pub(super) fn hide_to_tray(window: &mut Window) {
     window.minimize_window();
+}
+
+pub(super) fn is_visible(_: &Window) -> Option<bool> {
+    // xdg-shell v5 has no minimized-state notification. The shared visibility
+    // module tracks our minimize/tray actions and restores on activation.
+    None
 }

@@ -136,6 +136,12 @@ by the login service. This preference is saved in
 The Linux tray icon opens the existing window and offers **Show Crabdash** and
 **Preferences**, and **Quit**. Closing a window keeps its sessions running when a tray is available;
 use Quit to exit. Without tray support, closing the last window exits normally.
+Minimizing through Crabdash or closing to the tray pauses System sampling and
+automatic table reads for that dashboard; restoring it refreshes visible panes
+and starts fresh counter baselines. SSH sessions remain available. Unfocused
+visible dashboards continue updating. macOS and Windows also detect native
+minimization; Wayland cannot report external minimization, so Linux tracks
+Crabdash's own minimize and restore actions.
 
 The **Workspaces** button beside Terminal saves and switches named workspaces.
 Drag tabs along a tab strip to reorder them. Drag onto the edge of a content pane

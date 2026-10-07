@@ -13,6 +13,7 @@ use windows as platform;
 #[cfg(target_os = "linux")]
 mod activation;
 mod title_bar;
+pub(crate) mod visibility;
 use gpui::*;
 pub(crate) use platform::resize_handles;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -41,15 +42,21 @@ pub(crate) fn prepare(window: &mut Window, cx: &mut App) {
 pub(crate) fn register_lifecycle(cx: &mut App) {
     platform::register_lifecycle(cx);
 }
-pub(crate) fn activate_window(window: &mut Window, token: Option<&str>) {
+pub(crate) fn activate_window(window: &mut Window, token: Option<&str>, cx: &mut App) {
     platform::activate_window(window, token);
+    visibility::set_visible(window, cx, true);
 }
 pub(crate) fn zoom(window: &mut Window) {
     platform::zoom(window);
 }
 /// Hide only this dashboard while keeping its sessions available to the tray.
-pub(crate) fn hide_to_tray(window: &mut Window) {
+pub(crate) fn hide_to_tray(window: &mut Window, cx: &mut App) {
+    visibility::set_visible(window, cx, false);
     platform::hide_to_tray(window);
+}
+pub(crate) fn minimize(window: &mut Window, cx: &mut App) {
+    visibility::set_visible(window, cx, false);
+    window.minimize_window();
 }
 pub(crate) fn close_window(window: &mut Window, cx: &mut App) {
     if crate::desktop::tray::should_close(window, cx) {

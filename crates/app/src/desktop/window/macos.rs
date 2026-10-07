@@ -30,6 +30,9 @@ fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
     let view = unsafe { &*handle.ns_view.as_ptr().cast::<NSView>() };
     view.window()
 }
+pub(super) fn is_visible(window: &Window) -> Option<bool> {
+    native_window(window).map(|native| native.isVisible() && !native.isMiniaturized())
+}
 pub(super) fn hide_to_tray(window: &mut Window) {
     if let Some(native) = native_window(window) {
         // Hiding the application would also hide other dashboard

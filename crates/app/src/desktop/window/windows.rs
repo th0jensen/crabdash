@@ -7,7 +7,7 @@ use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IsIconic, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, ShowWindowAsync,
+    IsIconic, IsWindowVisible, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, ShowWindowAsync,
 };
 
 pub(super) const LEADING_PADDING: f32 = 0.0;
@@ -83,7 +83,7 @@ pub(super) fn controls(window: &Window) -> Div {
             Icon::Minus,
             WindowControlArea::Min,
             "Minimize · Ctrl+M",
-            |_, window, _| window.minimize_window(),
+            |_, window, cx| super::minimize(window, cx),
         ))
         .child(control(
             "window-maximize",
@@ -155,4 +155,13 @@ pub(super) fn hide_to_tray(window: &mut Window) {
         }
     }
     window.minimize_window();
+}
+
+pub(super) fn is_visible(window: &Window) -> Option<bool> {
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+    let hwnd = handle.hwnd.get() as _;
+    Some(unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 })
 }

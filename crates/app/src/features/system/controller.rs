@@ -38,8 +38,9 @@ impl Crabdash {
         for uuid in invalid {
             self.system.remove(uuid);
         }
-        let target =
-            system_is_visible(&self.workspaces.layout().root).then(|| self.selected_machine().uuid);
+        let target = (self.dashboard_visibility.is_visible()
+            && system_is_visible(&self.workspaces.layout().root))
+        .then(|| self.selected_machine().uuid);
         if self.system.visible_machine == target {
             if interrupted && let Some(uuid) = target {
                 self.refresh_system_resources_for(uuid, cx);
@@ -55,12 +56,17 @@ impl Crabdash {
         }
     }
 
-    pub(crate) fn start_system_resource_loop(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
+    pub(crate) fn start_system_resource_loop(
+        &mut self,
+        handle: WindowHandle<Self>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |_: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             loop {
                 smol::Timer::after(std::time::Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |this, cx| {
+                if handle
+                    .update(cx, |this, window, cx| {
+                        this.observe_dashboard_visibility(window, cx);
                         // Resource sampling is live while visible, even if automatic
                         // table refresh is disabled in Preferences.
                         this.system.observe_clock(super::clock::Reading::now());
@@ -71,7 +77,10 @@ impl Crabdash {
                                 this.preferences.system_refresh_interval(),
                             )
                         });
-                        if due && system_is_visible(&this.workspaces.layout().root) {
+                        if due
+                            && this.dashboard_visibility.is_visible()
+                            && system_is_visible(&this.workspaces.layout().root)
+                        {
                             this.refresh_system_resources(cx);
                         }
                     })
@@ -93,13 +102,18 @@ impl Crabdash {
         uuid: Uuid,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_machine().uuid == uuid && system_is_visible(&self.workspaces.layout().root)
+        if self.dashboard_visibility.is_visible()
+            && self.selected_machine().uuid == uuid
+            && system_is_visible(&self.workspaces.layout().root)
         {
             self.refresh_system_resources_for(uuid, cx);
         }
     }
 
     pub(crate) fn refresh_system_resources_for(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
+        if !self.dashboard_visibility.is_visible() {
+            return;
+        }
         let Some(mut machine) = self
             .machine_store
             .machines
@@ -134,7 +148,10 @@ impl Crabdash {
             this.update(cx, |this, cx| {
                 let interrupted = this.system.observe_clock(super::clock::Reading::now());
                 if !this.system.requests.complete(&uuid, ticket) {
-                    if interrupted && system_is_visible(&this.workspaces.layout().root) {
+                    if interrupted
+                        && this.dashboard_visibility.is_visible()
+                        && system_is_visible(&this.workspaces.layout().root)
+                    {
                         this.refresh_system_resources(cx);
                         cx.notify();
                     }

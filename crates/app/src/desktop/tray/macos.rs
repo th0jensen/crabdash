@@ -130,7 +130,7 @@ pub(crate) fn should_close(window: &mut Window, cx: &mut App) -> bool {
             .try_global::<TrayState>()
             .is_some_and(|state| state.item.as_ref().is_some_and(|item| item.isVisible()))
     {
-        crate::desktop::window::hide_to_tray(window);
+        crate::desktop::window::hide_to_tray(window, cx);
         false
     } else {
         true

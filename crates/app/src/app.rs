@@ -67,6 +67,7 @@ pub struct Crabdash {
     pub(crate) services_refresh: features::refresh::Requests,
     pub(crate) machine_refresh: features::refresh::Requests,
     pub(crate) polling: features::polling::State,
+    pub(crate) dashboard_visibility: crate::desktop::window::visibility::State,
     pub(crate) machine_selection_generation: u64,
     pub(crate) docker_log_refresh: features::refresh::Requests<(Uuid, String)>,
     pub(crate) service_log_refresh: features::refresh::Requests<(Uuid, String)>,
@@ -175,6 +176,7 @@ impl Crabdash {
             services_refresh: Default::default(),
             machine_refresh: Default::default(),
             polling: Default::default(),
+            dashboard_visibility: Default::default(),
             machine_selection_generation: 0,
             docker_log_refresh: Default::default(),
             service_log_refresh: Default::default(),
@@ -229,9 +231,7 @@ impl Crabdash {
             add_machine_error: None,
             focus_handle: cx.focus_handle(),
         };
-        app.refresh_services(cx);
         app.start_update_loop(cx);
-        app.start_system_resource_loop(cx);
         cx.on_release(|app, _| {
             for terminal in app.quake_terminals.values() {
                 if let Some(controller) = &terminal.controller
@@ -393,8 +393,8 @@ impl Render for Crabdash {
             }))
             .on_action(cx.listener(Crabdash::dismiss_modal_action))
             .on_action(cx.listener(Crabdash::submit_modal_action))
-            .on_action(|_: &MinimizeWindow, window, _| {
-                window.minimize_window();
+            .on_action(|_: &MinimizeWindow, window, cx| {
+                crate::desktop::window::minimize(window, cx);
             })
             .on_action(|_: &ZoomWindow, window, _| {
                 crate::desktop::window::zoom(window);
