@@ -1,20 +1,10 @@
-use crate::{
-    remote_connection::{AuthMethod, RemoteConnection},
-    store::MachineStore,
-};
-use anyhow::{Result, anyhow, bail};
-use indoc::indoc;
+use crate::remote_connection::{AuthMethod, RemoteConnection};
+pub use crate::system_info::{LinuxDistribution, MachineKind, SystemInfo};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
-use services::{MachineServices, ServiceAction, Services, docker::Docker};
+use services::MachineServices;
 use smol::process::Command;
-use utils::{
-    args,
-    args::Args,
-    container::Container,
-    disks::{Disk, Disks},
-    output::Output,
-    service_item::ServiceItem,
-};
+use utils::{args::Args, output::Output};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,221 +99,6 @@ impl Machine {
             None => true,
         }
     }
-    /// Refreshes system information from the machine and updates internal state
-    /// if it has changed.
-    ///
-    /// If the newly retrieved info differs from the current state, the machine
-    /// kind is re-evaluated and the updated machine is persisted via
-    /// [`MachineStore::save_machine`]. Persistence failures are silently ignored.
-    ///
-    /// # Returns
-    /// * `Ok(true)`: System info has changed and state was updated
-    /// * `Ok(false)`: System info is unchanged
-    /// * `Err(anyhow::Error)`: If querying system info fails
-    pub async fn sync_system_info(&mut self) -> Result<bool> {
-        let system_info = self.get_system_info().await?;
-
-        if self.system_info == system_info {
-            return Ok(false);
-        }
-
-        self.kind = MachineKind::get_kind_from_info(&system_info);
-        self.system_info = system_info;
-
-        MachineStore::update_machine(self.clone()).await?;
-        Ok(true)
-    }
-
-    async fn get_system_info(&mut self) -> Result<SystemInfo> {
-        let cmd = "uname";
-        let (machine_name, os_version, arch) = (
-            self.run(cmd, &args!["-n"]).await?.into(),
-            self.run(cmd, &args!["-sr"]).await?.into(),
-            self.run(cmd, &args!["-m"]).await?.into(),
-        );
-        Ok(SystemInfo {
-            machine_name,
-            os_version,
-            arch,
-        })
-    }
-}
-
-impl Docker for Machine {
-    async fn find_docker(&mut self) -> String {
-        if let Some(path) = &self.docker_path {
-            return path.clone();
-        }
-
-        const CANDIDATES: &[&str] = &[
-            "/opt/homebrew/bin/docker",
-            "/usr/local/bin/docker",
-            "/usr/bin/docker",
-        ];
-
-        let path = {
-            let mut found = None;
-            for p in CANDIDATES.iter().copied() {
-                if self.run("test", &args!["-f", p]).await.is_ok() {
-                    found = Some(p.to_string());
-                    break;
-                }
-            }
-            found.unwrap_or_else(|| String::from("docker"))
-        };
-
-        self.docker_path = Some(path.clone());
-        MachineStore::update_machine(self.clone()).await.ok();
-        path
-    }
-
-    async fn list_docker(&mut self) -> Result<Vec<Container>> {
-        let args = args!["ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"];
-        let docker = self.find_docker().await;
-        Ok(self.run(&docker, &args).await?.parse_container())
-    }
-
-    async fn container_action(&mut self, id: &str, action: &str) -> Result<Output> {
-        let args = args![action, id];
-        let docker = self.find_docker().await;
-        Ok(self.run(&docker, &args).await?)
-    }
-
-    async fn run_container(&mut self, args: &Args) -> Result<Output> {
-        let docker = self.find_docker().await;
-        Ok(self.run(&docker, &args).await?)
-    }
-
-    async fn remove_container(&mut self, id: &str) -> Result<Output> {
-        let docker = self.find_docker().await;
-        Ok(self.run(&docker, &args!["rm", id]).await?)
-    }
-
-    async fn container_logs(&mut self, id: &str) -> Result<Output> {
-        let docker = self.find_docker().await;
-        Ok(self.run(&docker, &args!["logs", id]).await?)
-    }
-}
-
-impl Services for Machine {
-    async fn service_action(&mut self, service: &str, action: ServiceAction) -> Result<Output> {
-        match self.kind {
-            MachineKind::MacOS => match action {
-                ServiceAction::Start => self.run("launchctl", &args!["start", service]).await,
-                ServiceAction::Stop => self.run("launchctl", &args!["stop", service]).await,
-                ServiceAction::Restart => {
-                    self.run("launchctl", &args!["stop", service]).await?;
-                    self.run("launchctl", &args!["start", service]).await
-                }
-            },
-            MachineKind::Linux => {
-                self.run("systemctl", &args![action.command(), service])
-                    .await
-            }
-            _ => bail!("System does not yet support the services feature"),
-        }
-    }
-
-    async fn service_logs(&mut self, service: &str) -> Result<Output> {
-        let (command, args): (&str, Args) = match self.kind {
-            MachineKind::MacOS => (
-                "log",
-                args![
-                    "show",
-                    "--style",
-                    "compact",
-                    "--last",
-                    "1h",
-                    "--predicate",
-                    &format!("process == '{service}' OR subsystem == '{service}'")
-                ],
-            ),
-            MachineKind::Linux => (
-                "journalctl",
-                args![
-                    "--unit",
-                    service,
-                    "--no-pager",
-                    "--quiet",
-                    "--lines",
-                    "500",
-                    "--output",
-                    "short-iso"
-                ],
-            ),
-            _ => bail!("System does not yet support the services feature"),
-        };
-
-        self.run(command, &args).await
-    }
-
-    async fn list_services(&mut self) -> Result<Vec<ServiceItem>> {
-        match self.kind {
-            MachineKind::MacOS => Ok(self
-                .run("launchctl", &args!["list"])
-                .await?
-                .parse_launchctl_service_items()),
-            MachineKind::Linux => Ok(self
-                .run(
-                    "sh",
-                    &args![
-                        "-c",
-                        indoc! {r#"
-                            units=$(LC_ALL=C systemctl list-units --type=service --all --no-legend --no-pager --plain) || exit $?
-                            if [ -n "$units" ]; then
-                                printf '%s\n' "$units" | while read -r unit load active sub description; do
-                                    pid=$(systemctl show --property=MainPID --value "$unit") || exit $?
-                                    unit_file_state=$(systemctl show --property=UnitFileState --value "$unit") || exit $?
-                                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$load" "$active" "$sub" "$unit_file_state" "$unit" "$description"
-                                done
-                            fi
-                        "#}
-                    ],
-                )
-                .await?
-                .parse_systemd_service_items()),
-            _ => bail!("System does not yet support the services feature"),
-        }
-    }
-}
-
-impl Disks for Machine {
-    async fn list_disks(&mut self) -> Result<Vec<Disk>> {
-        match self.kind {
-            MachineKind::MacOS => {
-                let list_stdout = self.run("diskutil", &args!["list", "-plist"]).await?;
-                let apfs_stdout = self
-                    .run("diskutil", &args!["apfs", "list", "-plist"])
-                    .await
-                    .ok();
-                let mut disks = list_stdout.parse_diskutil(apfs_stdout)?;
-
-                for disk in &mut disks {
-                    let identifier = disk.id.trim_start_matches("/dev/");
-                    if let Ok(info_stdout) = self
-                        .run("diskutil", &args!["info", "-plist", identifier])
-                        .await
-                    {
-                        let _ = disk.apply_diskutil_info(&info_stdout);
-                    }
-                }
-
-                Ok(disks)
-            }
-            MachineKind::Linux => {
-                let stdout = self.run(
-                    "lsblk",
-                    &args![
-                        "-P",
-                        "-o",
-                        "NAME,PATH,SIZE,TYPE,MOUNTPOINTS,MODEL,PKNAME,FSTYPE,LABEL,RM,HOTPLUG,TRAN"
-                    ],
-                ).await?;
-                Ok(stdout.parse_lsblk())
-            }
-            MachineKind::Unknown => bail!("System does not yet support the disks feature"),
-        }
-    }
 }
 
 impl Default for Machine {
@@ -335,48 +110,12 @@ impl Default for Machine {
                 machine_name: "localhost".into(),
                 os_version: "0.1.1".into(),
                 arch: "x69_42".into(),
+                distribution: None,
             },
             kind: MachineKind::Unknown,
             remote: None,
             docker_path: None,
             services: MachineServices::default(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SystemInfo {
-    pub machine_name: String,
-    pub os_version: String,
-    pub arch: String,
-}
-
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
-pub enum MachineKind {
-    MacOS,
-    Linux,
-    #[default]
-    Unknown,
-}
-
-impl MachineKind {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::MacOS => "macOS",
-            Self::Linux => "Linux",
-            Self::Unknown => "Unknown",
-        }
-    }
-
-    pub fn get_kind(machine: &Machine) -> Self {
-        Self::get_kind_from_info(&machine.system_info)
-    }
-
-    pub fn get_kind_from_info(info: &SystemInfo) -> Self {
-        match &info.os_version {
-            s if s.contains("Darwin") => Self::MacOS,
-            s if s.contains("Linux") => Self::Linux,
-            _ => Self::default(),
         }
     }
 }

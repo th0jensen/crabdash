@@ -20,6 +20,16 @@ uuid.workspace = true
 
 capitalize = "0.3.4"
 unicode-segmentation = "1.12.0"
+serde.workspace = true
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { path = "../../vendor/ksni", default-features = false, features = ["async-io"] }
+raw-window-handle = { version = "0.6", features = ["std"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

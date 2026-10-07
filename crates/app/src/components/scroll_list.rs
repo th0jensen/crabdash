@@ -10,7 +10,10 @@ pub fn render(
     body: impl IntoElement,
     cx: &mut Context<Crabdash>,
 ) -> Div {
-    const HEADER_HEIGHT: f32 = 46.0;
+    let header_height = (crate::components::style::CONTROL
+        * crate::features::preferences::current(cx).interface_font_size
+        / 13.0)
+        + 12.0;
 
     let max_scroll = scroll_handle.max_offset().height;
     let is_scrollable = max_scroll > px(2.0);
@@ -28,7 +31,7 @@ pub fn render(
                     .top_0()
                     .left_0()
                     .right_0()
-                    .h(px(HEADER_HEIGHT))
+                    .h(px(header_height))
                     .pb(px(12.0))
                     .child(header),
             )
@@ -37,7 +40,7 @@ pub fn render(
                     .absolute()
                     .left_0()
                     .right_0()
-                    .top(px(HEADER_HEIGHT - 1.0))
+                    .top(px(header_height - 1.0))
                     .h(px(1.0))
                     .bg(if is_scrolled {
                         rgb(0x2F2F31)
@@ -54,7 +57,7 @@ pub fn render(
                 .right_0()
                 .bottom_0()
                 .top(if has_header {
-                    px(HEADER_HEIGHT)
+                    px(header_height)
                 } else {
                     px(0.0)
                 })

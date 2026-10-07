@@ -1,3 +1,4 @@
+use crate::components::style;
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
@@ -6,6 +7,44 @@ use machines::machine::MachineKind;
 pub type LucideIcon = Icon;
 
 pub const LUCIDE_FONT_FAMILY: &str = "lucide";
+
+struct ControlTooltip(SharedString);
+
+impl Render for ControlTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        tooltip_text(self.0.clone())
+    }
+}
+
+pub fn tooltip_text(label: impl Into<SharedString>) -> Div {
+    div()
+        .px(px(8.0))
+        .py(px(5.0))
+        .rounded(px(style::RADIUS))
+        .bg(rgb(0x242424))
+        .border_1()
+        .border_color(rgb(0x383838))
+        .text_size(gpui::rems(style::META / 16.0))
+        .text_color(rgb(0xD4D4D4))
+        .child(label.into())
+}
+
+pub fn control_tooltip(label: impl Into<SharedString>, cx: &mut App) -> AnyView {
+    let label = label.into();
+    cx.new(|_| ControlTooltip(label)).into()
+}
+
+pub fn clipped_text(text: impl Into<SharedString>) -> Div {
+    div()
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis()
+        // GPUI 0.2 caches nowrap text before flex widths resolve. A one-line
+        // clamp remeasures truncation against the final width.
+        .whitespace_normal()
+        .line_clamp(1)
+        .child(text.into())
+}
 
 pub fn machine_icon(kind: MachineKind) -> LucideIcon {
     match kind {
@@ -19,7 +58,7 @@ pub fn lucide_icon(icon: LucideIcon, size: f32) -> Div {
     div()
         .flex_none()
         .font_family(LUCIDE_FONT_FAMILY)
-        .text_size(px(size))
+        .text_size(gpui::rems(size / 16.0))
         .child(char::from(icon).to_string())
 }
 
@@ -55,7 +94,7 @@ where
 
     div()
         .id(id)
-        .h(px(32.0))
+        .h(gpui::rems(style::CONTROL / 16.0))
         .px(px(12.0))
         .flex()
         .items_center()
@@ -63,12 +102,14 @@ where
         .bg(bg)
         .border_1()
         .border_color(border)
-        .rounded(px(4.0))
-        .text_size(px(13.0))
+        .rounded(px(style::RADIUS))
+        .text_size(gpui::rems(style::TEXT / 16.0))
         .text_color(white())
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .when(has_label, |this| this.gap(px(6.0)))
-        .when_some(icon, |this, icon| this.child(lucide_icon(icon, 13.0)))
+        .when_some(icon, |this, icon| {
+            this.child(lucide_icon(icon, style::ICON))
+        })
         .when_some(label, |this, label| this.child(div().child(label)))
 }

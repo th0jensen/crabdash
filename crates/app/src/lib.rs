@@ -2,13 +2,13 @@ use std::borrow::Cow;
 
 use gpui::{App, actions};
 
-mod about;
 pub mod app;
 pub mod components;
 pub mod content;
-pub(crate) mod docker_run;
-pub(crate) use about::show_about_dialog;
+pub mod desktop;
+pub mod features;
 pub use app::Crabdash;
+pub(crate) use desktop::about::show_about_dialog;
 
 pub const APP_NAME: &str = "Crabdash";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -39,12 +39,17 @@ actions!(
         HideOthers,
         MinimizeWindow,
         OpenAddMachine,
+        OpenPreferences,
+        ToggleAppMenu,
         NewWindow,
         OpenRepository,
         ReportIssue,
         Quit,
         RefreshServices,
         ShowAll,
+        ShowDocker,
+        ShowDisks,
+        ShowServices,
         SubmitAddMachineModal,
         ToggleFullScreen,
         ToggleSidebar,

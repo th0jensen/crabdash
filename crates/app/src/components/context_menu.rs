@@ -85,7 +85,7 @@ impl Render for ContextMenu {
             .on_mouse_down_out(cx.listener(|_, _: &MouseDownEvent, _, cx| {
                 cx.emit(DismissEvent);
             }))
-            .w(px(180.0))
+            .w(gpui::rems(180.0 / 16.0))
             .p(px(6.0))
             .bg(rgb(0x1C1C1E))
             .border_1()
@@ -103,7 +103,7 @@ impl Render for ContextMenu {
                 });
                 div()
                     .id(SharedString::from(format!("context-menu-item-{index}")))
-                    .h(px(30.0))
+                    .h(gpui::rems(30.0 / 16.0))
                     .px(px(10.0))
                     .rounded(px(6.0))
                     .flex()
@@ -111,7 +111,7 @@ impl Render for ContextMenu {
                     .gap(px(8.0))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(0x2A2A2C)))
-                    .text_sm()
+                    .text_size(gpui::rems(crate::components::style::TEXT / 16.0))
                     .text_color(color)
                     .child(lucide_icon(entry.icon, 12.0))
                     .child(entry.label)

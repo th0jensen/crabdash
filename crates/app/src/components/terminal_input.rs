@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent, Pixels, Point,
-    Style, UTF16Selection, Window, actions, div, prelude::*, relative,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent,
+    Pixels, Point, Style, UTF16Selection, Window, actions, div, prelude::*, relative,
 };
 use machines::terminal::TerminalController;
 
@@ -30,8 +30,27 @@ actions!(
         TerminalEof,
         TerminalSuspend,
         TerminalClear,
+        TerminalHistoryUp,
+        TerminalHistoryDown,
+        TerminalHistoryTop,
+        TerminalHistoryBottom,
     ]
 );
+
+#[derive(Clone, Debug, PartialEq, gpui::Action, serde::Deserialize)]
+#[action(namespace = crabdash_terminal_input, no_json)]
+pub struct TerminalBytes {
+    pub bytes: String,
+}
+
+pub enum TerminalInputEvent {
+    Input(Vec<u8>),
+    Paste(String),
+    Scroll(libghostty_vt::terminal::ScrollViewport),
+    Page(isize),
+}
+
+impl EventEmitter<TerminalInputEvent> for TerminalInput {}
 
 pub struct TerminalInput {
     focus_handle: FocusHandle,
@@ -57,90 +76,116 @@ impl TerminalInput {
         cx.notify();
     }
 
-    fn write(&self, bytes: impl Into<Vec<u8>>) {
-        let Some(controller) = self.controller.as_ref() else {
-            return;
-        };
-        if let Err(error) = controller.write(bytes) {
-            tracing::warn!(%error, "Failed to write terminal input");
+    fn write(&self, bytes: impl Into<Vec<u8>>, cx: &mut Context<Self>) {
+        if self.controller.is_some() {
+            cx.emit(TerminalInputEvent::Input(bytes.into()));
         }
     }
 
-    fn backspace(&mut self, _: &TerminalBackspace, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x7f".to_vec());
+    fn bytes(&mut self, action: &TerminalBytes, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(action.bytes.as_bytes().to_vec(), cx);
     }
 
-    fn delete(&mut self, _: &TerminalDelete, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[3~".to_vec());
+    fn history_up(&mut self, _: &TerminalHistoryUp, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TerminalInputEvent::Page(-1));
+    }
+    fn history_down(&mut self, _: &TerminalHistoryDown, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TerminalInputEvent::Page(1));
+    }
+    fn history_top(&mut self, _: &TerminalHistoryTop, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TerminalInputEvent::Scroll(
+            libghostty_vt::terminal::ScrollViewport::Top,
+        ));
+    }
+    fn history_bottom(
+        &mut self,
+        _: &TerminalHistoryBottom,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(TerminalInputEvent::Scroll(
+            libghostty_vt::terminal::ScrollViewport::Bottom,
+        ));
     }
 
-    fn enter(&mut self, _: &TerminalEnter, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\r".to_vec());
+    fn backspace(&mut self, _: &TerminalBackspace, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x7f".to_vec(), cx);
     }
 
-    fn escape(&mut self, _: &TerminalEscape, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b".to_vec());
+    fn delete(&mut self, _: &TerminalDelete, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[3~".to_vec(), cx);
     }
 
-    fn tab(&mut self, _: &TerminalTab, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\t".to_vec());
+    fn enter(&mut self, _: &TerminalEnter, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\r".to_vec(), cx);
     }
 
-    fn shift_tab(&mut self, _: &TerminalShiftTab, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[Z".to_vec());
+    fn escape(&mut self, _: &TerminalEscape, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b".to_vec(), cx);
     }
 
-    fn up(&mut self, _: &TerminalUp, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[A".to_vec());
+    fn tab(&mut self, _: &TerminalTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\t".to_vec(), cx);
     }
 
-    fn down(&mut self, _: &TerminalDown, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[B".to_vec());
+    fn shift_tab(&mut self, _: &TerminalShiftTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[Z".to_vec(), cx);
     }
 
-    fn left(&mut self, _: &TerminalLeft, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[D".to_vec());
+    fn up(&mut self, _: &TerminalUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[A".to_vec(), cx);
     }
 
-    fn right(&mut self, _: &TerminalRight, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[C".to_vec());
+    fn down(&mut self, _: &TerminalDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[B".to_vec(), cx);
     }
 
-    fn home(&mut self, _: &TerminalHome, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[H".to_vec());
+    fn left(&mut self, _: &TerminalLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[D".to_vec(), cx);
     }
 
-    fn end(&mut self, _: &TerminalEnd, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[F".to_vec());
+    fn right(&mut self, _: &TerminalRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[C".to_vec(), cx);
     }
 
-    fn page_up(&mut self, _: &TerminalPageUp, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[5~".to_vec());
+    fn home(&mut self, _: &TerminalHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[H".to_vec(), cx);
     }
 
-    fn page_down(&mut self, _: &TerminalPageDown, _: &mut Window, _: &mut Context<Self>) {
-        self.write(b"\x1b[6~".to_vec());
+    fn end(&mut self, _: &TerminalEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[F".to_vec(), cx);
     }
 
-    fn interrupt(&mut self, _: &TerminalInterrupt, _: &mut Window, _: &mut Context<Self>) {
-        self.write(vec![0x03]);
+    fn page_up(&mut self, _: &TerminalPageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[5~".to_vec(), cx);
     }
 
-    fn eof(&mut self, _: &TerminalEof, _: &mut Window, _: &mut Context<Self>) {
-        self.write(vec![0x04]);
+    fn page_down(&mut self, _: &TerminalPageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(b"\x1b[6~".to_vec(), cx);
     }
 
-    fn suspend(&mut self, _: &TerminalSuspend, _: &mut Window, _: &mut Context<Self>) {
-        self.write(vec![0x1a]);
+    fn interrupt(&mut self, _: &TerminalInterrupt, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(vec![0x03], cx);
     }
 
-    fn clear(&mut self, _: &TerminalClear, _: &mut Window, _: &mut Context<Self>) {
-        self.write(vec![0x0c]);
+    fn eof(&mut self, _: &TerminalEof, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(vec![0x04], cx);
+    }
+
+    fn suspend(&mut self, _: &TerminalSuspend, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(vec![0x1a], cx);
+    }
+
+    fn clear(&mut self, _: &TerminalClear, _: &mut Window, cx: &mut Context<Self>) {
+        self.write(vec![0x0c], cx);
     }
 
     fn paste(&mut self, _: &FieldPaste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.controller.is_none() {
+            return;
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.write(text.into_bytes());
+            cx.emit(TerminalInputEvent::Paste(text));
         }
     }
 
@@ -184,9 +229,9 @@ impl EntityInputHandler for TerminalInput {
             .map(|text| 0..text.encode_utf16().count())
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.marked_text.take() {
-            self.write(text.into_bytes());
+            self.write(text.into_bytes(), cx);
         }
     }
 
@@ -195,13 +240,13 @@ impl EntityInputHandler for TerminalInput {
         _range_utf16: Option<Range<usize>>,
         new_text: &str,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         self.marked_text = None;
         if new_text == "\n" {
-            self.write(b"\r".to_vec());
+            self.write(b"\r".to_vec(), cx);
         } else {
-            self.write(new_text.as_bytes().to_vec());
+            self.write(new_text.as_bytes().to_vec(), cx);
         }
     }
 
@@ -311,6 +356,11 @@ impl Render for TerminalInput {
             .absolute()
             .inset_0()
             .track_focus(&self.focus_handle(cx))
+            .on_action(cx.listener(Self::bytes))
+            .on_action(cx.listener(Self::history_up))
+            .on_action(cx.listener(Self::history_down))
+            .on_action(cx.listener(Self::history_top))
+            .on_action(cx.listener(Self::history_bottom))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::enter))

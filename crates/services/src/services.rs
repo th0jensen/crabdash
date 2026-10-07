@@ -1,17 +1,6 @@
 use anyhow::Result;
 use lucide_icons::Icon;
-use serde::Serialize;
-use utils::{container::Container, disks::Disk, output::Output, service_item::ServiceItem};
-
-#[derive(Clone, Debug, Default)]
-pub struct MachineServices {
-    pub docker: Vec<Container>,
-    pub disks: Vec<Disk>,
-    pub systemd: Vec<ServiceItem>,
-    pub docker_error: Option<String>,
-    pub disks_error: Option<String>,
-    pub systemd_error: Option<String>,
-}
+use utils::{output::Output, services::ServiceItem};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ServiceFilter {
@@ -29,7 +18,7 @@ pub trait Services {
     fn list_services(&mut self) -> impl Future<Output = Result<Vec<ServiceItem>>>;
 
     /// Returns recent logs for a system service.
-    fn service_logs(&mut self, service: &str) -> impl Future<Output = Result<Output>>;
+    fn service_logs(&mut self, service: &str, lines: u32) -> impl Future<Output = Result<Output>>;
 
     /// Performs an action on a system service.
     fn service_action(
@@ -70,11 +59,4 @@ impl ServiceAction {
             Self::Restart => "Restarting",
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ActionResult {
-    pub ok: bool,
-    pub message: String,
-    pub output: Option<String>,
 }

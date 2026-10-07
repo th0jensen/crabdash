@@ -1,3 +1,4 @@
+use crate::components::style;
 use std::ops::Range;
 
 use gpui::{
@@ -40,6 +41,7 @@ pub struct TextField {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    compact: bool,
 }
 
 impl TextField {
@@ -60,7 +62,13 @@ impl TextField {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            compact: false,
         }
+    }
+
+    pub(crate) fn compact(mut self) -> Self {
+        self.compact = true;
+        self
     }
 
     pub fn text(&self) -> String {
@@ -442,7 +450,7 @@ impl Element for TextFieldElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = px(18.0).into();
+        style.size.height = gpui::rems(18.0 / 16.0).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -598,7 +606,7 @@ impl Render for TextField {
             .when(!self.label.is_empty(), |this| {
                 this.child(
                     div()
-                        .text_xs()
+                        .text_size(gpui::rems(style::META / 16.0))
                         .text_color(rgb(0xAEAEB2))
                         .child(self.label.clone()),
                 )
@@ -624,20 +632,26 @@ impl Render for TextField {
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
                     .on_mouse_move(cx.listener(Self::on_mouse_move))
-                    .h(px(36.0))
+                    .h(gpui::rems(
+                        if self.compact { style::CONTROL } else { 36.0 } / 16.0,
+                    ))
                     .px(px(10.0))
                     .flex()
                     .items_center()
-                    .bg(rgb(0x1E1E1E))
+                    .bg(rgb(style::SURFACE))
                     .border_1()
                     .border_color(if focused {
-                        rgb(0x565656)
+                        rgb(style::FOCUS_BORDER)
                     } else {
-                        rgb(0x303030)
+                        rgb(style::BORDER)
                     })
-                    .rounded(px(4.0))
-                    .line_height(px(18.0))
-                    .text_size(px(14.0))
+                    .rounded(px(if self.compact {
+                        style::CARD_RADIUS
+                    } else {
+                        style::RADIUS
+                    }))
+                    .line_height(gpui::rems(18.0 / 16.0))
+                    .text_size(gpui::rems(style::TEXT / 16.0))
                     .child(TextFieldElement { input: cx.entity() }),
             )
     }

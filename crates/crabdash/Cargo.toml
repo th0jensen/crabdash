@@ -9,6 +9,7 @@ authors.workspace = true
 app.workspace = true
 gpui.workspace = true
 tracing-subscriber.workspace = true
+smol.workspace = true
 
 [package.metadata.bundle]
 name = "Crabdash"

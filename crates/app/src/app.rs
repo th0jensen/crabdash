@@ -1,42 +1,21 @@
+use crate::features::machines::AddMachineAuthMode;
 use std::collections::{HashMap, HashSet};
 
-use anyhow::anyhow;
-use gpui::prelude::*;
-use gpui::*;
-use lucide_icons::Icon;
-use machines::store::load_store;
-use services::docker::{DockerAction, DockerFilter};
-use services::{ServiceAction, ServiceFilter, Services};
-
-use crate::components::common::LucideIcon;
-use crate::components::terminal_input::{
-    TerminalBackspace, TerminalClear, TerminalDelete, TerminalDown, TerminalEnd, TerminalEnter,
-    TerminalEof, TerminalEscape, TerminalHome, TerminalInput, TerminalInterrupt, TerminalLeft,
-    TerminalPageDown, TerminalPageUp, TerminalRight, TerminalShiftTab, TerminalSuspend,
-    TerminalTab, TerminalUp,
+use crate::components::{common::LucideIcon, text_field::TextField};
+use crate::features::{
+    docker::DockerRunConfig,
+    machines::{add_modal as modal, sidebar},
+    notifications as toast, preferences,
 };
-use crate::components::text_field::{
-    FieldBackspace, FieldCopy, FieldCut, FieldDelete, FieldEnd, FieldHome, FieldLeft, FieldPaste,
-    FieldRight, FieldSelectAll, FieldSelectLeft, FieldSelectRight, FieldTab, FieldTabPrev,
-    TextField,
-};
-use crate::components::{modal, sidebar, toast};
-use crate::content;
-use crate::docker_run::DockerRunConfig;
 use crate::{
     AboutCrabdash, CloseWindow, DismissAddMachineModal, MinimizeWindow, OpenAddMachine,
-    RefreshServices, SubmitAddMachineModal, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
-    ZoomWindow, show_about_dialog,
+    OpenPreferences, RefreshServices, ToggleAppMenu, ToggleFullScreen, ToggleSidebar,
+    ToggleTerminal, ZoomWindow, content, features, show_about_dialog,
 };
-use machines::{
-    machine::Machine,
-    remote_connection::AuthMethod,
-    store::MachineStore,
-    terminal::{TerminalEvent, TerminalSize},
-};
-use services::docker::Docker;
-use std::path::PathBuf;
-use utils::disks::Disks;
+use gpui::{prelude::*, *};
+use lucide_icons::Icon;
+use machines::store::{MachineStore, load_store};
+use services::{ServiceAction, docker::DockerAction};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -48,6 +27,13 @@ pub(crate) enum MainTab {
 }
 
 impl MainTab {
+    pub(crate) fn shortcut(self) -> &'static str {
+        match self {
+            Self::Docker => crate::desktop::menus::shortcut("⌘1", "Ctrl+1"),
+            Self::Disks => crate::desktop::menus::shortcut("⌘2", "Ctrl+2"),
+            Self::Services => crate::desktop::menus::shortcut("⌘3", "Ctrl+3"),
+        }
+    }
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Docker => "Docker",
@@ -69,27 +55,38 @@ pub struct Crabdash {
     pub(crate) machine_store: MachineStore,
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
-    pub(crate) docker_filter: DockerFilter,
-    pub(crate) service_filter: ServiceFilter,
-    pub(crate) pending_docker_actions: HashMap<String, DockerAction>,
+    pub(crate) docker_table: features::docker::table::State,
+    pub(crate) disks_table: features::disks::table::State,
+    pub(crate) services_table: features::services::table::State,
+    pub(crate) pending_docker_actions: HashMap<(Uuid, String), DockerAction>,
     pub(crate) pending_service_actions: HashMap<String, ServiceAction>,
     pub(crate) expanded_disk_rows: HashSet<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
-    pub(crate) expanded_docker_logs: HashMap<(Uuid, String), content::terminal::TerminalState>,
+    pub(crate) preferences_open: bool,
+    pub(crate) preferences: crate::features::preferences::Preferences,
+    pub(crate) preference_editor: preferences::Editor,
+    _preference_changes: Subscription,
+    pub(crate) login_startup: crate::desktop::startup::LoginStartup,
+    pub(crate) startup_busy: bool,
+    pub(crate) open_menu: Option<usize>,
+    pub(crate) menu_item: usize,
+    _menu_keystrokes: Option<Subscription>,
+    pub(crate) expanded_docker_logs: HashMap<(Uuid, String), features::terminal::TerminalState>,
     pub(crate) logs_open_containers: HashSet<(Uuid, String)>,
-    pub(crate) expanded_service_logs: HashMap<(Uuid, String), content::terminal::TerminalState>,
+    pub(crate) expanded_service_logs: HashMap<(Uuid, String), features::terminal::TerminalState>,
     pub(crate) logs_open_services: HashSet<(Uuid, String)>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
     pub(crate) services_scroll_handle: ScrollHandle,
-    pub(crate) quake_terminals: HashMap<Uuid, content::terminal::QuakeTerminal>,
+    pub(crate) quake_terminals: HashMap<Uuid, features::terminal::QuakeTerminal>,
     pub(crate) quake_terminal_open: bool,
     pub(crate) quake_height: Pixels,
     pub(crate) docker_run_config: DockerRunConfig,
     pub(crate) docker_run_modal_open: bool,
+    pub(crate) docker_removal: Option<features::docker::DockerRemoval>,
     pub(crate) remote_host_field: Entity<TextField>,
     pub(crate) remote_user_field: Entity<TextField>,
     pub(crate) add_machine_auth_mode: AddMachineAuthMode,
@@ -101,25 +98,14 @@ pub struct Crabdash {
     pub focus_handle: FocusHandle,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum AddMachineAuthMode {
-    #[default]
-    None,
-    Password,
-    AuthKey,
-}
-
-impl AddMachineAuthMode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::None => "None",
-            Self::Password => "Password",
-            Self::AuthKey => "Auth Key",
-        }
-    }
-}
-
 impl Crabdash {
+    pub(crate) fn refresh_services(&mut self, cx: &mut Context<Self>) {
+        self.sync_state(cx);
+        self.refresh_docker(cx);
+        self.refresh_disks(cx);
+        self.refresh_system_services(cx);
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         let (machine_store, status_message) = smol::block_on(async {
             match load_store().await {
@@ -134,19 +120,46 @@ impl Crabdash {
             }
         });
 
+        let menu_keystrokes = crate::desktop::menus::intercept(cx);
+
+        let (settings, settings_error) = match crate::features::preferences::Preferences::load() {
+            Ok(settings) => (settings, None),
+            Err(error) => (
+                crate::features::preferences::Preferences::default(),
+                Some(error.to_string()),
+            ),
+        };
+        cx.set_global(settings.clone());
+        let preference_changes =
+            cx.observe_global::<crate::features::preferences::Preferences>(|this, cx| {
+                this.update_saved_preferences(crate::features::preferences::current(cx));
+                cx.notify();
+            });
+        let mut preference_editor = preferences::Editor::new(&settings, cx);
+        preference_editor.error = settings_error;
         let mut app = Self {
             machine_store,
             selected_machine: 0,
             active_tab: MainTab::default(),
-            docker_filter: DockerFilter::default(),
-            service_filter: ServiceFilter::default(),
+            docker_table: features::docker::table::State::new(cx),
+            disks_table: features::disks::table::State::new(cx),
+            services_table: features::services::table::State::new(cx),
             pending_docker_actions: HashMap::default(),
             pending_service_actions: HashMap::default(),
             expanded_disk_rows: HashSet::default(),
             sidebar_collapsed: false,
-            sidebar_width: px(sidebar::DEFAULT_SIDEBAR_WIDTH),
+            sidebar_width: px(settings.sidebar_width),
             status_message,
             add_machine_modal_open: false,
+            preferences_open: false,
+            preferences: settings.clone(),
+            preference_editor,
+            _preference_changes: preference_changes,
+            login_startup: crate::desktop::startup::LoginStartup::load(),
+            startup_busy: false,
+            open_menu: None,
+            menu_item: 0,
+            _menu_keystrokes: menu_keystrokes,
             expanded_docker_logs: HashMap::default(),
             logs_open_containers: HashSet::default(),
             expanded_service_logs: HashMap::default(),
@@ -156,9 +169,13 @@ impl Crabdash {
             services_scroll_handle: ScrollHandle::new(),
             quake_terminals: HashMap::default(),
             quake_terminal_open: false,
-            quake_height: px(content::terminal::QUAKE_DEFAULT_HEIGHT_PX),
+            quake_height: px(36.0
+                + 26.0
+                + f32::from(settings.terminal_rows)
+                    * (settings.terminal_font_size * settings.terminal_line_height).ceil()),
             docker_run_config: DockerRunConfig::new(cx),
             docker_run_modal_open: false,
+            docker_removal: None,
             remote_host_field: cx.new(|cx| TextField::new("Host", "server.example.com", 1, cx)),
             remote_user_field: cx.new(|cx| TextField::new("User", "user", 2, cx)),
             add_machine_auth_mode: AddMachineAuthMode::default(),
@@ -177,820 +194,17 @@ impl Crabdash {
         app
     }
 
-    pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys([
-            KeyBinding::new("cmd-s", ToggleSidebar, None),
-            KeyBinding::new("cmd-n", OpenAddMachine, None),
-            KeyBinding::new("cmd-r", RefreshServices, None),
-            KeyBinding::new("cmd-j", ToggleTerminal, None),
-            KeyBinding::new("cmd-w", CloseWindow, None),
-            KeyBinding::new("cmd-m", MinimizeWindow, None),
-            KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
-            KeyBinding::new("escape", DismissAddMachineModal, None),
-            KeyBinding::new("escape", DismissAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("enter", SubmitAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("return", SubmitAddMachineModal, Some("CrabdashTextField")),
-            KeyBinding::new("backspace", FieldBackspace, Some("CrabdashTextField")),
-            KeyBinding::new("delete", FieldDelete, Some("CrabdashTextField")),
-            KeyBinding::new("left", FieldLeft, Some("CrabdashTextField")),
-            KeyBinding::new("right", FieldRight, Some("CrabdashTextField")),
-            KeyBinding::new("shift-left", FieldSelectLeft, Some("CrabdashTextField")),
-            KeyBinding::new("shift-right", FieldSelectRight, Some("CrabdashTextField")),
-            KeyBinding::new("cmd-a", FieldSelectAll, Some("CrabdashTextField")),
-            KeyBinding::new("cmd-v", FieldPaste, Some("CrabdashTextField")),
-            KeyBinding::new("cmd-c", FieldCopy, Some("CrabdashTextField")),
-            KeyBinding::new("cmd-x", FieldCut, Some("CrabdashTextField")),
-            KeyBinding::new("home", FieldHome, Some("CrabdashTextField")),
-            KeyBinding::new("end", FieldEnd, Some("CrabdashTextField")),
-            KeyBinding::new("tab", FieldTab, Some("CrabdashTextField")),
-            KeyBinding::new("shift-tab", FieldTabPrev, Some("CrabdashTextField")),
-            KeyBinding::new(
-                "backspace",
-                TerminalBackspace,
-                Some("CrabdashTerminalInput"),
-            ),
-            KeyBinding::new("delete", TerminalDelete, Some("CrabdashTerminalInput")),
-            KeyBinding::new("enter", TerminalEnter, Some("CrabdashTerminalInput")),
-            KeyBinding::new("return", TerminalEnter, Some("CrabdashTerminalInput")),
-            KeyBinding::new("escape", TerminalEscape, Some("CrabdashTerminalInput")),
-            KeyBinding::new("tab", TerminalTab, Some("CrabdashTerminalInput")),
-            KeyBinding::new("shift-tab", TerminalShiftTab, Some("CrabdashTerminalInput")),
-            KeyBinding::new("up", TerminalUp, Some("CrabdashTerminalInput")),
-            KeyBinding::new("down", TerminalDown, Some("CrabdashTerminalInput")),
-            KeyBinding::new("left", TerminalLeft, Some("CrabdashTerminalInput")),
-            KeyBinding::new("right", TerminalRight, Some("CrabdashTerminalInput")),
-            KeyBinding::new("home", TerminalHome, Some("CrabdashTerminalInput")),
-            KeyBinding::new("end", TerminalEnd, Some("CrabdashTerminalInput")),
-            KeyBinding::new("pageup", TerminalPageUp, Some("CrabdashTerminalInput")),
-            KeyBinding::new("pagedown", TerminalPageDown, Some("CrabdashTerminalInput")),
-            KeyBinding::new("ctrl-c", TerminalInterrupt, Some("CrabdashTerminalInput")),
-            KeyBinding::new("ctrl-d", TerminalEof, Some("CrabdashTerminalInput")),
-            KeyBinding::new("ctrl-z", TerminalSuspend, Some("CrabdashTerminalInput")),
-            KeyBinding::new("ctrl-l", TerminalClear, Some("CrabdashTerminalInput")),
-            KeyBinding::new("cmd-v", FieldPaste, Some("CrabdashTerminalInput")),
-        ]);
-    }
-
-    pub(crate) fn selected_machine(&self) -> &Machine {
-        &self.machine_store.machines[self.selected_machine]
-    }
-
-    pub(crate) fn selected_machine_mut(&mut self) -> &mut Machine {
-        &mut self.machine_store.machines[self.selected_machine]
-    }
-
-    pub(crate) fn sync_state(&mut self, cx: &mut Context<Self>) {
-        let mut mc = self.selected_machine_mut().clone();
-
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            if let Err(e) = mc.sync_system_info().await {
-                tracing::warn!(error = %e, "sync_system_info failed");
-            }
-
-            let store = load_store().await;
-            this.update(cx, |this, _cx| match store {
-                Ok(store) => {
-                    let saved: HashMap<Uuid, _> = this
-                        .machine_store
-                        .machines
-                        .iter()
-                        .map(|m| (m.uuid, (m.services.clone(), m.remote.clone())))
-                        .collect();
-                    this.machine_store.machines = store.machines;
-                    for m in &mut this.machine_store.machines {
-                        if let Some((services, old_remote)) = saved.get(&m.uuid) {
-                            m.services = services.clone();
-                            if let (Some(new_rc), Some(old_rc)) =
-                                (m.remote.as_mut(), old_remote.as_ref())
-                            {
-                                new_rc.restore_session_from(old_rc);
-                            }
-                        }
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "load_store failed"),
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    pub(crate) fn start_update_loop(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            loop {
-                smol::Timer::after(std::time::Duration::from_secs(5)).await;
-
-                // Clone machines to check connection state outside the entity lock
-                let machines =
-                    match this.update(cx, |this, _cx| this.machine_store.machines.clone()) {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    };
-
-                // Check connected state for each remote machine asynchronously
-                let mut connected_states = Vec::with_capacity(machines.len());
-                for machine in &machines {
-                    let state = match machine.remote.as_ref() {
-                        Some(rc) => rc.has_active_session().await,
-                        None => true,
-                    };
-                    connected_states.push(state);
-                }
-
-                // Apply connected states (shared Arc, so clones see this too) and refresh
-                this.update(cx, |this, cx| {
-                    for (i, connected) in connected_states.into_iter().enumerate() {
-                        if let Some(m) = this.machine_store.machines.get_mut(i) {
-                            if let Some(rc) = m.remote.as_ref() {
-                                rc.set_connected(connected);
-                            }
-                        }
-                    }
-                    this.refresh_services(cx);
-                    cx.notify();
-                })
-                .ok();
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn refresh_services(&mut self, cx: &mut Context<Self>) {
-        let machine = self.selected_machine_mut().clone();
-        let machine_index = self.selected_machine;
-
-        self.clear_status_message();
-        self.sync_state(cx);
-
-        cx.spawn({
-            let mut machine = machine.clone();
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-                let result = cx
-                    .background_spawn(async move { machine.list_docker().await })
-                    .await;
-                this.update(cx, move |this, cx| {
-                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
-                        match result {
-                            Ok(containers) => {
-                                machine.services.docker = containers;
-                                machine.services.docker_error = None;
-                            }
-                            Err(error) => {
-                                let message = format!("Unable to load Docker: {error}");
-                                machine.services.docker_error = Some(message.clone());
-                                this.set_status_error(message);
-                            }
-                        }
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }
-        })
-        .detach();
-
-        cx.spawn({
-            let mut machine = machine.clone();
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-                let result = cx
-                    .background_spawn(async move { machine.list_disks().await })
-                    .await;
-                this.update(cx, move |this, cx| {
-                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
-                        match result {
-                            Ok(disks) => {
-                                machine.services.disks = disks;
-                                machine.services.disks_error = None;
-                            }
-                            Err(error) => {
-                                let message = format!("Unable to load Disks: {error}");
-                                machine.services.disks_error = Some(message.clone());
-                                this.set_status_error(message);
-                            }
-                        }
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }
-        })
-        .detach();
-
-        cx.spawn({
-            let mut machine = machine.clone();
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-                let result = cx
-                    .background_spawn(async move { machine.list_services().await })
-                    .await;
-                this.update(cx, move |this, cx| {
-                    if let Some(machine) = this.machine_store.machines.get_mut(machine_index) {
-                        match result {
-                            Ok(services) => {
-                                machine.services.systemd = services;
-                                machine.services.systemd_error = None;
-                            }
-                            Err(error) => {
-                                let message = format!("Unable to load Services: {error}");
-                                machine.services.systemd_error = Some(message.clone());
-                                this.set_status_error(message);
-                            }
-                        }
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn open_docker_run_modal(&mut self, cx: &mut Context<Self>) {
-        self.docker_run_modal_open = true;
-        cx.notify();
-    }
-
-    pub(crate) fn close_docker_run_modal(&mut self, cx: &mut Context<Self>) {
-        self.docker_run_modal_open = false;
-        cx.notify();
-    }
-
-    pub(crate) fn submit_docker_run(&mut self, cx: &mut Context<Self>) {
-        let image = self.docker_run_config.image.read(cx).text();
-        if image.trim().is_empty() {
-            self.set_status_error("Image name is required.");
-            cx.notify();
-            return;
-        }
-
-        let mut machine = self.selected_machine().clone();
-        let machine_index = self.selected_machine;
-
-        let args = self.docker_run_config.build_args(cx);
-
-        self.docker_run_modal_open = false;
-        self.docker_run_config.reset(cx);
-        cx.notify();
-
-        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                let result = machine.run_container(&args).await;
-
-                match result {
-                    Ok(_) => {
-                        let containers = machine.list_docker().await;
-                        this.update(&mut cx, move |this, cx| {
-                            match containers {
-                                Ok(containers) => {
-                                    if let Some(m) =
-                                        this.machine_store.machines.get_mut(machine_index)
-                                    {
-                                        m.services.docker = containers;
-                                        m.services.docker_error = None;
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "Failed to refresh docker after run");
-                                }
-                            }
-                            this.clear_status_message();
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                    Err(err) => {
-                        this.update(&mut cx, move |this, cx| {
-                            this.set_status_error(format!("docker run failed: {err}"));
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                }
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
-        tracing::debug!(%uuid, "delete_machine called");
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
-            if let Err(error) = MachineStore::remove_machine(uuid).await {
-                this.update(&mut cx, |this, cx| {
-                    this.set_status_error(format!("Unable to delete machine: {error}"));
-                    cx.notify();
-                })
-                .ok();
-                return;
-            }
-            match load_store().await {
-                Ok(store) => {
-                    this.update(&mut cx, |this, cx| {
-                        if let Some(quake) = this.quake_terminals.remove(&uuid)
-                            && let Some(controller) = quake.controller
-                            && let Err(error) = controller.shutdown()
-                        {
-                            tracing::debug!(%error, "Failed to shut down deleted machine terminal");
-                        }
-                        this.machine_store = store;
-                        this.selected_machine = this
-                            .selected_machine
-                            .min(this.machine_store.machines.len().saturating_sub(1));
-                        this.clear_status_message();
-                        this.refresh_services(cx);
-                        cx.notify();
-                    })
-                    .ok();
-                }
-                Err(error) => {
-                    this.update(&mut cx, |this, cx| {
-                        this.set_status_error(format!(
-                            "Unable to reload machines after delete: {error}"
-                        ));
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn open_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.add_machine_modal_open = true;
-        self.add_machine_error = None;
-        window.focus(&self.remote_host_field.focus_handle(cx));
-        cx.notify();
-    }
-
-    pub(crate) fn close_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.add_machine_modal_open = false;
-        self.add_machine_error = None;
-        window.focus(&self.focus_handle);
-        cx.notify();
-    }
-
     pub(crate) fn dismiss_add_machine_modal_action(
         &mut self,
         _: &DismissAddMachineModal,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.add_machine_modal_open {
+        if self.docker_removal.take().is_some() {
+            self.focus_handle.focus(window);
+            cx.notify();
+        } else if self.add_machine_modal_open {
             self.close_add_machine_modal(window, cx);
-        }
-    }
-
-    pub(crate) fn set_add_machine_auth_mode(
-        &mut self,
-        mode: AddMachineAuthMode,
-        cx: &mut Context<Self>,
-    ) {
-        self.add_machine_auth_mode = mode;
-        self.add_machine_error = None;
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
-        cx.notify();
-    }
-
-    pub(crate) fn active_quake_terminal(&self) -> Option<&content::terminal::QuakeTerminal> {
-        self.quake_terminals.get(&self.selected_machine().uuid)
-    }
-
-    fn active_quake_terminal_mut(&mut self) -> Option<&mut content::terminal::QuakeTerminal> {
-        let machine_uuid = self.selected_machine().uuid;
-        self.quake_terminals.get_mut(&machine_uuid)
-    }
-
-    pub(crate) fn toggle_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.quake_terminal_open {
-            self.close_quake_terminal(window, cx);
-        } else {
-            self.open_quake_terminal(window, cx);
-        }
-    }
-
-    fn quake_terminal_size(&self, window: &Window) -> TerminalSize {
-        let available_width = (window.viewport_size().width - px(20.0)).max(px(80.0));
-        let columns = (available_width / px(content::terminal::INTERACTIVE_CELL_WIDTH_PX))
-            .floor()
-            .clamp(20.0, u16::MAX as f32) as u16;
-        let rows = content::terminal::quake_rows_for_height(self.quake_height);
-        TerminalSize {
-            columns,
-            rows,
-            pixel_width: columns
-                .saturating_mul(content::terminal::INTERACTIVE_CELL_WIDTH_PX as u16),
-            pixel_height: rows.saturating_mul(content::terminal::INTERACTIVE_CELL_HEIGHT_PX as u16),
-        }
-    }
-
-    /// Snap the quake panel height to whole terminal rows and apply it,
-    /// resizing the Ghostty terminal and PTY when the row count changed.
-    pub(crate) fn set_quake_height(
-        &mut self,
-        height: Pixels,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let snapped = content::terminal::quake_height_for_rows(
-            content::terminal::quake_rows_for_height(height),
-        );
-        if self.quake_height == snapped {
-            return;
-        }
-        self.quake_height = snapped;
-        self.resize_quake_terminal(window);
-        cx.notify();
-    }
-
-    fn resize_quake_terminal(&mut self, window: &Window) {
-        if !self.quake_terminal_open {
-            return;
-        }
-
-        let size = self.quake_terminal_size(window);
-        let Some(quake) = self
-            .active_quake_terminal_mut()
-            .filter(|quake| quake.size != size)
-        else {
-            return;
-        };
-
-        if let Err(error) = quake.terminal.resize(
-            size.columns,
-            size.rows,
-            content::terminal::INTERACTIVE_CELL_WIDTH_PX as u32,
-            content::terminal::INTERACTIVE_CELL_HEIGHT_PX as u32,
-        ) {
-            quake.status = content::terminal::QuakeTerminalStatus::Failed;
-            tracing::warn!(%error, "Failed to resize Ghostty terminal");
-            return;
-        }
-        if let Some(controller) = quake.controller.as_ref()
-            && let Err(error) = controller.resize(size)
-        {
-            quake.status = content::terminal::QuakeTerminalStatus::Failed;
-            tracing::warn!(%error, "Failed to resize terminal PTY");
-            return;
-        }
-        quake.size = size;
-    }
-
-    pub(crate) fn open_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.activate_window();
-        self.quake_terminal_open = true;
-        let machine = self.selected_machine().clone();
-        let machine_uuid = machine.uuid;
-
-        if let Some(quake) = self.quake_terminals.get(&machine_uuid) {
-            window.focus(&quake.input.focus_handle(cx));
-            self.resize_quake_terminal(window);
-            cx.notify();
-            return;
-        }
-
-        let endpoint = machine
-            .remote
-            .as_ref()
-            .map(|remote| format!("{}@{}", remote.user, remote.host))
-            .unwrap_or_else(|| "Local shell".to_string());
-        let size = self.quake_terminal_size(window);
-        let terminal =
-            match content::terminal::TerminalState::new_interactive(size.columns, size.rows) {
-                Ok(terminal) => terminal,
-                Err(error) => {
-                    self.set_status_error(format!(
-                        "Failed to initialise Ghostty terminal: {error}"
-                    ));
-                    cx.notify();
-                    return;
-                }
-            };
-        let input = cx.new(TerminalInput::new);
-        self.quake_terminals.insert(
-            machine_uuid,
-            content::terminal::QuakeTerminal {
-                machine_name: machine.system_info.machine_name.clone(),
-                endpoint,
-                terminal,
-                controller: None,
-                size,
-                status: content::terminal::QuakeTerminalStatus::Connecting,
-                input: input.clone(),
-            },
-        );
-        window.focus(&input.focus_handle(cx));
-        cx.notify();
-
-        cx.spawn(move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                let result = cx
-                    .background_spawn({
-                        let mut machine = machine;
-                        async move { machine.open_terminal(size).await }
-                    })
-                    .await;
-
-                let session = match result {
-                    Ok(session) => session,
-                    Err(error) => {
-                        this.update(&mut cx, move |this, cx| {
-                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) {
-                                quake.status = content::terminal::QuakeTerminalStatus::Failed;
-                                quake.terminal.feed_string(format!(
-                                    "\r\n[crabdash] Failed to open terminal: {error}\r\n"
-                                ));
-                            }
-                            cx.notify();
-                        })
-                        .ok();
-                        return;
-                    }
-                };
-
-                let controller = session.controller;
-                let events = session.events;
-                let accepted = this
-                    .update(&mut cx, |this, cx| {
-                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
-                            return false;
-                        };
-                        quake.controller = Some(controller.clone());
-                        quake.input.update(cx, |input, cx| {
-                            input.set_controller(Some(controller.clone()), cx);
-                        });
-                        if quake.size != size
-                            && let Err(error) = controller.resize(quake.size)
-                        {
-                            quake.status = content::terminal::QuakeTerminalStatus::Failed;
-                            tracing::warn!(%error, "Failed to apply current terminal size");
-                            return false;
-                        }
-                        quake.status = content::terminal::QuakeTerminalStatus::Connected;
-                        cx.notify();
-                        true
-                    })
-                    .unwrap_or(false);
-
-                if !accepted {
-                    if let Err(error) = controller.shutdown() {
-                        tracing::debug!(%error, "Failed to shut down unclaimed terminal");
-                    }
-                    return;
-                }
-
-                while let Ok(event) = events.recv().await {
-                    let should_continue = this
-                        .update(&mut cx, |this, cx| {
-                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid) else {
-                                return false;
-                            };
-
-                            match event {
-                                TerminalEvent::Output(output) => {
-                                    quake.terminal.feed(output);
-                                    for response in quake.terminal.take_pty_writes() {
-                                        if let Err(error) = controller.write(response) {
-                                            quake.status =
-                                                content::terminal::QuakeTerminalStatus::Failed;
-                                            tracing::warn!(%error, "Failed to send Ghostty PTY response");
-                                        }
-                                    }
-                                }
-                                TerminalEvent::Exited(status) => {
-                                    quake.controller = None;
-                                    quake.input.update(cx, |input, cx| {
-                                        input.set_controller(None, cx);
-                                    });
-                                    quake.status = content::terminal::QuakeTerminalStatus::Exited;
-                                    quake.terminal.feed_string(format!(
-                                        "\r\n[process exited{}]\r\n",
-                                        status
-                                            .map(|status| format!(" with status {status}"))
-                                            .unwrap_or_default()
-                                    ));
-                                }
-                                TerminalEvent::Error(error) => {
-                                    quake.controller = None;
-                                    quake.input.update(cx, |input, cx| {
-                                        input.set_controller(None, cx);
-                                    });
-                                    quake.status = content::terminal::QuakeTerminalStatus::Failed;
-                                    quake.terminal.feed_string(format!(
-                                        "\r\n[crabdash] {error}\r\n"
-                                    ));
-                                }
-                            }
-                            cx.notify();
-                            quake.controller.is_some()
-                        })
-                        .unwrap_or(false);
-
-                    if !should_continue {
-                        break;
-                    }
-                }
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn close_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.activate_window();
-        self.quake_terminal_open = false;
-        window.focus(&self.focus_handle);
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_disk_row(&mut self, disk_id: &str, cx: &mut Context<Self>) {
-        if !self.expanded_disk_rows.insert(disk_id.to_string()) {
-            self.expanded_disk_rows.remove(disk_id);
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn set_sidebar_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        self.sidebar_width = sidebar::clamp_width(width);
-        cx.notify();
-    }
-
-    pub(crate) fn set_status_error(&mut self, message: impl Into<String>) {
-        self.status_message = Some(message.into().trim().to_string());
-    }
-
-    pub(crate) fn clear_status_message(&mut self) {
-        self.status_message = None;
-    }
-
-    fn clear_remote_machine_form(&mut self, cx: &mut Context<Self>) {
-        self.remote_host_field
-            .update(cx, |field, cx| field.clear(cx));
-        self.remote_user_field
-            .update(cx, |field, cx| field.clear(cx));
-        self.add_machine_auth_mode = AddMachineAuthMode::Password;
-        self.remote_password_field
-            .update(cx, |field, cx| field.clear(cx));
-        self.remote_private_key_field
-            .update(cx, |field, cx| field.clear(cx));
-        self.remote_public_key_field
-            .update(cx, |field, cx| field.clear(cx));
-        self.remote_passphrase_field
-            .update(cx, |field, cx| field.clear(cx));
-    }
-
-    pub(crate) fn submit_add_machine(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.add_machine_error = None;
-
-        let host = self.remote_host_field.read(cx).text().trim().to_string();
-        let user = self.remote_user_field.read(cx).text().trim().to_string();
-        let auth = match self.add_machine_auth_mode {
-            AddMachineAuthMode::None => Ok(AuthMethod::None),
-            AddMachineAuthMode::Password => {
-                if !self.remote_password_field.read(cx).text().is_empty() {
-                    let password = self.remote_password_field.read(cx).text();
-                    Ok(AuthMethod::Password(password))
-                } else {
-                    Err(anyhow!("Host, user, and password are required."))
-                }
-            }
-            AddMachineAuthMode::AuthKey => {
-                let private_key = self
-                    .remote_private_key_field
-                    .read(cx)
-                    .text()
-                    .trim()
-                    .to_string();
-                let public_key = self
-                    .remote_public_key_field
-                    .read(cx)
-                    .text()
-                    .trim()
-                    .to_string();
-                let passphrase = self
-                    .remote_passphrase_field
-                    .read(cx)
-                    .text()
-                    .trim()
-                    .to_string();
-
-                if private_key.is_empty() {
-                    Err(anyhow!("Host, user, and private key are required."))
-                } else {
-                    Ok(AuthMethod::AuthKey {
-                        pubkey: (!public_key.is_empty()).then(|| PathBuf::from(public_key)),
-                        privatekey: PathBuf::from(private_key),
-                        passphrase: (!passphrase.is_empty()).then_some(passphrase),
-                    })
-                }
-            }
-        };
-
-        if host.is_empty() || user.is_empty() {
-            let error = anyhow!("Host and user are required.");
-            self.set_status_error(error.to_string());
-            self.add_machine_error = Some(error);
-            cx.notify();
-            return;
-        }
-
-        let auth = match auth {
-            Ok(auth) => auth,
-            Err(error) => {
-                self.set_status_error(error.to_string());
-                self.add_machine_error = Some(error);
-                cx.notify();
-                return;
-            }
-        };
-
-        cx.spawn(
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| -> Result<()> {
-                let (mut cx, mut store) = (cx.clone(), load_store().await?);
-                match store.add_remote_machine(user, host, auth).await {
-                    Ok(index) => {
-                        this.update(&mut cx, move |this, cx| {
-                            this.machine_store = store;
-                            this.selected_machine = index;
-                            this.add_machine_modal_open = false;
-                            this.clear_remote_machine_form(cx);
-                            this.clear_status_message();
-                            this.refresh_services(cx);
-
-                            if let Some(rc) = this.selected_machine().remote.as_ref() {
-                                let (key, user, auth) = (
-                                    format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host),
-                                    rc.user.clone(),
-                                    rc.auth.clone(),
-                                );
-                                if let Some(secret) = auth.and_then(|auth| auth.secret_bytes()) {
-                                    cx.spawn(async move |_, cx| {
-                                        if let Some(future) = cx
-                                            .update(|app| {
-                                                app.write_credentials(&key, &user, &secret)
-                                            })
-                                            .ok()
-                                        {
-                                            future.await.ok();
-                                        }
-                                    })
-                                    .detach();
-                                }
-                            }
-                            cx.notify();
-                        })
-                        .ok();
-                        Ok(())
-                    }
-                    Err(err) => {
-                        this.update(&mut cx, move |this, cx| {
-                            this.set_status_error(err.to_string());
-                            this.add_machine_error = Some(err);
-                            cx.notify();
-                        })
-                        .ok();
-                        Err(anyhow::anyhow!("Failed to create machine"))
-                    }
-                }
-            },
-        )
-        .detach();
-    }
-
-    pub(crate) fn submit_add_machine_action(
-        &mut self,
-        _: &SubmitAddMachineModal,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.add_machine_modal_open {
-            self.submit_add_machine(window, cx);
-        }
-    }
-
-    pub(crate) fn focus_next(
-        &mut self,
-        _: &FieldTab,
-        window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        if self.add_machine_modal_open {
-            window.focus_next();
-        }
-    }
-
-    pub(crate) fn focus_prev(
-        &mut self,
-        _: &FieldTabPrev,
-        window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        if self.add_machine_modal_open {
-            window.focus_prev();
         }
     }
 }
@@ -998,15 +212,67 @@ impl Crabdash {
 impl Render for Crabdash {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Crabdash");
-        self.resize_quake_terminal(window);
+        window.set_rem_size(px(16.0 * self.preferences.interface_font_size / 13.0));
+        self.resize_quake_terminal(window, cx);
 
         div()
+            .font_family(if self.preferences.interface_font.is_empty() {
+                SharedString::from(".SystemUIFont")
+            } else {
+                self.preferences.interface_font.clone().into()
+            })
+            .text_size(gpui::rems(crate::components::style::TEXT / 16.0))
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|_, _: &AboutCrabdash, _window, _cx| {
-                show_about_dialog();
+            .on_action(cx.listener(|this, _: &crate::ShowDocker, _, cx| {
+                this.active_tab = MainTab::Docker;
+                this.refresh_services(cx);
+                cx.notify();
             }))
-            .on_action(|_: &CloseWindow, window, _| {
-                window.remove_window();
+            .on_action(cx.listener(|this, _: &crate::ShowDisks, _, cx| {
+                this.active_tab = MainTab::Disks;
+                this.refresh_services(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &crate::ShowServices, _, cx| {
+                this.active_tab = MainTab::Services;
+                this.refresh_services(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|_, _: &AboutCrabdash, window, cx| {
+                show_about_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenPreferences, window, cx| {
+                this.preference_editor = preferences::Editor::new(&this.preferences, cx);
+                this.preferences_open = true;
+                this.login_startup = crate::desktop::startup::LoginStartup::load();
+                window.focus(&this.focus_handle);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleAppMenu, window, cx| {
+                this.open_menu = if this.open_menu.is_some() {
+                    None
+                } else {
+                    Some(0)
+                };
+                this.menu_item = 0;
+                window.focus(&this.focus_handle);
+                cx.notify();
+            }))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if this.preferences_open
+                    && !this.preference_editor.busy
+                    && event.keystroke.key == "escape"
+                {
+                    this.preferences_open = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|_, _: &ModifiersChangedEvent, _, cx| {
+                cx.notify();
+            }))
+            .on_action(|_: &CloseWindow, window, cx| {
+                crate::desktop::window::close_window(window, cx);
             })
             .on_action(cx.listener(|this, _: &ToggleSidebar, _window, cx| {
                 this.toggle_sidebar(cx);
@@ -1050,15 +316,12 @@ impl Render for Crabdash {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(content::render_title_bar(self, window, cx).on_mouse_down(
-                        MouseButton::Left,
-                        |_, window, _| {
-                            window.start_window_move();
-                        },
-                    ))
+                    .child(crate::desktop::window::render(self, window, cx))
                     .child(
                         div()
                             .flex_1()
+                            .min_h_0()
+                            .min_w_0()
                             .flex()
                             .when(!self.sidebar_collapsed, |this| {
                                 this.on_drag_move(cx.listener(
@@ -1084,8 +347,9 @@ impl Render for Crabdash {
                        //         .items_center(),
                        // ),
             )
+            .child(crate::desktop::window::resize_handles(window))
             .when(self.quake_terminal_open, |this| {
-                this.child(content::terminal::render_quake(self, window, cx))
+                this.child(features::terminal::render_quake(self, window, cx))
             })
             .when_some(self.status_message.as_ref(), |this, message| {
                 this.child(
@@ -1096,11 +360,20 @@ impl Render for Crabdash {
                         .child(toast::render(message.clone(), cx)),
                 )
             })
+            .when(self.preferences_open, |this| {
+                this.child(preferences::render(self, window, cx))
+            })
+            .when(self.open_menu.is_some(), |this| {
+                this.child(crate::desktop::menus::popup(self, window, cx))
+            })
             .when(self.add_machine_modal_open, |this| {
                 this.child(modal::render(self, cx))
             })
             .when(self.docker_run_modal_open, |this| {
-                this.child(content::render_docker_run_modal(self, cx))
+                this.child(features::docker::run_modal::render(self, window, cx))
+            })
+            .when(self.docker_removal.is_some(), |this| {
+                this.child(features::docker::remove_modal::render(self, cx))
             })
         // .when(self.docker_log_modal.is_some(), |this| {
         //     this.child(content::render_logs_modal(self, cx))

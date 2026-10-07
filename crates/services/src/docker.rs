@@ -26,12 +26,15 @@ pub trait Docker {
     /// Removes a Docker container
     ///
     /// # Arguments
-    /// * `args`: The arguments to pass to the Docker command
+    /// * `id`: The container ID
+    /// * `force`: Kill and remove directly instead of stopping gracefully
+    ///
+    /// Images and volumes are preserved.
     ///
     /// # Returns
     /// * `Ok(Output)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn remove_container(&mut self, id: &str) -> impl Future<Output = Result<Output>>;
+    fn remove_container(&mut self, id: &str, force: bool) -> impl Future<Output = Result<Output>>;
     /// Runs an action on a Docker container
     ///
     /// # Arguments
@@ -41,7 +44,11 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(Output)`: The ID of the container is returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_action(&mut self, id: &str, action: &str) -> impl Future<Output = Result<Output>>;
+    fn container_action(
+        &mut self,
+        id: &str,
+        action: DockerAction,
+    ) -> impl Future<Output = Result<Output>>;
     /// Gets the logs of a Docker container
     ///
     /// # Arguments
@@ -50,7 +57,7 @@ pub trait Docker {
     /// # Returns
     /// * `Ok(_)`: The container logs are returned
     /// * `Err(anyhow::Error)`: Any errors that occurred
-    fn container_logs(&mut self, id: &str) -> impl Future<Output = Result<Output>>;
+    fn container_logs(&mut self, id: &str, lines: u32) -> impl Future<Output = Result<Output>>;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -121,6 +128,8 @@ pub enum DockerFilter {
     #[default]
     Total,
     Running,
+    Paused,
+    Stopped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +137,9 @@ pub enum DockerAction {
     Start,
     Stop,
     Restart,
+    Pause,
+    Unpause,
+    Remove { force: bool },
 }
 
 impl DockerAction {
@@ -136,14 +148,20 @@ impl DockerAction {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Restart => "restart",
+            Self::Pause => "pause",
+            Self::Unpause => "unpause",
+            Self::Remove { .. } => "rm",
         }
     }
 
     pub fn icon(self) -> Icon {
         match self {
             Self::Start => Icon::Play,
-            Self::Stop => Icon::X,
+            Self::Stop => Icon::Square,
             Self::Restart => Icon::RefreshCw,
+            Self::Pause => Icon::Pause,
+            Self::Unpause => Icon::Play,
+            Self::Remove { .. } => Icon::Trash2,
         }
     }
 
@@ -152,6 +170,74 @@ impl DockerAction {
             Self::Start => "Starting",
             Self::Stop => "Stopping",
             Self::Restart => "Restarting",
+            Self::Pause => "Pausing",
+            Self::Unpause => "Resuming",
+            Self::Remove { .. } => "Removing",
+        }
+    }
+}
+
+impl DockerAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Stop => "Stop",
+            Self::Restart => "Restart",
+            Self::Pause => "Pause",
+            Self::Unpause => "Resume",
+            Self::Remove { .. } => "Remove",
+        }
+    }
+
+    pub fn allowed_for(self, container: &Container) -> bool {
+        match self {
+            Self::Start => matches!(container.status.as_str(), "created" | "exited"),
+            Self::Stop | Self::Restart => container.is_running_status(),
+            Self::Pause => container.is_running_status(),
+            Self::Unpause => container.is_paused(),
+            Self::Remove { .. } => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_follow_container_state() {
+        for (state, allowed) in [
+            (
+                "running",
+                vec![
+                    DockerAction::Stop,
+                    DockerAction::Restart,
+                    DockerAction::Pause,
+                ],
+            ),
+            ("paused", vec![DockerAction::Unpause]),
+            ("exited", vec![DockerAction::Start]),
+            ("created", vec![DockerAction::Start]),
+            ("restarting", vec![]),
+            ("dead", vec![]),
+        ] {
+            let container = Container {
+                status: state.into(),
+                ..Default::default()
+            };
+            for action in [
+                DockerAction::Start,
+                DockerAction::Stop,
+                DockerAction::Restart,
+                DockerAction::Pause,
+                DockerAction::Unpause,
+            ] {
+                assert_eq!(
+                    action.allowed_for(&container),
+                    allowed.contains(&action),
+                    "{state}: {action:?}"
+                );
+            }
         }
     }
 }
