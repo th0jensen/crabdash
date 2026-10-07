@@ -10,7 +10,7 @@ pub(super) async fn service_action(
     action: ServiceAction,
 ) -> Result<Output> {
     machine
-        .run("systemctl", &args![action.command(), service])
+        .run("systemctl", &args![action.command(), "--", service])
         .await
 }
 pub(super) async fn service_logs(
