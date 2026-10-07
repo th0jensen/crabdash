@@ -31,7 +31,7 @@ impl State {
                 direction: Direction::Descending,
             },
             search: Search::new(
-                "Filter processes…",
+                "Filter sampled processes…",
                 |app| {
                     app.system
                         .processes

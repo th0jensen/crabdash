@@ -141,14 +141,15 @@ Preferences. Changes save automatically. Existing flat layouts retain their tab
 order and selection when migrated. Invalid saved files are preserved until
 explicit recovery.
 
-The **System** tab samples the selected machine every two seconds while visible,
+The **System** tab samples the selected machine every two seconds by default while visible,
 including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,
 memory, network, disk activity, machine details, and a card for each graphics adapter.
 The process table supports filtering and sorting; CPU percentages measure a share
 of the machine's total CPU capacity. Up to 100 processes are displayed after ranking
 the sampled process set. CPU and throughput start with **Sampling…** until two counter
 snapshots are available. Resource sampling is independent of
-automatic table refresh; live history stays in memory and resets after a reboot
+automatic table refresh; **Preferences → System → Sample interval** adjusts it
+from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; live history stays in memory and resets after a reboot
 or replacement connection. Existing workspaces gain System in the focused pane
 without changing their selection or split sizes.
 
@@ -163,9 +164,10 @@ depends on the adapter and driver: missing measurements are shown as unavailable
 Linux reads DRM/sysfs and optionally NVIDIA's installed tools. Windows keeps GPU
 performance-counter identities separate, and macOS reads driver telemetry when exposed.
 
-Preferences has **General**, **Terminal**, and **Interface** sections:
+Preferences has **General**, **System**, **Terminal**, and **Interface** sections:
 
 - General: login/background behavior, automatic refresh, refresh interval, and recent log limits.
+- System: resource sampling interval, independent of automatic table refresh.
 - Terminal: installed monospaced font, font size, line height, TERM/terminfo, true-colour advertisement, scrollback buffer, and initial panel rows. Font changes update existing terminals and log views; environment and buffer settings affect new sessions.
 - Interface: system or installed font, font size, sidebar width, minimum equal tab widths, and persistent shortcut hints. Tabs expand together to fit their titles and shortcuts; showing hints does not move them. Controls scale with the interface font size.
 

@@ -2,7 +2,7 @@
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, Global};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -11,6 +11,7 @@ pub struct Preferences {
     pub close_to_tray: bool,
     pub auto_refresh: bool,
     pub refresh_seconds: u64,
+    pub system_refresh_seconds: u64,
     pub log_lines: u32,
     pub terminal_font: String,
     pub terminal_font_size: f32,
@@ -34,6 +35,7 @@ impl Default for Preferences {
             close_to_tray: true,
             auto_refresh: true,
             refresh_seconds: 5,
+            system_refresh_seconds: 2,
             log_lines: 500,
             terminal_font: "JetBrainsMono Nerd Font".into(),
             terminal_font_size: 13.0,
@@ -89,6 +91,12 @@ impl Preferences {
             Ok(())
         }
         range("Refresh interval", self.refresh_seconds as f64, 2.0, 300.0)?;
+        range(
+            "System sample interval",
+            self.system_refresh_seconds as f64,
+            2.0,
+            60.0,
+        )?;
         range("Log lines", self.log_lines as f64, 50.0, 10000.0)?;
         range(
             "Terminal font size",
@@ -135,6 +143,10 @@ impl Preferences {
         Ok(())
     }
 
+    pub(crate) fn system_refresh_interval(&self) -> Duration {
+        Duration::from_secs(self.system_refresh_seconds)
+    }
+
     pub(crate) fn terminal_options(&self) -> machines::terminal::TerminalOptions {
         machines::terminal::TerminalOptions {
             terminal_type: self.terminal_type.clone(),
@@ -151,16 +163,21 @@ pub(crate) fn current(cx: &App) -> Preferences {
 mod tests {
     use super::*;
     #[test]
-    fn old_preferences_migrate_with_compatible_defaults() {
-        let settings: Preferences = serde_json::from_str(r#"{"start_minimised":true}"#).unwrap();
+    fn old_preferences_migrate_with_compatible_defaults() -> Result<()> {
+        let settings: Preferences =
+            serde_json::from_str(r#"{"start_minimised":true,"refresh_seconds":15}"#)?;
         assert!(settings.start_minimised);
         assert_eq!(settings.terminal_type, "xterm-256color");
         assert_eq!(settings.terminal_font, "JetBrainsMono Nerd Font");
-        settings.validate().unwrap();
+        assert_eq!(settings.refresh_seconds, 15);
+        assert_eq!(settings.system_refresh_seconds, 2);
+        assert_eq!(settings.system_refresh_interval(), Duration::from_secs(2));
+        settings.validate()?;
         assert_eq!(
-            serde_json::from_slice::<Preferences>(&serde_json::to_vec(&settings).unwrap()).unwrap(),
+            serde_json::from_slice::<Preferences>(&serde_json::to_vec(&settings)?)?,
             settings
         );
+        Ok(())
     }
     #[test]
     fn invalid_settings_do_not_reach_the_renderer_or_shell() {
@@ -173,5 +190,40 @@ mod tests {
         settings = Preferences::default();
         settings.refresh_seconds = 0;
         assert!(settings.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod system_tests {
+    use super::*;
+    #[test]
+    fn system_interval_validation_and_roundtrip_preserve_independent_refresh() -> Result<()> {
+        for seconds in [0, 1, 61, u64::MAX] {
+            let settings = Preferences {
+                system_refresh_seconds: seconds,
+                ..Preferences::default()
+            };
+            assert!(
+                settings.validate().is_err(),
+                "must reject interval {seconds}"
+            );
+        }
+        for seconds in [2, 17, 60] {
+            let settings = Preferences {
+                system_refresh_seconds: seconds,
+                refresh_seconds: 300,
+                auto_refresh: false,
+                ..Preferences::default()
+            };
+            settings.validate()?;
+            let saved: Preferences = serde_json::from_slice(&serde_json::to_vec(&settings)?)?;
+            assert_eq!(
+                saved.system_refresh_interval(),
+                Duration::from_secs(seconds)
+            );
+            assert_eq!(saved.refresh_seconds, 300);
+            assert!(!saved.auto_refresh);
+        }
+        Ok(())
     }
 }

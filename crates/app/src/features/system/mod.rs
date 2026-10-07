@@ -13,7 +13,6 @@ use std::{
 };
 use uuid::Uuid;
 
-pub(crate) const INTERVAL: Duration = Duration::from_secs(2);
 const HISTORY_LIMIT: usize = 60;
 
 #[derive(Clone, Copy)]
@@ -52,6 +51,7 @@ pub(crate) struct MachineState {
     pub error: Option<String>,
     pub updated: Option<Instant>,
     pub loading: bool,
+    last_requested: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -78,6 +78,13 @@ impl Target {
 }
 
 impl MachineState {
+    fn sampling_due(&self, now: Instant, interval: Duration) -> bool {
+        !self.loading
+            && self
+                .last_requested
+                .is_none_or(|requested| now.saturating_duration_since(requested) >= interval)
+    }
+
     fn record(&mut self, sample: ResourceSample) -> anyhow::Result<()> {
         let boot_id = sample.boot_id.clone();
         let usage = self.monitor.update(sample)?;
@@ -142,6 +149,21 @@ impl MachineState {
 mod tests {
     use super::*;
     use machines::resources::{CpuSample, MemorySample};
+
+    #[test]
+    fn sample_schedule_respects_changed_intervals_pending_requests_and_failures() {
+        let now = Instant::now();
+        let mut state = MachineState::default();
+        assert!(state.sampling_due(now, Duration::from_secs(2)));
+        state.last_requested = Some(now);
+        // A failed request has no updated sample, but should still be paced.
+        state.error = Some("Disconnected".into());
+        assert!(!state.sampling_due(now + Duration::from_secs(1), Duration::from_secs(2)));
+        assert!(state.sampling_due(now + Duration::from_secs(2), Duration::from_secs(2)));
+        assert!(!state.sampling_due(now + Duration::from_secs(2), Duration::from_secs(60)));
+        state.loading = true;
+        assert!(!state.sampling_due(now + Duration::from_secs(120), Duration::from_secs(2)));
+    }
 
     fn sample(boot_id: &str, uptime_seconds: f64) -> ResourceSample {
         ResourceSample {

@@ -12,11 +12,13 @@ pub(crate) enum Section {
     General,
     Terminal,
     Interface,
+    System,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Field {
     Refresh,
+    SystemRefresh,
     LogLines,
     TerminalFont,
     TerminalSize,
@@ -33,6 +35,7 @@ impl Field {
     fn label(self) -> &'static str {
         match self {
             Self::Refresh => "Refresh interval",
+            Self::SystemRefresh => "Sample interval",
             Self::LogLines => "Recent log lines",
             Self::TerminalFont | Self::InterfaceFont => "Font family",
             Self::TerminalSize | Self::InterfaceSize => "Font size",
@@ -47,6 +50,7 @@ impl Field {
     fn hint(self) -> &'static str {
         match self {
             Self::Refresh => "Seconds · 2–300",
+            Self::SystemRefresh => "Seconds · 2–60",
             Self::LogLines => "50–10,000 lines · newly opened logs",
             Self::TerminalFont => "An installed monospaced font; bundled font works everywhere",
             Self::InterfaceFont => "Leave empty to use the system font",
@@ -62,10 +66,112 @@ impl Field {
     }
 }
 
+/// Every declared field owns an input; exhaustive matching prevents missing-field panics.
+struct Inputs {
+    refresh: Entity<TextField>,
+    log_lines: Entity<TextField>,
+    terminal_font: Entity<TextField>,
+    terminal_size: Entity<TextField>,
+    line_height: Entity<TextField>,
+    terminfo: Entity<TextField>,
+    scrollback: Entity<TextField>,
+    terminal_rows: Entity<TextField>,
+    interface_font: Entity<TextField>,
+    interface_size: Entity<TextField>,
+    sidebar_width: Entity<TextField>,
+    tab_width: Entity<TextField>,
+    system_refresh: Entity<TextField>,
+}
+impl Inputs {
+    fn new(settings: &Preferences, cx: &mut Context<Crabdash>) -> Self {
+        let mut input = |field: Field, value: String, index: isize| {
+            cx.new(|cx| {
+                let mut input = TextField::new(
+                    "",
+                    if field == Field::InterfaceFont {
+                        "System font"
+                    } else {
+                        ""
+                    },
+                    index,
+                    cx,
+                );
+                input.set_text(&value, cx);
+                input
+            })
+        };
+        Self {
+            refresh: input(Field::Refresh, settings.refresh_seconds.to_string(), 1),
+            log_lines: input(Field::LogLines, settings.log_lines.to_string(), 2),
+            terminal_font: input(Field::TerminalFont, settings.terminal_font.clone(), 3),
+            terminal_size: input(
+                Field::TerminalSize,
+                settings.terminal_font_size.to_string(),
+                4,
+            ),
+            line_height: input(
+                Field::LineHeight,
+                settings.terminal_line_height.to_string(),
+                5,
+            ),
+            terminfo: input(Field::Terminfo, settings.terminal_type.clone(), 6),
+            scrollback: input(Field::Scrollback, settings.scrollback_lines.to_string(), 7),
+            terminal_rows: input(Field::TerminalRows, settings.terminal_rows.to_string(), 8),
+            interface_font: input(Field::InterfaceFont, settings.interface_font.clone(), 9),
+            interface_size: input(
+                Field::InterfaceSize,
+                settings.interface_font_size.to_string(),
+                10,
+            ),
+            sidebar_width: input(Field::SidebarWidth, settings.sidebar_width.to_string(), 11),
+            tab_width: input(Field::TabWidth, settings.tab_width.to_string(), 12),
+            system_refresh: input(
+                Field::SystemRefresh,
+                settings.system_refresh_seconds.to_string(),
+                13,
+            ),
+        }
+    }
+    fn get(&self, field: Field) -> &Entity<TextField> {
+        match field {
+            Field::Refresh => &self.refresh,
+            Field::LogLines => &self.log_lines,
+            Field::TerminalFont => &self.terminal_font,
+            Field::TerminalSize => &self.terminal_size,
+            Field::LineHeight => &self.line_height,
+            Field::Terminfo => &self.terminfo,
+            Field::Scrollback => &self.scrollback,
+            Field::TerminalRows => &self.terminal_rows,
+            Field::InterfaceFont => &self.interface_font,
+            Field::InterfaceSize => &self.interface_size,
+            Field::SidebarWidth => &self.sidebar_width,
+            Field::TabWidth => &self.tab_width,
+            Field::SystemRefresh => &self.system_refresh,
+        }
+    }
+    fn all(&self) -> [(Field, &Entity<TextField>); 13] {
+        [
+            (Field::Refresh, &self.refresh),
+            (Field::LogLines, &self.log_lines),
+            (Field::TerminalFont, &self.terminal_font),
+            (Field::TerminalSize, &self.terminal_size),
+            (Field::LineHeight, &self.line_height),
+            (Field::Terminfo, &self.terminfo),
+            (Field::Scrollback, &self.scrollback),
+            (Field::TerminalRows, &self.terminal_rows),
+            (Field::InterfaceFont, &self.interface_font),
+            (Field::InterfaceSize, &self.interface_size),
+            (Field::SidebarWidth, &self.sidebar_width),
+            (Field::TabWidth, &self.tab_width),
+            (Field::SystemRefresh, &self.system_refresh),
+        ]
+    }
+}
+
 pub(crate) struct Editor {
     pub section: Section,
     pub draft: Preferences,
-    fields: Vec<(Field, Entity<TextField>)>,
+    fields: Inputs,
     pub busy: bool,
     pub error: Option<String>,
     pub scroll: ScrollHandle,
@@ -73,44 +179,7 @@ pub(crate) struct Editor {
 }
 impl Editor {
     pub fn new(settings: &Preferences, cx: &mut Context<Crabdash>) -> Self {
-        let values = vec![
-            (Field::Refresh, settings.refresh_seconds.to_string()),
-            (Field::LogLines, settings.log_lines.to_string()),
-            (Field::TerminalFont, settings.terminal_font.clone()),
-            (Field::TerminalSize, settings.terminal_font_size.to_string()),
-            (Field::LineHeight, settings.terminal_line_height.to_string()),
-            (Field::Terminfo, settings.terminal_type.clone()),
-            (Field::Scrollback, settings.scrollback_lines.to_string()),
-            (Field::TerminalRows, settings.terminal_rows.to_string()),
-            (Field::InterfaceFont, settings.interface_font.clone()),
-            (
-                Field::InterfaceSize,
-                settings.interface_font_size.to_string(),
-            ),
-            (Field::SidebarWidth, settings.sidebar_width.to_string()),
-            (Field::TabWidth, settings.tab_width.to_string()),
-        ];
-        let fields = values
-            .into_iter()
-            .enumerate()
-            .map(|(index, (field, value))| {
-                let input = cx.new(|cx| {
-                    let mut input = TextField::new(
-                        "",
-                        if matches!(field, Field::InterfaceFont) {
-                            "System font"
-                        } else {
-                            ""
-                        },
-                        index as isize + 1,
-                        cx,
-                    );
-                    input.set_text(&value, cx);
-                    input
-                });
-                (field, input)
-            })
-            .collect();
+        let fields = Inputs::new(settings, cx);
         Self {
             section: Section::General,
             draft: settings.clone(),
@@ -122,16 +191,11 @@ impl Editor {
         }
     }
     fn input(&self, field: Field) -> Entity<TextField> {
-        self.fields
-            .iter()
-            .find(|(key, _)| *key == field)
-            .unwrap()
-            .1
-            .clone()
+        self.fields.get(field).clone()
     }
     pub fn collect(&self, cx: &App) -> Result<Preferences> {
         let mut value = self.draft.clone();
-        for (field, input) in &self.fields {
+        for (field, input) in self.fields.all() {
             let text = input.read(cx).text().trim().to_owned();
             macro_rules! number {
                 ($target:expr) => {
@@ -142,6 +206,7 @@ impl Editor {
             }
             match field {
                 Field::Refresh => number!(value.refresh_seconds),
+                Field::SystemRefresh => number!(value.system_refresh_seconds),
                 Field::LogLines => number!(value.log_lines),
                 Field::TerminalFont => value.terminal_font = text,
                 Field::TerminalSize => number!(value.terminal_font_size),
@@ -375,9 +440,14 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                         cx,
                     ));
             }
-            body = body.child(toggle_row("auto-refresh-toggle", "Automatic refresh", "Update machine status and the selected tab", editor.draft.auto_refresh, busy, |this, _| this.preference_editor.draft.auto_refresh ^= true, cx))
+            body = body.child(toggle_row("auto-refresh-toggle", "Automatic refresh", "Update machine status and tables", editor.draft.auto_refresh, busy, |this, _| this.preference_editor.draft.auto_refresh ^= true, cx))
                 .child(field_row(editor, Field::Refresh, cx)).child(field_row(editor, Field::LogLines, cx))
                 .child(div().text_size(gpui::rems(style::META / 16.0)).text_color(rgb(0x929292)).child("Errors stay visible until dismissed. Refresh manually with the refresh button or shortcut."));
+        }
+        Section::System => {
+            body=body.child(field_row(editor,Field::SystemRefresh,cx))
+                .child(div().text_size(gpui::rems(style::META / 16.0)).text_color(rgb(0x929292))
+                    .child("Resources update while System is visible, independently of automatic table refresh. Longer intervals reduce sampling and rendering work."));
         }
         Section::Terminal => {
             for field in [
@@ -451,6 +521,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                             (Section::General, "General"),
                             (Section::Terminal, "Terminal"),
                             (Section::Interface, "Interface"),
+                            (Section::System, "System"),
                         ]
                         .into_iter()
                         .map(|(section, label)| {

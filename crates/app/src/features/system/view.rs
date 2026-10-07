@@ -154,6 +154,12 @@ fn fact(label: &str, value: String) -> Div {
         )
         .child(clipped_text(value).flex_1())
 }
+fn machine_fact(label: &str, value: String) -> Stateful<Div> {
+    let tooltip = format!("{label}: {value}");
+    fact(label, value)
+        .id(SharedString::from(format!("system-machine-{label}")))
+        .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
+}
 fn meter(value: f64) -> Div {
     div()
         .w_full()
@@ -530,6 +536,10 @@ fn process_heading(
     }))
 }
 fn process_identity(process: &ProcessUsage) -> Stateful<Div> {
+    let tooltip = process.user.as_ref().map_or_else(
+        || format!("Name: {}", process.name),
+        |user| format!("Name: {}\nUser: {user}", process.name),
+    );
     clipped_text(process.name.clone())
         .id(SharedString::from(format!(
             "process-name-{}-{}",
@@ -537,12 +547,7 @@ fn process_identity(process: &ProcessUsage) -> Stateful<Div> {
         )))
         .flex_1()
         .min_w_0()
-        .when_some(process.user.as_ref(), |this, user| {
-            this.tooltip({
-                let user = user.clone();
-                move |_, cx| control_tooltip(format!("User: {user}"), cx)
-            })
-        })
+        .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
 }
 fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
     let cpu = process
@@ -774,10 +779,10 @@ pub(crate) fn render(
     let label: String = state.and_then(|state| state.updated).map_or_else(
         || "Starting…".into(),
         |updated| {
-            if updated.elapsed().as_secs() > 6 {
+            if updated.elapsed() > app.preferences.system_refresh_interval() * 3 {
                 "Waiting for a sample…".into()
             } else {
-                "Live · 2s".into()
+                format!("Live · {}s", app.preferences.system_refresh_seconds)
             }
         },
     );
@@ -805,10 +810,10 @@ pub(crate) fn render(
             .child(disk_card(state, usage));
         let machine = card()
             .child(heading("Machine", String::new(), String::new()))
-            .child(fact("Name", info.machine_name.clone()))
-            .child(fact("Platform", distribution))
-            .child(fact("Kernel", info.os_version.clone()))
-            .child(fact("Architecture", info.arch.clone()));
+            .child(machine_fact("Name", info.machine_name.clone()))
+            .child(machine_fact("Platform", distribution))
+            .child(machine_fact("Kernel", info.os_version.clone()))
+            .child(machine_fact("Architecture", info.arch.clone()));
         let graphics: Vec<Div> = match &usage.gpus {
             Some(gpus) if !gpus.is_empty() => gpus.iter().map(|gpu| gpu_card(state, gpu)).collect(),
             Some(_) => vec![card().child(heading(
@@ -861,8 +866,16 @@ pub(crate) fn render(
         )
         .child(
             surface_button("system-refresh", Some(Icon::RefreshCw), None)
-                .tooltip(|_, cx| {
-                    control_tooltip("Refresh resources · live sampling runs every 2 seconds", cx)
+                .tooltip({
+                    let seconds = app.preferences.system_refresh_seconds;
+                    move |_, cx| {
+                        control_tooltip(
+                            format!(
+                                "Refresh resources · live sampling runs every {seconds} seconds"
+                            ),
+                            cx,
+                        )
+                    }
                 })
                 .on_click(cx.listener(|app, _, _, cx| app.refresh_system_resources(cx))),
         );

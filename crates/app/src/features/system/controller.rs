@@ -51,12 +51,19 @@ impl Crabdash {
     pub(crate) fn start_system_resource_loop(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             loop {
-                smol::Timer::after(super::INTERVAL).await;
+                smol::Timer::after(std::time::Duration::from_secs(1)).await;
                 if this
                     .update(cx, |this, cx| {
                         // Resource sampling is live while visible, even if automatic
                         // table refresh is disabled in Preferences.
-                        if system_is_visible(&this.workspaces.layout().root) {
+                        let uuid = this.selected_machine().uuid;
+                        let due = this.system.machines.get(&uuid).is_none_or(|state| {
+                            state.sampling_due(
+                                std::time::Instant::now(),
+                                this.preferences.system_refresh_interval(),
+                            )
+                        });
+                        if due && system_is_visible(&this.workspaces.layout().root) {
                             this.refresh_system_resources(cx);
                         }
                     })
@@ -110,6 +117,7 @@ impl Crabdash {
         let state = self.system.machines.entry(uuid).or_default();
         state.target = Some(target.clone());
         state.loading = true;
+        state.last_requested = Some(std::time::Instant::now());
         let show_initial_loading = state.usage.is_none();
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
             let result = cx
