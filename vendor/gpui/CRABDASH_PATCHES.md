@@ -28,8 +28,8 @@ metadata when running this crate standalone with the macOS linker.
 bindings use an untyped `id`, so Rust cannot reject the incorrect object type.
 Crabdash's native app menu exercises this registration path. Apple's
 [servicesMenu documentation](https://developer.apple.com/documentation/appkit/nsapplication/servicesmenu)
-specifies an `NSMenu` value. This correction was reviewed against the source and
-public API contract; macOS compilation and runtime remain unverified.
+specifies an `NSMenu` value. The native app-menu registration path was verified
+by compiling and launching Crabdash on macOS 27.2.
 
 `src/window.rs`: expose `has_native_overlay_occluder` for embedded native controls.
 The read-only query is intended for the Element paint phase, after tooltip and

@@ -150,9 +150,12 @@ impl NativeButton {
         let mtm = MainThreadMarker::new()?;
         let view = native_view(window)?;
         // Older runtimes lack SF Symbols. Preserve the usable GPUI fallback.
-        if !NSImage::class()
-            .respondsToSelector(sel!(imageWithSystemSymbolName:accessibilityDescription:))
-        {
+        // SAFETY: Ask the class object about its public class selector, rather
+        // than checking instance methods with AnyClass::responds_to.
+        let symbols: bool = unsafe {
+            msg_send![NSImage::class(), respondsToSelector: sel!(imageWithSystemSymbolName:accessibilityDescription:)]
+        };
+        if !symbols {
             return None;
         }
         let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(

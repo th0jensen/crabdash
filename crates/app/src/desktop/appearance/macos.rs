@@ -71,7 +71,7 @@ pub(crate) fn frame(root: Div, window: &Window) -> Div {
     }
     root
 }
-pub(super) fn prepare(window: &Window) {
+pub(in crate::desktop) fn prepare(window: &Window) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
