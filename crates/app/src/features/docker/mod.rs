@@ -1,6 +1,7 @@
 //! Docker feature.
 pub(crate) mod brand;
 mod controller;
+pub(crate) mod details;
 mod request;
 mod view;
 pub(crate) use view::*;

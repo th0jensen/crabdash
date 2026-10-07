@@ -173,16 +173,46 @@ fn container_row_card(
         .copied();
     let actions_disabled = pending_action.is_some();
 
+    let detail_key = (app.selected_machine().uuid, container.id.clone());
+    let details_open = app.docker_details.is_open(&detail_key);
     let identity = div().flex_1().min_w_0().child(
-        clipped_text(container.name.clone())
+        div()
+            .id(SharedString::from(format!(
+                "details-container-{}",
+                container.id
+            )))
             .w_full()
-            .text_size(gpui::rems(style::TEXT / 16.0))
-            .text_color(rgb(style::TEXT_PRIMARY)),
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(rems(4.0 / 16.0))
+            .text_color(rgb(style::TEXT_PRIMARY))
+            .cursor_pointer()
+            .hover(|this| this.text_color(rgb(style::TEXT_SELECTED)))
+            .tooltip(|_, cx| control_tooltip("Container details", cx))
+            .child(lucide_icon(
+                if details_open {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                },
+                style::ICON,
+            ))
+            .child(
+                clipped_text(container.name.clone())
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(rems(style::TEXT / 16.0)),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_docker_details(detail_key.clone(), cx);
+            })),
     );
     let detail = show_id.then(|| {
         fixed_column(160.0)
             .child(
-                clipped_text(container.id.clone())
+                clipped_text(container.id.chars().take(12).collect::<String>())
                     .w_full()
                     .text_size(rems(style::META / 16.0))
                     .text_color(rgb(style::TEXT_MUTED)),
@@ -276,6 +306,9 @@ fn container_row(
         .child(container_row_card(
             app, cx, container, logs_open, show_id, compact,
         ))
+        .when(app.docker_details.is_open(&log_key), |d| {
+            d.child(super::details::render(app, &log_key, compact, cx))
+        })
         .when(logs_open, |d| {
             d.child(crate::features::logs::render(
                 format!("docker-logs-{}-{container_id}", app.selected_machine().uuid),
@@ -288,19 +321,24 @@ fn container_row(
 fn table_header(show_id: bool, compact: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     table_heading()
         .child(
-            div().flex_1().min_w_0().h_full().child(
-                sort_heading(
-                    "docker-sort-name",
-                    "Container",
-                    app.docker_table.sort.indicator(Column::Name),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.docker_table.sort.select(Column::Name);
-                    this.docker_scroll_handle
-                        .set_offset(point(px(0.0), px(0.0)));
-                    cx.notify();
-                })),
-            ),
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .pl(rems((style::ICON + 4.0) / 16.0))
+                .child(
+                    sort_heading(
+                        "docker-sort-name",
+                        "Container",
+                        app.docker_table.sort.indicator(Column::Name),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.docker_table.sort.select(Column::Name);
+                        this.docker_scroll_handle
+                            .set_offset(point(px(0.0), px(0.0)));
+                        cx.notify();
+                    })),
+                ),
         )
         .when(show_id, |this| {
             this.child(

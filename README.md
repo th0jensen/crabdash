@@ -86,7 +86,7 @@ distributions use Tux, and saved machines without distro metadata migrate on ref
 - [x] System keychain integration for credential storage
 - [x] Live CPU, memory, process, network, disk and GPU statistics
 - [x] System service management (`systemd`, `launchd`, Windows services)
-- [ ] Docker inspect and logs
+- [x] Docker inspect and logs
 - [ ] Quick command execution and logs
 
 ## Run
@@ -199,6 +199,13 @@ Container and service logs share an inline viewer on the same surface as their
 table rows, with consistent spacing, a recent-log header, line count, and Copy
 logs control. Log text respects terminal font settings and ANSI colours, and
 long output scrolls in both directions inside a bounded panel.
+
+Click a container name or its chevron to inspect its image, state and health,
+restart policy, port mappings, mounts, and creation time inside the table. Details
+load on demand and offer a refresh control. Unknown values remain unavailable;
+exposed ports without a binding are shown as unpublished. Container identities
+use full Docker IDs internally, with short IDs in the table. Inspection uses the
+same local/SSH Docker transport on every platform.
 
 Use **Apply** to save, **Cancel** to discard edits, or **Restore defaults** to prepare the default settings. Start at login is saved immediately. Preferences use the JSON path above on Linux and `~/Library/Application Support/Crabdash/preferences.json` on macOS. Old startup-only preferences gain defaults automatically. Errors remain visible until dismissed.
 

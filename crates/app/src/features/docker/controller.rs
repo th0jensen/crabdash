@@ -80,6 +80,8 @@ impl Crabdash {
                         {
                             match containers {
                                 Ok(containers) => {
+                                    this.docker_details
+                                        .retain_containers(machine_uuid, &containers);
                                     machine.services.docker = containers;
                                     machine.services.docker_error = None;
                                     machine.services.docker_not_installed = false;
@@ -127,6 +129,7 @@ impl Crabdash {
         else {
             return;
         };
+        self.docker_details.reconcile_target(&machine);
         let ticket = if replace {
             self.docker_refresh.restart(machine_uuid)
         } else {
@@ -160,11 +163,14 @@ impl Crabdash {
                 }
                 match result {
                     Ok(containers) => {
+                        this.docker_details
+                            .retain_containers(machine_uuid, &containers);
                         machine.services.docker = containers;
                         machine.services.docker_error = None;
                         machine.services.docker_not_installed = false;
                     }
                     Err(error) if error.is::<services::docker::DockerNotInstalled>() => {
+                        this.docker_details.remove_machine(machine_uuid);
                         machine.services.docker.clear();
                         machine.services.docker_error = None;
                         machine.services.docker_not_installed = true;
@@ -242,6 +248,7 @@ impl Crabdash {
                 else {
                     return;
                 };
+                let action_succeeded = result.is_ok();
                 match result {
                     Ok(refresh) => {
                         if matches!(action, DockerAction::Remove { .. }) {
@@ -249,12 +256,15 @@ impl Crabdash {
                             this.logs_open_containers.remove(&key);
                             this.expanded_docker_logs.remove(&key);
                             this.docker_log_refresh.forget(&key);
+                            this.docker_details.close(&key);
                         }
                         match refresh {
                             _ if !refresh_current => {
                                 this.refresh_docker_for(machine_uuid, true, cx);
                             }
                             Ok(containers) => {
+                                this.docker_details
+                                    .retain_containers(machine_uuid, &containers);
                                 machine.services.docker = containers;
                                 machine.services.docker_error = None;
                                 machine.services.docker_not_installed = false;
@@ -283,6 +293,9 @@ impl Crabdash {
                             this.set_status_error(message);
                         }
                     }
+                }
+                if action_succeeded && !matches!(action, DockerAction::Remove { .. }) {
+                    this.refresh_docker_details(key, cx);
                 }
                 cx.notify();
             })

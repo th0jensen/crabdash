@@ -189,6 +189,7 @@ impl Crabdash {
                             this.docker_run_modal_open = false;
                         }
                         this.system.remove(uuid);
+                        this.docker_details.remove_machine(uuid);
                         this.machine_refresh.forget(&uuid);
                         this.polling.forget(uuid);
                         this.disks_refresh.forget(&uuid);
