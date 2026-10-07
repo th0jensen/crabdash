@@ -41,3 +41,6 @@ strip = "none"
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
+
+[patch.crates-io]
+libghostty-vt = { path = "vendor/libghostty-vt" }
