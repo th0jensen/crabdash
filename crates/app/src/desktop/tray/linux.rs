@@ -40,6 +40,11 @@ impl CrabdashTray {
         self.send(TrayCommand::Show(token));
     }
 
+    fn preferences(&mut self) {
+        let token = self.activation_token.take();
+        self.send(TrayCommand::Preferences(token));
+    }
+
     fn send(&self, command: TrayCommand) {
         let _ = self.commands.try_send(command);
     }
@@ -81,7 +86,7 @@ impl ksni::Tray for CrabdashTray {
             .into(),
             ksni::menu::StandardItem::<Self> {
                 label: "Preferences…".into(),
-                activate: Box::new(|tray| tray.send(TrayCommand::Preferences)),
+                activate: Box::new(|tray| tray.preferences()),
                 ..Default::default()
             }
             .into(),
@@ -210,12 +215,22 @@ mod tests {
         );
         tray.activate(0, 0);
         assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Show(None))));
+        tray.provide_xdg_activation_token("preferences-token".into());
         let menu = tray.menu();
         let ksni::MenuItem::Standard(preferences) = &menu[1] else {
             panic!("expected preferences item");
         };
         (preferences.activate)(&mut tray);
-        assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Preferences)));
+        assert!(
+            matches!(receiver.try_recv(), Ok(TrayCommand::Preferences(Some(token))) if token == "preferences-token")
+        );
+        tray.activate(0, 0);
+        assert!(matches!(receiver.try_recv(), Ok(TrayCommand::Show(None))));
+        (preferences.activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(TrayCommand::Preferences(None))
+        ));
         let ksni::MenuItem::Standard(quit) = &menu[3] else {
             panic!("expected quit item");
         };

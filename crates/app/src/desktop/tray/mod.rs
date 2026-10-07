@@ -13,7 +13,7 @@ use windows as platform;
 #[derive(Clone)]
 pub enum TrayCommand {
     Show(Option<String>),
-    Preferences,
+    Preferences(Option<String>),
     Quit,
 }
 

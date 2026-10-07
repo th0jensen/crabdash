@@ -23,7 +23,7 @@ define_class!(
         #[unsafe(method(showCrabdash:))]
         fn show(&self, _sender: Option<&NSObject>) { let _ = self.ivars().try_send(TrayCommand::Show(None)); }
         #[unsafe(method(openPreferences:))]
-        fn preferences(&self, _sender: Option<&NSObject>) { let _ = self.ivars().try_send(TrayCommand::Preferences); }
+        fn preferences(&self, _sender: Option<&NSObject>) { let _ = self.ivars().try_send(TrayCommand::Preferences(None)); }
         #[unsafe(method(quitCrabdash:))]
         fn quit(&self, _sender: Option<&NSObject>) { let _ = self.ivars().try_send(TrayCommand::Quit); }
     }

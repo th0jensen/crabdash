@@ -64,8 +64,8 @@ pub fn run() {
                     if cx
                         .update(|cx| match command {
                             super::tray::TrayCommand::Show(token) => show_window(cx, token),
-                            super::tray::TrayCommand::Preferences => {
-                                show_window(cx, None);
+                            super::tray::TrayCommand::Preferences(token) => {
+                                show_window(cx, token);
                                 if let Some(handle) = primary_window(cx) {
                                     if let Err(error) = handle.update(cx, |_, window, cx| window.dispatch_action(Box::new(crate::OpenPreferences), cx)) {
                                         tracing::warn!(%error, "Could not open preferences from the tray");

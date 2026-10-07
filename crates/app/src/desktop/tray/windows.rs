@@ -115,7 +115,7 @@ impl NativeTray {
             Shell_NotifyIconW(NIM_SETFOCUS, &self.data(hwnd));
             let command = match selection {
                 SHOW => Some(TrayCommand::Show(None)),
-                PREFERENCES => Some(TrayCommand::Preferences),
+                PREFERENCES => Some(TrayCommand::Preferences(None)),
                 QUIT => Some(TrayCommand::Quit),
                 _ => None,
             };
