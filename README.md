@@ -133,13 +133,15 @@ Drag tabs along a tab strip to reorder them. Drag onto the edge of a content pan
 to create a split, or onto its center to move the tab into that pane. The preview
 shows where the tab will land. Split dividers resize the panes, and empty panes
 collapse automatically. Tabs stay inside the dashboard window. **Save as** creates
-a named workspace; use the pencil control or Enter to save its name.
+a named workspace with an inline name editor. Use the pencil control to rename an
+existing workspace, then the check control or Enter to save its name.
 
 Workspaces save pane arrangement, tab order and selection, split sizes, sidebar
 width and visibility, and terminal visibility in `workspaces.json` beside
 Preferences. Changes save automatically. Existing flat layouts retain their tab
 order and selection when migrated. Invalid saved files are preserved until
-explicit recovery.
+explicit recovery; save, rename, and delete controls stay disabled until recovery
+successfully writes the reset layouts.
 
 The **System** tab samples the selected machine every two seconds by default while visible,
 including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,

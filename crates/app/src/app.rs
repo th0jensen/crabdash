@@ -445,9 +445,6 @@ impl Render for Crabdash {
             .when(self.preferences_open, |this| {
                 this.child(preferences::render(self, window, cx))
             })
-            .when(self.workspaces.open, |this| {
-                this.child(features::workspaces::popup(self, window, cx))
-            })
             .when(self.open_menu.is_some(), |this| {
                 this.child(crate::desktop::menus::popup(self, window, cx))
             })

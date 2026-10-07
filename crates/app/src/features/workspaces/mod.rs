@@ -2,11 +2,11 @@
 pub(crate) mod model;
 mod store;
 mod view;
-pub(crate) use view::{button, popup};
+pub(crate) use view::button;
 
 use crate::app::{Crabdash, MainTab};
 use crate::components::text_field::TextField;
-use gpui::{AppContext, Context, Entity, Global, Subscription, Window};
+use gpui::{AppContext, Context, Entity, Global, ScrollHandle, Subscription, Window};
 use model::{Layout, Tab};
 use store::{Store, validate_name};
 use uuid::Uuid;
@@ -38,6 +38,7 @@ struct SharedStore {
     revision: u64,
     read_only: bool,
     error: Option<String>,
+    save_error: Option<String>,
 }
 impl Global for SharedStore {}
 
@@ -48,7 +49,9 @@ pub(crate) struct State {
     pub drag_target: Option<(u32, model::Drop)>,
     pub resizing_split: Option<u32>,
     pub name: Entity<TextField>,
+    pub scroll: ScrollHandle,
     pub error: Option<String>,
+    pub save_error: Option<String>,
     pub read_only: bool,
     apply_runtime: bool,
     revision: u64,
@@ -76,6 +79,7 @@ impl State {
                 revision: 0,
                 read_only,
                 error,
+                save_error: None,
             });
         }
         let shared = cx.global::<SharedStore>().clone();
@@ -89,8 +93,10 @@ impl State {
             rename: None,
             drag_target: None,
             resizing_split: None,
-            name: cx.new(|cx| TextField::new("Workspace name", "Workspace name", 1, cx).compact()),
+            name: cx.new(|cx| TextField::new("", "Workspace name", 1, cx).compact()),
+            scroll: ScrollHandle::new(),
             error: shared.error,
+            save_error: shared.save_error,
             read_only: shared.read_only,
             apply_runtime: true,
             revision: shared.revision,
@@ -123,6 +129,7 @@ impl Crabdash {
         self.workspaces.revision = shared.revision;
         self.workspaces.read_only = shared.read_only;
         self.workspaces.error = shared.error.clone();
+        self.workspaces.save_error = shared.save_error.clone();
         let workspace = self.workspaces.store.current();
         self.sidebar_collapsed = workspace.sidebar_collapsed;
         self.sidebar_width = gpui::px(workspace.sidebar_width);
@@ -145,12 +152,34 @@ impl Crabdash {
     }
 
     pub(crate) fn recover_workspaces(&mut self, cx: &mut Context<Self>) {
-        self.workspaces.store = Store::default();
+        self.sync_workspace_store(cx);
+        let mut store = Store::default();
+        let workspace = store.current_mut();
+        workspace.sidebar_collapsed = self.sidebar_collapsed;
+        workspace.sidebar_width = f32::from(self.sidebar_width).clamp(180.0, 420.0);
+        if let Err(error) = store.save() {
+            self.workspaces.error = Some(format!(
+                "Unable to reset saved layouts: {error}. The existing saved layout file is preserved."
+            ));
+            self.workspaces.save_error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
+        self.workspaces.store = store;
         self.workspaces.read_only = false;
         self.workspaces.apply_runtime = true;
         self.workspaces.error = None;
-        self.workspaces.revision = cx.global::<SharedStore>().revision;
-        self.persist_workspace(cx);
+        self.workspaces.save_error = None;
+        self.workspaces.rename = None;
+        self.workspaces.revision = self.workspaces.revision.saturating_add(1);
+        cx.set_global(SharedStore {
+            store: self.workspaces.store.clone(),
+            revision: self.workspaces.revision,
+            read_only: false,
+            error: None,
+            save_error: None,
+        });
+        cx.notify();
     }
 
     pub(crate) fn persist_workspace(&mut self, cx: &mut Context<Self>) {
@@ -173,14 +202,16 @@ impl Crabdash {
             workspace.terminal_open = self.quake_terminal_open;
         }
         if let Err(error) = self.workspaces.store.save() {
-            self.workspaces.error = Some(error.to_string());
+            self.workspaces.save_error = Some(error.to_string());
         } else {
+            self.workspaces.save_error = None;
             self.workspaces.revision = self.workspaces.revision.saturating_add(1);
             cx.set_global(SharedStore {
                 store: self.workspaces.store.clone(),
                 revision: self.workspaces.revision,
                 read_only: false,
                 error: self.workspaces.error.clone(),
+                save_error: None,
             });
         }
         cx.notify();
@@ -275,6 +306,10 @@ impl Crabdash {
 
     pub(crate) fn save_workspace_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_workspace_store(cx);
+        if self.workspaces.read_only {
+            cx.notify();
+            return;
+        }
         if self.workspaces.store.workspaces.len() >= 24 {
             self.workspaces.error = Some("You can save up to 24 workspaces.".into());
             cx.notify();
@@ -298,6 +333,10 @@ impl Crabdash {
         cx: &mut Context<Self>,
     ) {
         self.sync_workspace_store(cx);
+        if self.workspaces.read_only {
+            cx.notify();
+            return;
+        }
         let Some(workspace) = self
             .workspaces
             .store
@@ -312,6 +351,15 @@ impl Crabdash {
             .name
             .update(cx, |field, cx| field.set_text(&name, cx));
         self.workspaces.rename = Some(id);
+        if let Some(index) = self
+            .workspaces
+            .store
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.id == id)
+        {
+            self.workspaces.scroll.scroll_to_item(index);
+        }
         self.workspaces.error = None;
         window.focus(&gpui::Focusable::focus_handle(
             self.workspaces.name.read(cx),
@@ -322,6 +370,10 @@ impl Crabdash {
 
     pub(crate) fn finish_workspace_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_workspace_store(cx);
+        if self.workspaces.read_only {
+            cx.notify();
+            return;
+        }
         let name = self.workspaces.name.read(cx).text().trim().to_string();
         if let Err(error) = validate_name(&name) {
             self.workspaces.error = Some(error.to_string());
@@ -351,6 +403,10 @@ impl Crabdash {
         cx: &mut Context<Self>,
     ) {
         self.sync_workspace_store(cx);
+        if self.workspaces.read_only {
+            cx.notify();
+            return;
+        }
         if self.workspaces.store.workspaces.len() <= 1 {
             return;
         }

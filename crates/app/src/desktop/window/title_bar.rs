@@ -172,7 +172,7 @@ pub(crate) fn render(
                             this.toggle_quake_terminal(window, cx);
                         })),
                 )
-                .child(crate::features::workspaces::button(app, cx))
+                .child(crate::features::workspaces::button(app, window, cx))
                 .child(super::platform::controls(window)),
         )
 }

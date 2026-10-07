@@ -1,17 +1,72 @@
 use crate::app::Crabdash;
 use crate::components::{
-    common::{control_tooltip, lucide_icon, surface_button},
+    common::{clipped_text, control_tooltip, lucide_icon, surface_button},
     style,
 };
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 
-pub(crate) fn button(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+const INFO_LINE: f32 = 18.0;
+
+fn row_height(window: &Window) -> Pixels {
+    window.rem_size() * ((style::CONTROL + 10.0) / 16.0)
+}
+
+fn wrapped_height(
+    text: &str,
+    width: Pixels,
+    lines: usize,
+    app: &Crabdash,
+    window: &Window,
+) -> Pixels {
+    let size = window.rem_size() * (style::META / 16.0);
+    let family = if app.preferences.interface_font.is_empty() {
+        SharedString::from(".SystemUIFont")
+    } else {
+        app.preferences.interface_font.clone().into()
+    };
+    let count = match window.text_system().shape_text(
+        text.to_owned().into(),
+        size,
+        &[TextRun {
+            len: text.len(),
+            font: font(family),
+            color: rgb(style::TEXT_MUTED).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        Some(width.max(px(1.0))),
+        Some(lines),
+    ) {
+        Ok(shaped) => shaped
+            .iter()
+            .map(|line| line.wrap_boundaries.len() + 1)
+            .sum::<usize>()
+            .max(1)
+            .min(lines),
+        Err(error) => {
+            tracing::warn!(%error, "Unable to measure workspace popup text");
+            lines
+        }
+    };
+    window.rem_size() * (INFO_LINE / 16.0) * count as f32
+}
+
+pub(crate) fn button(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Stateful<Div> {
     let name = app.workspaces.store.current().name.clone();
+    let control = window.rem_size() * (style::CHROME_CONTROL / 16.0);
+    let popup_visible = app.workspaces.open
+        && !app.preferences_open
+        && !app.add_machine_modal_open
+        && !app.docker_run_modal_open
+        && app.docker_removal.is_none()
+        && app.open_menu.is_none();
     div()
         .id("workspace-switcher")
         .size(rems(style::CHROME_CONTROL / 16.0))
         .flex_none()
+        .relative()
         .rounded(px(style::RADIUS))
         .flex()
         .items_center()
@@ -32,18 +87,83 @@ pub(crate) fn button(app: &Crabdash, cx: &mut Context<Crabdash>) -> Stateful<Div
             app.sync_workspace_store(cx);
             app.workspaces.open = !app.workspaces.open;
             app.workspaces.rename = None;
+            if app.workspaces.open
+                && let Some(index) = app
+                    .workspaces
+                    .store
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.id == app.workspaces.store.active)
+            {
+                // Before the first paint GPUI's scroll handle still reports
+                // Overflow::Hidden, so scroll_to_item cannot reveal the row.
+                app.workspaces
+                    .scroll
+                    .set_offset(point(px(0.0), -(row_height(window) * index as f32)));
+                app.workspaces.scroll.scroll_to_item(index);
+            }
             app.focus_handle.focus(window);
             cx.notify();
         }))
+        .when(popup_visible, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .size(px(0.0))
+                    .child(deferred(
+                        anchored()
+                            .position_mode(AnchoredPositionMode::Local)
+                            .anchor(Corner::TopRight)
+                            .position(point(control, control + window.rem_size() * (6.0 / 16.0)))
+                            .snap_to_window_with_margin(px(12.0))
+                            .child(popup(app, window, cx)),
+                    )),
+            )
+        })
 }
 
-pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Stateful<Div> {
     let scale = f32::from(window.rem_size()) / 16.0;
     let viewport = window.viewport_size();
     let width = px(324.0 * scale).min((viewport.width - px(24.0)).max(px(0.0)));
-    let right = px(92.0).min((viewport.width - width - px(12.0)).max(px(12.0)));
     let top = px((style::TITLE_BAR + 6.0) * scale);
     let max_height = px(440.0 * scale).min((viewport.height - top - px(12.0)).max(px(0.0)));
+    let read_only = app.workspaces.read_only;
+    let error = app
+        .workspaces
+        .error
+        .as_ref()
+        .or(app.workspaces.save_error.as_ref());
+    let footer = if read_only {
+        "The saved layout file is preserved. Reset saved layouts to enable saving."
+    } else {
+        "Changes to the active workspace are saved automatically."
+    };
+    let text_width = (width - px(36.0 * scale) - px(2.0)).max(px(1.0));
+    let footer_height = wrapped_height(footer, text_width, 4, app, window);
+    let error_height = error.map_or(px(0.0), |error| {
+        wrapped_height(error, text_width, 6, app, window)
+    });
+    let header_height = px((style::CONTROL + 6.0) * scale);
+    let save_height = px((style::CONTROL + 8.0) * scale + 1.0);
+    let row_height = row_height(window);
+    let gaps = 3 + usize::from(error.is_some()) + usize::from(read_only);
+    let chrome_height = px(20.0 * scale + 2.0)
+        + header_height
+        + save_height
+        + footer_height
+        + error_height
+        + px(gaps as f32 * 8.0 * scale)
+        + if read_only {
+            px(style::CONTROL * scale)
+        } else {
+            px(0.0)
+        };
+    let height =
+        (chrome_height + row_height * app.workspaces.store.workspaces.len() as f32).min(max_height);
+    let list_height = (height - chrome_height).max(px(0.0));
     let rows = app
         .workspaces
         .store
@@ -56,12 +176,14 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
             div()
                 .id(SharedString::from(format!("workspace-{id}")))
                 .w_full()
-                .min_h(rems(style::CONTROL / 16.0))
-                .px(px(8.0))
-                .py(px(5.0))
+                .min_w_0()
+                .h(row_height)
+                .flex_none()
+                .px(rems(8.0 / 16.0))
+                .py(rems(5.0 / 16.0))
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(rems(6.0 / 16.0))
                 .rounded(px(style::RADIUS))
                 .when(active, |this| this.bg(rgb(style::CONTROL_SELECTED_BG)))
                 .when(!editing, |this| {
@@ -80,13 +202,7 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
                     this.child(div().flex_1().min_w_0().child(app.workspaces.name.clone()))
                 })
                 .when(!editing, |this| {
-                    this.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(workspace.name.clone()),
-                    )
+                    this.child(clipped_text(workspace.name.clone()).flex_1())
                 })
                 .when(editing, |this| {
                     this.child(
@@ -95,10 +211,13 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
                             Some(Icon::Check),
                             None,
                         )
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.finish_workspace_name(window, cx);
-                            cx.stop_propagation();
-                        })),
+                        .when(read_only, disabled)
+                        .when(!read_only, |this| {
+                            this.on_click(cx.listener(|app, _, window, cx| {
+                                app.finish_workspace_name(window, cx);
+                                cx.stop_propagation();
+                            }))
+                        }),
                     )
                 })
                 .when(!editing, |this| {
@@ -109,12 +228,13 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
                             None,
                         )
                         .tooltip(|_, cx| control_tooltip("Rename workspace", cx))
-                        .on_click(cx.listener(
-                            move |app, _, window, cx| {
+                        .when(read_only, disabled)
+                        .when(!read_only, |this| {
+                            this.on_click(cx.listener(move |app, _, window, cx| {
                                 app.rename_workspace(id, window, cx);
                                 cx.stop_propagation();
-                            },
-                        )),
+                            }))
+                        }),
                     )
                 })
                 .when(
@@ -127,40 +247,36 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
                                 None,
                             )
                             .tooltip(|_, cx| control_tooltip("Delete saved workspace", cx))
-                            .on_click(cx.listener(
-                                move |app, _, window, cx| {
+                            .when(read_only, disabled)
+                            .when(!read_only, |this| {
+                                this.on_click(cx.listener(move |app, _, window, cx| {
                                     app.remove_workspace(id, window, cx);
                                     cx.stop_propagation();
-                                },
-                            )),
+                                }))
+                            }),
                         )
                     },
                 )
-                .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
+                .on_click(cx.listener(move |app, _, window, cx| {
                     if editing {
                         return;
                     }
-                    if event.click_count() == 2 {
-                        app.rename_workspace(id, window, cx);
-                    } else {
-                        app.restore_workspace(id, window, cx);
-                    }
+                    app.restore_workspace(id, window, cx);
                 }))
         })
         .collect::<Vec<_>>();
 
     div()
         .id("workspace-popup")
-        .absolute()
-        .right(right)
-        .top(top)
         .w(width)
-        .max_h(max_height)
-        .overflow_y_scroll()
+        // Both dimensions must be definite: an auto-height popup containing a
+        // flexing list causes costly recursive intrinsic layout in Taffy.
+        .h(height)
+        .overflow_hidden()
         .flex()
         .flex_col()
-        .gap(px(8.0))
-        .p(px(10.0))
+        .gap(rems(8.0 / 16.0))
+        .p(rems(10.0 / 16.0))
         .bg(rgb(style::SURFACE))
         .border_1()
         .border_color(rgb(style::BORDER))
@@ -170,10 +286,13 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
         .text_color(rgb(style::TEXT_PRIMARY))
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .px(px(8.0))
-                .py(px(3.0))
+                .flex_none()
+                .h(header_height)
+                .px(rems(8.0 / 16.0))
+                .py(rems(3.0 / 16.0))
                 .flex()
                 .items_center()
                 .justify_between()
@@ -190,16 +309,23 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
         .child(
             div()
                 .id("workspace-list")
-                .flex_1()
+                .h(list_height)
+                .flex_none()
+                .w_full()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&app.workspaces.scroll)
                 .children(rows),
         )
-        .when_some(app.workspaces.error.as_ref(), |this, error| {
+        .when_some(error, |this, error| {
             this.child(
                 div()
-                    .px(px(8.0))
+                    .flex_none()
+                    .h(error_height)
+                    .px(rems(8.0 / 16.0))
                     .text_size(rems(style::META / 16.0))
+                    .line_height(rems(INFO_LINE / 16.0))
+                    .line_clamp(6)
                     .text_color(rgb(style::DANGER))
                     .child(error.clone()),
             )
@@ -218,22 +344,43 @@ pub(crate) fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>)
             div()
                 .border_t_1()
                 .border_color(rgb(style::BORDER))
-                .pt(px(8.0))
+                .flex_none()
+                .h(save_height)
+                .pt(rems(8.0 / 16.0))
                 .flex()
                 .items_center()
                 .justify_end()
                 .child(
                     surface_button("workspace-save-as", Some(Icon::Plus), Some("Save as…"))
-                        .on_click(
-                            cx.listener(|app, _, window, cx| app.save_workspace_as(window, cx)),
-                        ),
+                        .when(read_only, disabled)
+                        .when(!read_only, |this| {
+                            this.on_click(
+                                cx.listener(|app, _, window, cx| app.save_workspace_as(window, cx)),
+                            )
+                        }),
                 ),
         )
         .child(
             div()
-                .px(px(8.0))
+                .flex_none()
+                .h(footer_height)
+                .px(rems(8.0 / 16.0))
                 .text_size(rems(style::META / 16.0))
+                .line_height(rems(INFO_LINE / 16.0))
+                .line_clamp(4)
                 .text_color(rgb(style::TEXT_MUTED))
-                .child("Changes to the active workspace are saved automatically."),
+                .child(footer),
         )
+}
+
+fn disabled(control: Stateful<Div>) -> Stateful<Div> {
+    control
+        .cursor_default()
+        .text_color(rgb(style::TEXT_MUTED))
+        .opacity(0.5)
+        .hover(|this| {
+            this.bg(rgb(style::SURFACE))
+                .text_color(rgb(style::TEXT_MUTED))
+        })
+        .on_click(|_, _, cx| cx.stop_propagation())
 }
