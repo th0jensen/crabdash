@@ -3,6 +3,7 @@ use crate::{
     features::workspaces::model::{Node, Tab},
 };
 use gpui::*;
+use machines::machine::Machine;
 use uuid::Uuid;
 
 fn system_is_visible(node: &Node) -> bool {
@@ -119,7 +120,7 @@ impl Crabdash {
             .machines
             .iter()
             .find(|machine| machine.uuid == uuid)
-            .cloned()
+            .map(Machine::command_snapshot)
         else {
             return;
         };
