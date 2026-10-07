@@ -12,6 +12,7 @@ It provides a single interface for inspecting and controlling:
 - local system services
 - Docker containers
 - disks and mounts
+- live CPU, memory, swap, load, and uptime
 - remote Linux, macOS, and Windows machines over SSH
 
 The goal is to replace scattered terminal commands with a focused control panel while still allowing quick fallbacks to the terminal when needed.
@@ -28,7 +29,7 @@ The workspace has five crates:
 - `services`: platform-neutral Docker and system-service contracts and actions.
 - `utils`: shared data models, arguments, raw command output, and domain parsers.
 
-Inside `app`, `features/` declares Docker, disks, system services, shared logs, machines, terminals,
+Inside `app`, `features/` declares Docker, disks, system services, live system resources, shared logs, machines, terminals,
 preferences, workspaces, and notifications. Each feature owns its controller, view/editor, and
 feature-specific types, including table filtering and ordering in `table.rs`. `components/` contains reusable UI primitives; `content/`
 only composes the main panels and navigation. `app.rs` owns the root entity and
@@ -107,8 +108,8 @@ menus and their underlined access keys in the same bar; Alt+C/F/E/V/W/H opens a
 menu directly. The menus remain visible while a menu is open, and include
 shortcuts for editing actions even when no text field is focused. Hold Alt to
 reveal tab shortcuts. The icon-only Terminal button keeps its shortcut in the
-tooltip and stays anchored beside the workspace switcher and window controls. Ctrl+1/2/3
-selects Docker/Disks/Services; Ctrl+Shift+M maximizes or restores the window. Use
+tooltip and stays anchored beside the workspace switcher and window controls. Ctrl+1/2/3/4
+selects Docker/Disks/Services/System; Ctrl+Shift+M maximizes or restores the window. Use
 Ctrl+N to add a machine, Ctrl+R to refresh, Ctrl+J for the terminal, F10 for the
 menus, and F11 for full screen. Error notifications stay visible until dismissed
 or cleared by a successful action, including across background refreshes.
@@ -139,6 +140,20 @@ width and visibility, and terminal visibility in `workspaces.json` beside
 Preferences. Changes save automatically. Existing flat layouts retain their tab
 order and selection when migrated. Invalid saved files are preserved until
 explicit recovery.
+
+The **System** tab samples the selected machine every two seconds while visible,
+including in an unfocused split. It shows interval CPU usage, per-core usage where
+available, memory and swap, load averages, and uptime. CPU starts with **Sampling…**
+until two counter snapshots are available. Resource sampling is independent of
+automatic table refresh; live history stays in memory and resets after a reboot
+or replacement connection. Existing workspaces gain System in the focused pane
+without changing their selection or split sizes.
+
+Resource collectors live beside each other in `machines/src/resources/`: Linux
+reads procfs (including WSL), Windows uses CIM counters, and macOS uses built-in
+tools. These command collectors also work through SSH from any supported host;
+native desktop integrations remain selected by host `cfg`. macOS reports estimated
+available memory and aggregate CPU; Windows has no Unix load average.
 
 Preferences has **General**, **Terminal**, and **Interface** sections:
 

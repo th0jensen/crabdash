@@ -17,6 +17,7 @@ impl From<MainTab> for Tab {
             MainTab::Docker => Self::Docker,
             MainTab::Disks => Self::Disks,
             MainTab::Services => Self::Services,
+            MainTab::System => Self::System,
         }
     }
 }
@@ -26,6 +27,7 @@ impl From<Tab> for MainTab {
             Tab::Docker => Self::Docker,
             Tab::Disks => Self::Disks,
             Tab::Services => Self::Services,
+            Tab::System => Self::System,
         }
     }
 }

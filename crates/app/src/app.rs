@@ -24,6 +24,7 @@ pub(crate) enum MainTab {
     Docker,
     Disks,
     Services,
+    System,
 }
 
 impl MainTab {
@@ -32,6 +33,7 @@ impl MainTab {
             Self::Docker => crate::desktop::menus::shortcut("⌘1", "Ctrl+1"),
             Self::Disks => crate::desktop::menus::shortcut("⌘2", "Ctrl+2"),
             Self::Services => crate::desktop::menus::shortcut("⌘3", "Ctrl+3"),
+            Self::System => crate::desktop::menus::shortcut("⌘4", "Ctrl+4"),
         }
     }
     pub(crate) fn label(self) -> &'static str {
@@ -39,6 +41,7 @@ impl MainTab {
             Self::Docker => "Docker",
             Self::Disks => "Disks",
             Self::Services => "Services",
+            Self::System => "System",
         }
     }
 
@@ -47,6 +50,7 @@ impl MainTab {
             Self::Docker => Icon::Boxes,
             Self::Disks => Icon::HardDrive,
             Self::Services => Icon::SquareTerminal,
+            Self::System => Icon::Cpu,
         }
     }
 }
@@ -56,6 +60,7 @@ pub struct Crabdash {
     pub(crate) selected_machine: usize,
     pub(crate) active_tab: MainTab,
     pub(crate) workspaces: features::workspaces::State,
+    pub(crate) system: features::system::State,
     pub(crate) docker_refresh: features::refresh::Requests,
     pub(crate) disks_refresh: features::refresh::Requests,
     pub(crate) services_refresh: features::refresh::Requests,
@@ -118,6 +123,7 @@ impl Crabdash {
         self.refresh_docker_for(uuid, false, cx);
         self.refresh_disks_for(uuid, cx);
         self.refresh_system_services_for(uuid, false, cx);
+        self.refresh_visible_system_resources_for(uuid, cx);
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -160,6 +166,7 @@ impl Crabdash {
             selected_machine: 0,
             active_tab,
             workspaces,
+            system: features::system::State::default(),
             docker_refresh: Default::default(),
             disks_refresh: Default::default(),
             services_refresh: Default::default(),
@@ -220,6 +227,7 @@ impl Crabdash {
         };
         app.refresh_services(cx);
         app.start_update_loop(cx);
+        app.start_system_resource_loop(cx);
         cx.on_release(|app, _| {
             for terminal in app.quake_terminals.values() {
                 if let Some(controller) = &terminal.controller
@@ -308,6 +316,7 @@ impl Render for Crabdash {
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
         ));
         self.apply_workspace_runtime(window, cx);
+        self.prepare_system_resources(cx);
         self.resize_quake_terminal(window, cx);
 
         let root = div()
@@ -332,6 +341,9 @@ impl Render for Crabdash {
             }))
             .on_action(cx.listener(|this, _: &crate::ShowServices, _, cx| {
                 this.select_workspace_tab(MainTab::Services, cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::ShowSystem, _, cx| {
+                this.select_workspace_tab(MainTab::System, cx);
             }))
             .on_action(cx.listener(|_, _: &AboutCrabdash, window, cx| {
                 show_about_dialog(window, cx);

@@ -9,9 +9,9 @@ use std::{
 };
 use uuid::Uuid;
 
-// Version 3 stores splits within one window. Versions 1/2 migrate to a
-// single pane in memory; loading never rewrites the original file.
-const VERSION: u32 = 3;
+// Version 4 adds System. Versions 1/2 migrate to a
+// single pane; version 3 preserves splits. Loading never rewrites the file.
+const VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Workspace {
@@ -313,7 +313,7 @@ mod tests {
                 .layout
                 .pane(1)
                 .map(|(tabs, _)| tabs.to_vec()),
-            Some(vec![Tab::Disks, Tab::Docker, Tab::Services])
+            Some(vec![Tab::Disks, Tab::Docker, Tab::Services, Tab::System])
         );
         assert_eq!(store.current().layout.active(), Tab::Services);
         assert!(store.current().sidebar_collapsed);
@@ -352,7 +352,10 @@ mod tests {
         assert_eq!(store.version, VERSION);
         assert_eq!(
             store.current().layout.pane(1),
-            Some((&[Tab::Services, Tab::Docker, Tab::Disks][..], Tab::Disks))
+            Some((
+                &[Tab::Services, Tab::Docker, Tab::Disks, Tab::System][..],
+                Tab::Disks
+            ))
         );
         assert!(matches!(
             store.current().layout.root,
@@ -389,7 +392,10 @@ mod tests {
         let store: Store = serde_json::from_value(saved.clone())?;
         assert_eq!(
             store.current().layout.pane(1),
-            Some((&[Tab::Disks, Tab::Docker, Tab::Services][..], Tab::Services))
+            Some((
+                &[Tab::Disks, Tab::Docker, Tab::Services, Tab::System][..],
+                Tab::Services
+            ))
         );
         assert!(matches!(store.current().layout.root, Node::Pane { .. }));
         for corrupt in [
@@ -443,6 +449,50 @@ mod tests {
         fs::write(&path, &future)?;
         assert!(Store::load_from(&path, 240.0).is_err());
         assert_eq!(fs::read(&path)?, future);
+        Ok(())
+    }
+
+    #[test]
+    fn version_three_preserves_splits_and_appends_system_only_to_focused_pane() -> Result<()> {
+        use super::super::model::Tab;
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        fs::create_dir_all(&fixture.0)?;
+        let id = Uuid::new_v4();
+        let saved = serde_json::json!({
+            "version":3,"active":id,"workspaces":[{
+                "id":id,"name":"Split","sidebar_collapsed":false,"sidebar_width":240.0,"terminal_open":false,
+                "layout":{"root":{"kind":"split","id":3,"axis":"horizontal","ratio":0.7,
+                    "first":{"kind":"pane","id":1,"tabs":["services","docker"],"active":"docker"},
+                    "second":{"kind":"pane","id":2,"tabs":["disks"],"active":"disks"}},"focused":2}
+            }]
+        });
+        let bytes = serde_json::to_vec_pretty(&saved)?;
+        fs::write(&path, &bytes)?;
+        let store = Store::load_from(&path, 240.0)?;
+        assert_eq!(fs::read(&path)?, bytes);
+        assert_eq!(store.current().layout.focused, 2);
+        assert_eq!(store.current().layout.active(), Tab::Disks);
+        assert_eq!(
+            store.current().layout.pane(1),
+            Some((&[Tab::Services, Tab::Docker][..], Tab::Docker))
+        );
+        assert_eq!(
+            store.current().layout.pane(2),
+            Some((&[Tab::Disks, Tab::System][..], Tab::Disks))
+        );
+        assert_eq!(
+            serde_json::to_value(&store.current().layout)?["root"]["ratio"],
+            serde_json::json!(0.7f32)
+        );
+        let mut bad = saved;
+        bad["workspaces"][0]["layout"]["root"]["second"]["tabs"] = serde_json::json!(["system"]);
+        assert!(serde_json::from_value::<Store>(bad).is_err());
+        store.save_to(&path)?;
+        assert_eq!(
+            Store::load_from(&path, 240.0)?.current().layout,
+            store.current().layout
+        );
         Ok(())
     }
 

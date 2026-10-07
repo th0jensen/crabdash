@@ -153,6 +153,7 @@ impl Crabdash {
                         if this.docker_run_config.cancel_run_for(uuid) {
                             this.docker_run_modal_open = false;
                         }
+                        this.system.remove(uuid);
                         this.machine_refresh.forget(&uuid);
                         this.disks_refresh.forget(&uuid);
                         this.services_refresh.forget(&uuid);

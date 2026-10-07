@@ -5,7 +5,7 @@ mod header;
 use crate::app::{Crabdash, MainTab};
 use crate::components::style;
 use crate::features::{
-    disks, docker, services,
+    disks, docker, services, system,
     workspaces::model::{Axis, Node},
 };
 use gpui::{prelude::*, *};
@@ -68,6 +68,11 @@ fn panel(
         MainTab::Docker => docker::render(app, window, cx, width),
         MainTab::Disks => disks::render(app, window, cx, width),
         MainTab::Services => services::render(app, window, cx, width),
+        MainTab::System => div()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(system::render(app, window, cx)),
     }
 }
 

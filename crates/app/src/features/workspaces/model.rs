@@ -9,9 +9,11 @@ pub(crate) enum Tab {
     Docker,
     Disks,
     Services,
+    System,
 }
 impl Tab {
-    pub(crate) const ALL: [Self; 3] = [Self::Docker, Self::Disks, Self::Services];
+    pub(crate) const ALL: [Self; 4] = [Self::Docker, Self::Disks, Self::Services, Self::System];
+    const LEGACY: [Self; 3] = [Self::Docker, Self::Disks, Self::Services];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +44,13 @@ pub(crate) enum Node {
 pub(crate) struct Layout {
     pub root: Node,
     pub focused: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedTree {
+    root: Node,
+    focused: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,13 +311,32 @@ impl Layout {
                 let flat: Flat = serde_json::from_value(value)?;
                 Self::single(flat.tabs, flat.active)
             }
-            3 => serde_json::from_value(value)?,
+            3 => {
+                let saved: SavedTree = serde_json::from_value(value)?;
+                Self {
+                    root: saved.root,
+                    focused: saved.focused,
+                }
+            }
+            4 => serde_json::from_value(value)?,
             _ => bail!("Unsupported workspace layout version."),
         };
+        let mut layout = layout;
+        if version < 4 {
+            layout.validate_features(&Tab::LEGACY)?;
+            let focused = layout.focused;
+            let Some((tabs, _)) = layout.root.pane_mut(focused) else {
+                bail!("Workspace is missing its focused pane.");
+            };
+            tabs.push(Tab::System);
+        }
         layout.validate()?;
         Ok(layout)
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        self.validate_features(&Tab::ALL)
+    }
+    fn validate_features(&self, expected: &[Tab]) -> Result<()> {
         fn visit(
             node: &Node,
             ids: &mut HashSet<u32>,
@@ -352,7 +380,10 @@ impl Layout {
         let mut ids = HashSet::new();
         let mut tabs = HashSet::new();
         visit(&self.root, &mut ids, &mut tabs, 0)?;
-        if tabs.len() != Tab::ALL.len() || self.pane(self.focused).is_none() {
+        if tabs.len() != expected.len()
+            || expected.iter().any(|tab| !tabs.contains(tab))
+            || self.pane(self.focused).is_none()
+        {
             bail!("Workspace is missing features or its focused pane.");
         }
         Ok(())
@@ -476,6 +507,11 @@ impl Layout {
         };
         candidate.root = root;
         if let Some((anchor, axis)) = source_group {
+            let anchor = if anchor == target {
+                new_split.map_or(anchor, |(split, _)| split)
+            } else {
+                anchor
+            };
             candidate.root.equalize_group_containing(anchor, axis);
         }
         if let Some((split, axis)) = new_split {
@@ -491,13 +527,7 @@ impl Layout {
 
 impl<'de> Deserialize<'de> for Layout {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Saved {
-            root: Node,
-            focused: u32,
-        }
-        let saved = Saved::deserialize(deserializer)?;
+        let saved = SavedTree::deserialize(deserializer)?;
         let layout = Self {
             root: saved.root,
             focused: saved.focused,
@@ -647,7 +677,7 @@ impl LegacyLayout {
             bail!("Workspace is missing its focused pane.");
         };
         let layout = Layout::single(tabs, active);
-        layout.validate()?;
+        layout.validate_features(&Tab::LEGACY)?;
         Ok(layout)
     }
 }
@@ -702,11 +732,15 @@ mod tests {
         let disks_pane = layout.focused;
         assert!(layout.drop_tab(Tab::Services, disks_pane, Drop::Tab(0)));
         assert!(layout.pane(services_pane).is_none());
+        assert!(layout.drop_tab(Tab::System, disks_pane, Drop::Tab(usize::MAX)));
         assert!(layout.drop_tab(Tab::Docker, disks_pane, Drop::Tab(1)));
         assert!(layout.pane(1).is_none());
         assert_eq!(
             layout.pane(disks_pane),
-            Some((&[Tab::Services, Tab::Docker, Tab::Disks][..], Tab::Docker))
+            Some((
+                &[Tab::Services, Tab::Docker, Tab::Disks, Tab::System][..],
+                Tab::Docker
+            ))
         );
         assert!(matches!(layout.root, Node::Pane { id, .. } if id == disks_pane));
         assert_eq!(layout.focused, disks_pane);
@@ -715,28 +749,35 @@ mod tests {
 
     #[test]
     fn all_original_insertion_boundaries_keep_every_feature_once() -> Result<()> {
-        for first in Tab::ALL {
-            for second in Tab::ALL {
-                for third in Tab::ALL {
-                    if first == second || first == third || second == third {
-                        continue;
-                    }
-                    let tabs = vec![first, second, third];
-                    for tab in Tab::ALL {
-                        for boundary in 0..=tabs.len() {
-                            let mut layout = Layout::single(tabs.clone(), tab);
-                            layout.drop_tab(tab, 1, Drop::Tab(boundary));
-                            let expected: Vec<_> = tabs[..boundary]
-                                .iter()
-                                .copied()
-                                .filter(|item| *item != tab)
-                                .chain(std::iter::once(tab))
-                                .chain(tabs[boundary..].iter().copied().filter(|item| *item != tab))
-                                .collect();
-                            assert_eq!(layout.pane(1), Some((expected.as_slice(), tab)));
-                            layout.validate()?;
-                        }
-                    }
+        fn permutations(tabs: Vec<Tab>, remaining: Vec<Tab>, result: &mut Vec<Vec<Tab>>) {
+            if remaining.is_empty() {
+                result.push(tabs);
+                return;
+            }
+            for (index, tab) in remaining.iter().copied().enumerate() {
+                let mut next = tabs.clone();
+                next.push(tab);
+                let mut remaining = remaining.clone();
+                remaining.remove(index);
+                permutations(next, remaining, result);
+            }
+        }
+        let mut orders = Vec::new();
+        permutations(Vec::new(), Tab::ALL.to_vec(), &mut orders);
+        for tabs in orders {
+            for tab in Tab::ALL {
+                for boundary in 0..=tabs.len() {
+                    let mut layout = Layout::single(tabs.clone(), tab);
+                    layout.drop_tab(tab, 1, Drop::Tab(boundary));
+                    let expected: Vec<_> = tabs[..boundary]
+                        .iter()
+                        .copied()
+                        .filter(|item| *item != tab)
+                        .chain(std::iter::once(tab))
+                        .chain(tabs[boundary..].iter().copied().filter(|item| *item != tab))
+                        .collect();
+                    assert_eq!(layout.pane(1), Some((expected.as_slice(), tab)));
+                    layout.validate()?;
                 }
             }
         }
@@ -754,7 +795,10 @@ mod tests {
         assert!(layout.drop_tab(Tab::Docker, 1, Drop::Tab(usize::MAX)));
         assert_eq!(
             layout.pane(1),
-            Some((&[Tab::Disks, Tab::Services, Tab::Docker][..], Tab::Docker))
+            Some((
+                &[Tab::Disks, Tab::Services, Tab::System, Tab::Docker][..],
+                Tab::Docker
+            ))
         );
         if let Node::Pane { id, .. } = &mut layout.root {
             *id = u32::MAX;
@@ -866,7 +910,7 @@ mod tests {
         ));
         assert_eq!(
             layout.pane(1),
-            Some((&[Tab::Docker, Tab::Disks][..], Tab::Disks))
+            Some((&[Tab::Docker, Tab::Disks, Tab::System][..], Tab::Disks))
         );
         layout.validate()
     }
@@ -886,10 +930,41 @@ mod tests {
         };
         let vertical = *vertical;
         assert!(layout.set_ratio(vertical, 0.7));
+        assert!(layout.drop_tab(Tab::System, disks, Drop::Tab(usize::MAX)));
         assert!(layout.drop_tab(Tab::Docker, disks, Drop::Tab(0)));
         assert!(
             matches!(layout.root, Node::Split { id, axis: Axis::Vertical, ratio: 0.7, .. } if id == vertical)
         );
+        layout.validate()
+    }
+
+    #[test]
+    fn replacing_the_source_group_anchor_with_an_opposite_split_still_equalizes_siblings()
+    -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let services = layout.focused;
+        assert!(layout.drop_tab(Tab::Disks, services, Drop::Right));
+        // The middle pane disappears and the surviving anchor pane1 becomes
+        // an opposite-axis pair, which still counts as one horizontal member.
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Top));
+        assert!(layout.pane(services).is_none());
+        let Node::Split {
+            axis, ratio, first, ..
+        } = &layout.root
+        else {
+            bail!("Expected remaining horizontal group");
+        };
+        assert_eq!(*axis, Axis::Horizontal);
+        assert_eq!(*ratio, 0.5);
+        assert!(matches!(
+            first.as_ref(),
+            Node::Split {
+                axis: Axis::Vertical,
+                ratio: 0.5,
+                ..
+            }
+        ));
         layout.validate()
     }
 
@@ -911,6 +986,7 @@ mod tests {
         let mut legacy = valid.clone();
         legacy["detached"] = serde_json::json!([]);
         assert!(serde_json::from_value::<Layout>(legacy.clone()).is_err());
+        legacy["root"]["tabs"] = serde_json::json!(["docker", "disks", "services"]);
         assert!(Layout::from_saved(legacy, 1).is_ok());
         let mut invalid_active = valid.clone();
         invalid_active["root"]["tabs"] = serde_json::json!(["docker", "disks"]);

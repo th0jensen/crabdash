@@ -53,6 +53,7 @@ actions!(
         ShowDocker,
         ShowDisks,
         ShowServices,
+        ShowSystem,
         SubmitModal,
         ToggleFullScreen,
         ToggleSidebar,

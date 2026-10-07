@@ -35,6 +35,11 @@ impl Crabdash {
                 None,
             ),
             KeyBinding::new(
+                crate::desktop::menus::shortcut("cmd-4", "ctrl-4"),
+                crate::ShowSystem,
+                None,
+            ),
+            KeyBinding::new(
                 crate::desktop::menus::shortcut("cmd-,", "ctrl-,"),
                 OpenPreferences,
                 None,

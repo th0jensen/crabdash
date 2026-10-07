@@ -78,6 +78,7 @@ pub(super) fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Docker", crate::ShowDocker),
                 MenuItem::action("Disks", crate::ShowDisks),
                 MenuItem::action("Services", crate::ShowServices),
+                MenuItem::action("System", crate::ShowSystem),
             ],
         },
         Menu {
