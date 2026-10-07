@@ -155,6 +155,7 @@ impl Crabdash {
 
     pub(crate) fn open_add_machine_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_modal_open = true;
+        self.overlay_window = Some(window.window_handle().window_id());
         self.add_machine_error = None;
         window.focus(&self.remote_host_field.focus_handle(cx));
         cx.notify();
@@ -178,13 +179,15 @@ impl Crabdash {
     }
 
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
         self.sidebar_collapsed = !self.sidebar_collapsed;
-        cx.notify();
+        self.persist_workspace(cx);
     }
 
     pub(crate) fn set_sidebar_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
         self.sidebar_width = sidebar::clamp_width(width);
-        cx.notify();
+        self.persist_workspace(cx);
     }
 
     fn clear_remote_machine_form(&mut self, cx: &mut Context<Self>) {

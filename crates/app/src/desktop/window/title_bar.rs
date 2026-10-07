@@ -142,12 +142,12 @@ pub(crate) fn render(
                         .items_center()
                         .justify_center()
                         .text_size(gpui::rems(style::TEXT / 16.0))
-                        .text_color(if app.quake_terminal_open {
+                        .text_color(if app.terminal_is_open_in(window) {
                             rgb(0xD4D4D4)
                         } else {
                             rgb(0xA0A0A0)
                         })
-                        .when(app.quake_terminal_open, |this| {
+                        .when(app.terminal_is_open_in(window), |this| {
                             this.bg(rgb(0x2A2A2A))
                         })
                         .cursor_pointer()
@@ -160,6 +160,7 @@ pub(crate) fn render(
                             this.toggle_quake_terminal(window, cx);
                         })),
                 )
+                .child(crate::features::workspaces::button(app, cx))
                 .child(super::platform::controls(window)),
         )
 }

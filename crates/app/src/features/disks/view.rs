@@ -334,14 +334,13 @@ fn table_header(show_id: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Di
         )
 }
 
-pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Div {
-    let show_id = window.viewport_size().width
-        - if app.sidebar_collapsed {
-            px(0.0)
-        } else {
-            app.sidebar_width
-        }
-        >= px(560.0 * app.preferences.interface_font_size / 13.0);
+pub fn render(
+    app: &Crabdash,
+    _window: &Window,
+    cx: &mut Context<Crabdash>,
+    panel_width: Pixels,
+) -> Div {
+    let show_id = panel_width >= px(560.0 * app.preferences.interface_font_size / 13.0);
     let machine = app.selected_machine();
     let disks = machine.services.disks.clone();
     let mounted = disks.iter().filter(|d| Filter::Mounted.matches(d)).count();

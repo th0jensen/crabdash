@@ -278,14 +278,13 @@ fn system_service_row(
         })
 }
 
-pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Div {
-    let show_details = window.viewport_size().width
-        - if app.sidebar_collapsed {
-            px(0.0)
-        } else {
-            app.sidebar_width
-        }
-        >= px(720.0 * app.preferences.interface_font_size / 13.0);
+pub fn render(
+    app: &Crabdash,
+    _window: &Window,
+    cx: &mut Context<Crabdash>,
+    panel_width: Pixels,
+) -> Div {
+    let show_details = panel_width >= px(720.0 * app.preferences.interface_font_size / 13.0);
     let machine = app.selected_machine();
     let services = machine.services.systemd.clone();
 

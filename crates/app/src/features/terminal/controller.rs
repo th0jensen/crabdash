@@ -13,13 +13,18 @@ impl Crabdash {
         self.quake_terminals.get_mut(&machine_uuid)
     }
 
+    pub(crate) fn terminal_is_open_in(&self, window: &Window) -> bool {
+        self.quake_terminal_open && self.terminal_window == Some(window.window_handle().window_id())
+    }
+
     pub(crate) fn toggle_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
-        if self.quake_terminal_open {
+        if self.terminal_is_open_in(window) {
             self.close_quake_terminal(window, cx);
         } else {
             self.open_quake_terminal(window, cx);
         }
+        self.persist_workspace(cx);
     }
 
     fn quake_terminal_size(&self, window: &Window, cx: &App) -> TerminalSize {
@@ -65,7 +70,7 @@ impl Crabdash {
     }
 
     pub(crate) fn resize_quake_terminal(&mut self, window: &Window, cx: &App) {
-        if !self.quake_terminal_open {
+        if !self.terminal_is_open_in(window) {
             return;
         }
 
@@ -101,6 +106,7 @@ impl Crabdash {
     pub(crate) fn open_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.activate_window();
         self.quake_terminal_open = true;
+        self.terminal_window = Some(window.window_handle().window_id());
         let machine = self.selected_machine().clone();
         let machine_uuid = machine.uuid;
 
@@ -307,6 +313,7 @@ impl Crabdash {
     pub(crate) fn close_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.activate_window();
         self.quake_terminal_open = false;
+        self.terminal_window = None;
         window.focus(&self.focus_handle);
         cx.notify();
     }

@@ -7,3 +7,4 @@ pub(crate) mod notifications;
 pub mod preferences;
 pub(crate) mod services;
 pub(crate) mod terminal;
+pub(crate) mod workspaces;

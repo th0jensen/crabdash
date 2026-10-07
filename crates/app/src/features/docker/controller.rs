@@ -5,8 +5,9 @@ use services::docker::DockerAction;
 use uuid::Uuid;
 
 impl Crabdash {
-    pub(crate) fn open_docker_run_modal(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_docker_run_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.docker_run_modal_open = true;
+        self.overlay_window = Some(window.window_handle().window_id());
         cx.notify();
     }
 

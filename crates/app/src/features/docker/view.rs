@@ -108,6 +108,7 @@ fn action_button(
                     else {
                         return;
                     };
+                    this.overlay_window = Some(window.window_handle().window_id());
                     this.docker_removal = Some(DockerRemoval {
                         machine_uuid,
                         id: id.clone(),
@@ -386,14 +387,13 @@ fn not_installed(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     )
 }
 
-pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -> Div {
-    let show_id = window.viewport_size().width
-        - if app.sidebar_collapsed {
-            px(0.0)
-        } else {
-            app.sidebar_width
-        }
-        >= px(640.0 * app.preferences.interface_font_size / 13.0);
+pub fn render(
+    app: &Crabdash,
+    _window: &mut Window,
+    cx: &mut Context<Crabdash>,
+    panel_width: Pixels,
+) -> Div {
+    let show_id = panel_width >= px(640.0 * app.preferences.interface_font_size / 13.0);
     let machine = app.selected_machine();
     if machine.services.docker_not_installed {
         return not_installed(app, cx);
