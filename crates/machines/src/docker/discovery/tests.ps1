@@ -11,7 +11,7 @@ $originalLocalAppData = $env:LOCALAPPDATA
 try {
     $env:PATH = '' # No installed client may satisfy a fixture's missing-CLI case.
     # The dollar expression in the directory name is literal data.
-    $directory = Join-Path $root 'user''s ‘folder’ [1] $(literal)'
+    $directory = Join-Path $root 'user''s ‘‘folder’’ [1] $(literal)'
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
     $client = Join-Path $directory 'docker.exe'
     [IO.File]::WriteAllText($client, 'fixture executable; discovery must not run this file')
