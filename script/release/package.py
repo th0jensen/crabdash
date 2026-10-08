@@ -45,7 +45,7 @@ NOTICES = {
     "crates/app/assets/brands/README.md": "Docker-Logo-Notice.txt",
 }
 WINDOWS_SYSTEM_DLLS = set("""
-advapi32 bcrypt cfgmgr32 comctl32 comdlg32 crypt32 cryptnet d2d1 d3d11 dcomp
+advapi32 bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 cryptnet d2d1 d3d11 dcomp
 dwmapi dwrite dxgi gdi32 gdiplus icuuc imm32 iphlpapi kernel32 kernelbase mpr msimg32 msvcrt
 ncrypt netapi32 normaliz ntdll ole32 oleaut32 pdh powrprof propsys psapi rpcrt4
 secur32 setupapi shell32 shcore shlwapi user32 userenv usp10 uxtheme version
@@ -186,9 +186,10 @@ def audit_windows(binary):
             end = data.find(b"\0", start, min(start + 256, len(data)))
             require(end >= start, "Invalid PE import name")
             name = data[start:end].decode("ascii").lower()
-            require(name.endswith(".dll") and (name[:-4] in WINDOWS_SYSTEM_DLLS or name.startswith(("api-ms-win-", "ext-ms-win-"))), f"Non-system Windows DLL dependency: {name}")
             imports.append(name)
         require(terminated, "Unterminated PE import directory")
+        external = [name for name in imports if not (name.endswith(".dll") and (name[:-4] in WINDOWS_SYSTEM_DLLS or name.startswith(("api-ms-win-", "ext-ms-win-"))))]
+        require(not external, f"Non-system Windows DLL dependencies: {', '.join(external)}")
     # A delay import could hide a dependency from the regular import table.
     if struct.unpack_from("<I", data, optional + 108)[0] >= 14:
         require(optional_size >= 224, "Truncated PE delay-import directory")
