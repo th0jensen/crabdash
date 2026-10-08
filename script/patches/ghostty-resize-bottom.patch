@@ -1,0 +1,278 @@
+diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
+index 2c78397..4ca8256 100644
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -1549,6 +1549,19 @@ GHOSTTY_API GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
+                                       uint32_t cell_width_px,
+                                       uint32_t cell_height_px);
+ 
++/**
++ * Crabdash opt-in resize with primary-screen bottom anchoring.
++ *
++ * Newly visible rows precede existing content; available history is revealed
++ * first, followed by blank prefix rows if needed. Alternate-screen resizing
++ * and all other effects follow ghostty_terminal_resize().
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_resize_bottom(GhosttyTerminal terminal,
++                                      uint16_t cols,
++                                      uint16_t rows,
++                                      uint32_t cell_width_px,
++                                      uint32_t cell_height_px);
++
+ /**
+  * Set an option on the terminal.
+  *
+diff --git a/src/lib_vt.zig b/src/lib_vt.zig
+index ab04d5c..350d8de 100644
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -279,6 +279,7 @@ comptime {
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
+         @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
++        @export(&c.terminal_resize_bottom, .{ .name = "ghostty_terminal_resize_bottom" });
+         @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
+         @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
+         @export(&c.terminal_scroll_viewport, .{ .name = "ghostty_terminal_scroll_viewport" });
+diff --git a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+index 429a363..235ee7a 100644
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1221,6 +1221,9 @@ pub const Resize = struct {
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+ 
++    /// Grow above existing content, pulling history into the active area.
++    anchor_bottom: bool = false,
++
+     pub const Cursor = struct {
+         x: size.CellCountInt,
+         y: size.CellCountInt,
+@@ -1282,7 +1285,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+         .gt => {
+             // We grow rows after cols so that we can do our unwrapping/reflow
+             // before we do a no-reflow grow.
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.anchor_bottom);
+             try self.resizeWithoutReflow(opts);
+         },
+ 
+@@ -1294,7 +1297,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+                 copy.cols = self.cols;
+                 break :opts copy;
+             });
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.anchor_bottom);
+         },
+     }
+ 
+@@ -1319,6 +1322,7 @@ fn resizeCols(
+     self: *PageList,
+     cols: size.CellCountInt,
+     cursor: ?Resize.Cursor,
++    anchor_bottom: bool,
+ ) Allocator.Error!void {
+     assert(cols != self.cols);
+ 
+@@ -1369,7 +1373,10 @@ fn resizeCols(
+         break :cursor .{
+             .tracked_pin = c.pin orelse try self.trackPin(p),
+             .untrack = c.pin == null,
+-            .remaining_rows = self.rows -| (c.y + 1),
++            .remaining_rows = self.rows -| ((if (anchor_bottom)
++                if (self.pointFromPin(.active, p)) |pt| pt.active.y else c.y
++            else
++                c.y) + 1),
+             .wrapped_rows = wrapped,
+         };
+     } else null;
+@@ -1481,7 +1488,11 @@ fn resizeCols(
+         total += node.rows();
+         if (total >= self.rows) break;
+     } else {
+-        for (total..self.rows) |_| _ = try self.grow();
++        if (anchor_bottom) {
++            try self.prependBlankRows(self.rows - total);
++        } else {
++            for (total..self.rows) |_| _ = try self.grow();
++        }
+     }
+ 
+     // Reflow can unwrap enough rows that a history viewport pin lands in the
+@@ -2801,6 +2812,21 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
+             // Making rows larger we adjust our row count, and then grow
+             // to the row count.
+             .gt => gt: {
++                if (opts.anchor_bottom) {
++                    // Existing pins stay attached to their content. Reveal
++                    // history first, and allocate only the missing prefix.
++                    if (rows > self.total_rows)
++                        try self.prependBlankRows(rows - self.total_rows);
++                    self.rows = rows;
++                    switch (self.viewport) {
++                        .pin => if (self.pinIsActive(self.viewport_pin.*)) {
++                            self.viewport = .active;
++                        },
++                        .active, .top => {},
++                    }
++                    break :gt;
++                }
++
+                 // If our rows increased and our cursor is NOT at the bottom,
+                 // we want to try to preserve the y value of the old cursor.
+                 // In other words, we don't want to "pull down" scrollback.
+@@ -6715,6 +6741,25 @@ pub fn memoryStats(self: *const PageList) MemoryStats {
+     return result;
+ }
+ 
++/// Allocate a blank prefix without moving existing rows or tracked pins.
++/// The complete prefix is allocated before linking it into the live list.
++fn prependBlankRows(self: *PageList, count: usize) Allocator.Error!void {
++    if (count == 0) return;
++    var prefix: List = .{};
++    errdefer while (prefix.popFirst()) |node| self.destroyNode(node);
++    const cap = initialCapacity(self.cols);
++    var remaining = count;
++    while (remaining > 0) {
++        const node = try self.createPage(.{ .cap = cap });
++        node.page().size.rows = @intCast(@min(remaining, node.capacity().rows));
++        remaining -= node.rows();
++        prefix.append(node);
++    }
++    while (prefix.pop()) |node| self.pages.prepend(node);
++    self.total_rows += count;
++    self.viewport_pin_row_offset = null;
++}
++
+ /// Grow the number of rows available in the page list by n.
+ /// This is only used for testing so it isn't optimized in any way.
+ fn growRows(self: *PageList, n: usize) Allocator.Error!void {
+@@ -19615,3 +19660,37 @@ test "PageList split preserves hyperlinks" {
+         try testing.expectEqualStrings("https://example.com", link.uri.slice(second_page.memory));
+     }
+ }
++
++test "PageList anchored growth prepends blanks and preserves tracked content" {
++    const testing = std.testing;
++    var list = try init(testing.allocator, .{ .cols = 5, .rows = 3 });
++    defer list.deinit();
++    for (0..3) |y| {
++        const cell = list.getCell(.{ .active = .{ .x = 0, .y = @intCast(y) } }).?.cell;
++        cell.* = .{
++            .content_tag = .codepoint,
++            .content = .{ .codepoint = .{ .data = @intCast('A' + y) } },
++        };
++    }
++    const tracked = try list.trackPin(list.pin(.{ .active = .{ .x = 0, .y = 1 } }).?);
++    defer list.untrackPin(tracked);
++    try list.resize(.{
++        .rows = 6,
++        .anchor_bottom = true,
++        .cursor = .{ .x = 0, .y = 1, .pin = tracked },
++    });
++    try testing.expectEqual(@as(usize, 6), list.totalRows());
++    try testing.expectEqual(@as(u32, 4), list.pointFromPin(.active, tracked.*).?.active.y);
++    for (0..3) |y| {
++        const cell = list.getCell(.{ .active = .{ .x = 0, .y = @intCast(y) } }).?.cell;
++        try testing.expectEqual(@as(u21, 0), cell.content.codepoint.data);
++        const content = list.getCell(.{ .active = .{ .x = 0, .y = @intCast(y + 3) } }).?.cell;
++        try testing.expectEqual(@as(u21, @intCast('A' + y)), content.content.codepoint.data);
++    }
++    try list.resize(.{ .rows = 2, .anchor_bottom = true });
++    try testing.expectEqual(@as(u32, 0), list.pointFromPin(.active, tracked.*).?.active.y);
++    try list.resize(.{ .rows = 6, .anchor_bottom = true });
++    try testing.expectEqual(@as(usize, 6), list.totalRows());
++    try testing.expectEqual(@as(u32, 4), list.pointFromPin(.active, tracked.*).?.active.y);
++    list.assertIntegrity();
++}
+diff --git a/src/terminal/Screen.zig b/src/terminal/Screen.zig
+index 41149f6..91fa9f4 100644
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -1959,6 +1959,9 @@ pub const Resize = struct {
+     /// currently at a prompt. This detects OSC133 prompts lines and clears
+     /// them. If set to `.last`, only the most recent prompt line is cleared.
+     prompt_redraw: osc.semantic_prompt.Redraw = .false,
++
++    /// Grow above existing content rather than preserving its active Y.
++    anchor_bottom: bool = false,
+ };
+ 
+ const resize_tw = tripwire.module(enum {
+@@ -2050,6 +2053,7 @@ pub inline fn resize(
+         .rows = opts.rows,
+         .cols = opts.cols,
+         .reflow = opts.reflow,
++        .anchor_bottom = opts.anchor_bottom,
+         .cursor = .{
+             .x = self.cursor.x,
+             .y = self.cursor.y,
+diff --git a/src/terminal/Terminal.zig b/src/terminal/Terminal.zig
+index b157994..8c63939 100644
+--- a/src/terminal/Terminal.zig
++++ b/src/terminal/Terminal.zig
+@@ -3733,6 +3733,8 @@ pub fn deccolm(self: *Terminal, alloc: Allocator, mode: DeccolmMode) !void {
+ pub const Resize = struct {
+     cols: size.CellCountInt,
+     rows: size.CellCountInt,
++    /// Opt-in primary-screen growth anchored to its existing bottom.
++    anchor_bottom: bool = false,
+     cell_size_px: ?struct {
+         width: u32,
+         height: u32,
+@@ -3838,6 +3840,7 @@ pub fn resize(
+         .rows = opts.rows,
+         .reflow = self.modes.get(.wraparound),
+         .prompt_redraw = self.flags.shell_redraws_prompt,
++        .anchor_bottom = opts.anchor_bottom,
+     });
+ 
+     // Alternate screen, if it exists, doesn't reflow. The primary resize
+diff --git a/src/terminal/c/main.zig b/src/terminal/c/main.zig
+index d6f9e66..f5a3796 100644
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -182,6 +182,7 @@ pub const terminal_new = terminal.new;
+ pub const terminal_free = terminal.free;
+ pub const terminal_reset = terminal.reset;
+ pub const terminal_resize = terminal.resize;
++pub const terminal_resize_bottom = terminal.resize_bottom;
+ pub const terminal_set = terminal.set;
+ pub const terminal_vt_write = terminal.vt_write;
+ pub const terminal_scroll_viewport = terminal.scroll_viewport;
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+index 63c996c..572a5d7 100644
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -1167,8 +1167,31 @@ pub fn resize(
+     cell_width_px: u32,
+     cell_height_px: u32,
+ ) callconv(lib.calling_conv) Result {
++    return resizeWithAnchor(terminal_, cols, rows, cell_width_px, cell_height_px, false);
++}
++
++/// Crabdash opt-in: only the primary screen grows above existing content.
++pub fn resize_bottom(
++    terminal_: Terminal,
++    cols: size.CellCountInt,
++    rows: size.CellCountInt,
++    cell_width_px: u32,
++    cell_height_px: u32,
++) callconv(lib.calling_conv) Result {
++    return resizeWithAnchor(terminal_, cols, rows, cell_width_px, cell_height_px, true);
++}
++
++fn resizeWithAnchor(
++    terminal_: Terminal,
++    cols: size.CellCountInt,
++    rows: size.CellCountInt,
++    cell_width_px: u32,
++    cell_height_px: u32,
++    anchor_bottom: bool,
++) Result {
+     const wrapper = terminal_ orelse return .invalid_value;
+     wrapper.stream.handler.resize(.{
++        .anchor_bottom = anchor_bottom,
+         .cols = cols,
+         .rows = rows,
+         .cell_size_px = .{

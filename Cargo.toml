@@ -50,4 +50,5 @@ unwrap_used = "deny"
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
 libghostty-vt = { path = "vendor/libghostty-vt" }
+libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }
 portable-pty = { path = "vendor/portable-pty" }

@@ -1,0 +1,2 @@
+# Unified diff context lines preserve the required leading space on blank rows.
+script/patches/*.patch whitespace=-blank-at-eol

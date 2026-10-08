@@ -1,0 +1,109 @@
+diff --git a/src/terminal/c/mouse_encode.zig b/src/terminal/c/mouse_encode.zig
+index 2586a57..75c5ce1 100644
+--- a/src/terminal/c/mouse_encode.zig
++++ b/src/terminal/c/mouse_encode.zig
+@@ -168,11 +168,12 @@ fn setoptTyped(
+                 return;
+             }
+ 
+-            wrapper.opts.size = value.toRenderer() orelse {
++            const size = value.toRenderer() orelse {
+                 log.warn("setopt invalid size values (cell width and height must be non-zero)", .{});
+                 return;
+             };
+-            wrapper.last_cell = null;
++            if (!std.meta.eql(wrapper.opts.size, size)) wrapper.last_cell = null;
++            wrapper.opts.size = size;
+         },
+ 
+         .any_button_pressed => wrapper.opts.any_button_pressed = value.*,
+@@ -190,9 +191,13 @@ pub fn setopt_from_terminal(
+ ) callconv(lib.calling_conv) void {
+     const wrapper = encoder_ orelse return;
+     const t: *ZigTerminal = (terminal_ orelse return).terminal;
++    if (wrapper.opts.event != t.flags.mouse_event or
++        wrapper.opts.format != t.flags.mouse_format)
++    {
++        wrapper.last_cell = null;
++    }
+     wrapper.opts.event = t.flags.mouse_event;
+     wrapper.opts.format = t.flags.mouse_format;
+-    wrapper.last_cell = null;
+ }
+ 
+ pub fn reset(encoder_: Encoder) callconv(lib.calling_conv) void {
+@@ -530,3 +535,74 @@ test "encode: querying required size doesn't update dedupe state" {
+     ));
+     try testing.expect(written > 0);
+ }
++
++test "encode: repeated options preserve cell tracking and changes invalidate it" {
++    const terminal_c = @import("terminal.zig");
++    const Report = struct {
++        fn run(encoder: Encoder, event: Event, buf: []u8) ![]const u8 {
++            var written: usize = 0;
++            try testing.expectEqual(Result.success, encode(
++                encoder,
++                event,
++                buf.ptr,
++                buf.len,
++                &written,
++            ));
++            return buf[0..written];
++        }
++    };
++    var encoder: Encoder = undefined;
++    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &encoder));
++    defer free(encoder);
++    var terminal: Terminal = undefined;
++    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, 80, 24));
++    defer terminal_c.free(terminal);
++    const t = terminal.?.terminal;
++    t.flags.mouse_event = .button;
++    t.flags.mouse_format = .sgr;
++    var size = testSize();
++    size.cell_width = 10;
++    size.cell_height = 10;
++    const track_last_cell = true;
++    const pressed = true;
++    setopt(encoder, .track_last_cell, &track_last_cell);
++    setopt(encoder, .any_button_pressed, &pressed);
++    setopt_from_terminal(encoder, terminal);
++    setopt(encoder, .size, &size);
++
++    var event: Event = undefined;
++    try testing.expectEqual(Result.success, mouse_event.new(&lib.alloc.test_allocator, &event));
++    defer mouse_event.free(event);
++    mouse_event.set_button(event, .left);
++    mouse_event.set_position(event, .{ .x = 5, .y = 6 });
++    var buf: [64]u8 = undefined;
++    try testing.expect((try Report.run(encoder, event, &buf)).len > 0);
++    mouse_event.set_action(event, .motion);
++    setopt_from_terminal(encoder, terminal);
++    setopt(encoder, .size, &size);
++    try testing.expectEqual(@as(usize, 0), (try Report.run(encoder, event, &buf)).len);
++    mouse_event.set_position(event, .{ .x = 6, .y = 6 });
++    try testing.expectEqual(@as(usize, 0), (try Report.run(encoder, event, &buf)).len);
++    mouse_event.set_position(event, .{ .x = 15, .y = 6 });
++    try testing.expect((try Report.run(encoder, event, &buf)).len > 0);
++
++    // Geometry and effective terminal flags invalidate the tracked cell.
++    size.screen_width += 10;
++    setopt(encoder, .size, &size);
++    try testing.expect((try Report.run(encoder, event, &buf)).len > 0);
++    t.flags.mouse_event = .any;
++    setopt_from_terminal(encoder, terminal);
++    try testing.expect((try Report.run(encoder, event, &buf)).len > 0);
++    t.flags.mouse_format = .sgr_pixels;
++    setopt_from_terminal(encoder, terminal);
++    try testing.expectEqualStrings("\x1b[<32;15;6M", try Report.run(encoder, event, &buf));
++    // Pixel motion must report within a cell, even after refreshing options.
++    mouse_event.set_position(event, .{ .x = 16, .y = 6 });
++    setopt_from_terminal(encoder, terminal);
++    setopt(encoder, .size, &size);
++    try testing.expectEqualStrings("\x1b[<32;16;6M", try Report.run(encoder, event, &buf));
++    t.flags.mouse_format = .sgr;
++    setopt_from_terminal(encoder, terminal);
++    try testing.expect((try Report.run(encoder, event, &buf)).len > 0);
++    try testing.expectEqual(@as(usize, 0), (try Report.run(encoder, event, &buf)).len);
++}

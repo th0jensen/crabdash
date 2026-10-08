@@ -372,6 +372,39 @@ impl<'alloc: 'cb, 'cb> Terminal<'alloc, 'cb> {
         from_result(result)
     }
 
+    /// Resize with primary-screen growth above existing content.
+    ///
+    /// Available history is revealed first; any remaining new rows are blank
+    /// prefix rows. Alternate-screen resizing retains its native behavior.
+    /// Other resize effects are identical to [`Self::resize`].
+    pub fn resize_bottom(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> Result<()> {
+        unsafe extern "C" {
+            fn ghostty_terminal_resize_bottom(
+                terminal: ffi::Terminal,
+                cols: u16,
+                rows: u16,
+                cell_width_px: u32,
+                cell_height_px: u32,
+            ) -> ffi::Result::Type;
+        }
+        // SAFETY: The terminal handle is live and the native API validates sizes.
+        from_result(unsafe {
+            ghostty_terminal_resize_bottom(
+                self.inner.as_raw(),
+                cols,
+                rows,
+                cell_width_px,
+                cell_height_px,
+            )
+        })
+    }
+
     /// Perform a full reset of the terminal (RIS).
     ///
     /// Resets all terminal state back to its initial configuration,

@@ -3075,8 +3075,6 @@ dependencies = [
 [[package]]
 name = "libghostty-vt-sys"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df233d9b287cded4bbebba3463c6df7a8bdb516c0341ed984e870ef5594c2e6f"
 
 [[package]]
 name = "libloading"

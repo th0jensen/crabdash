@@ -13,3 +13,10 @@ recognize selected whitespace and offscreen content without formatting or
 retaining untracked refs. Keep these definitions aligned with vendor/ghostty/include.
 Terminal regressions in crates/app/src/features/terminal/state.rs exercise the ABI,
 scrollback, resize, mode queries, and rendering.
+
+The opt-in `Terminal::resize_bottom` wrapper calls the bundled
+`ghostty_terminal_resize_bottom` extension. Its primary-screen resize reveals
+history above existing content and prepends blank rows when history is exhausted.
+Alternate-screen behavior and the original resize API remain unchanged. The
+flag is threaded through Terminal/Screen/PageList; tracked content pins remain
+attached to their rows, and reflow preserves the cursor’s trailing blank cells.
