@@ -80,6 +80,8 @@ jobs:
             libxkbcommon-x11-dev libssl-dev libzstd-dev zlib1g-dev \
             libvulkan1 mesa-vulkan-drivers libsqlite3-dev
           echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> "$GITHUB_ENV"
+          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> "$GITHUB_ENV"
       - name: Configure macOS SDK and static OpenSSL
         if: runner.os == 'macOS'
         run: |
@@ -115,6 +117,7 @@ jobs:
           "CARGO_TARGET_DIR=$env:RUNNER_TEMP/crabdash-target" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           shared-key: release-${{ matrix.target }}-rust-1.95-zig-0.16-${{ steps.ghostty.outputs.revision }}
           workspaces: ${{ runner.os == 'Windows' && format('. -> {0}/crabdash-target', runner.temp) || '. -> target' }}
       - name: Check formatting and release version
