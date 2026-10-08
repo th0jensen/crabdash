@@ -39,12 +39,13 @@ Local desktop features live in `app/src/desktop/{about,appearance,controls,menus
 Each declares adjacent `linux.rs`, `macos.rs`, and `windows.rs` implementations behind a common
 interface, selected with host `cfg` at the module boundary. Linux uses the GPUI menu bar,
 client window controls, systemd login service, and StatusNotifier tray. macOS backends use
-AppKit menus, a persistent status item, native window material, and login registration.
-Refresh and Terminal use AppKit buttons in the same layout rectangles as the GPUI
-controls on Linux and Windows. On macOS 26, these buttons use the Glass bezel;
-older releases use standard buttons, with a GPUI fallback when system symbols
-are unavailable. Reduce Transparency makes the navigation surface opaque and
-disables the glass bezel. Native controls hide behind application overlays.
+AppKit menus, a persistent status item, and login registration. The macOS
+**Liquid Glass** preference enables a native sidebar and toolbar. Refresh uses a
+stock toolbar button; Terminal and Workspaces form a grouped control. Add machine
+uses a stock Glass button on macOS 26 and later. Older releases use standard
+buttons. Turning Liquid Glass off restores the shared dashboard sidebar and
+toolbar without replacing the window or its terminal sessions. Native controls
+disable while application overlays are open.
 Windows backends use caption hit areas, the notification area, and per-user login startup.
 Unavailable startup/tray capabilities remain visible in Preferences.
 
@@ -57,8 +58,20 @@ process for each unit's properties. Its property parser preserves unit identity
 and reports malformed output without publishing a partial inventory. The Services table
 builds visible rows and keeps the same service at the scroll position during refreshes,
 including when inline logs change height.
-Terminal sessions share one API with `local.rs` (portable PTY on
-Unix hosts, ConPTY on Windows) and `ssh.rs` transports. Corresponding output parsers live in
+Terminal sessions share one API with `local.rs` and `ssh.rs` transports. Local
+workers live in sibling `local/unix.rs` and `local/windows.rs` modules. Windows
+services input, output, resizing, and process exit independently, so synchronous
+ConPTY operations do not prevent output draining or shutdown. Its pinned PTY
+patch uses a fresh console cursor and closes unused pipe handles before native
+teardown; see `vendor/portable-pty/CRABDASH_PATCHES.md`.
+Local Windows queries and terminals resolve bundled Windows PowerShell under
+`SystemRoot`, so an edited `PATH` does not break machine discovery or telemetry.
+SSH queries resolve PowerShell on the target machine.
+Docker discovery uses the same Windows target-side resolver locally and over SSH,
+including expanded PATH entries, updated user/machine PATH, and standard Docker
+Desktop install locations. Linux and WSL use their native Linux Docker CLI.
+A missing CLI is distinct from an installed CLI whose daemon cannot be reached.
+Corresponding machine output parsers live in
 `utils/src/{disks,services}/{linux,macos,windows}.rs`; raw `Output` has no domain parsing.
 
 GPUI is pinned to 0.2.2 with a local text-measurement patch in `vendor/gpui`.
@@ -77,7 +90,13 @@ Linux/macOS/Windows backends selected by the machine's platform. Linux reads `os
 over the existing local/SSH transport. Distro logos and display labels live in
 `app/src/features/machines/logos.rs`; their attributed SVGs are embedded from
 `app/assets/machine-logos/` and work offline in installed builds. Unknown Linux
-distributions use Tux, and saved machines without distro metadata migrate on refresh.
+distributions use Tux, Windows machines use the bundled Windows logo, and saved
+machines without distro metadata migrate on refresh. Right-click a machine and
+choose **Rename** to save a display name, including for localhost. Display names
+survive refreshes without changing connection settings or the actual hostname.
+SSH identity discovery also probes Windows CIM when `uname` succeeds with an
+unrecognized identity, including Cygwin/MSYS. Recognized Linux, WSL, and Darwin
+targets retain their Unix detection path.
 
 ## Features (Milestone v0.2.0)
 
@@ -138,14 +157,20 @@ by the login service. This preference is saved in
 The Linux tray icon opens the existing window and offers **Show Crabdash** and
 **Preferences**, and **Quit**. Closing a window keeps its sessions running when a tray is available;
 use Quit to exit. Without tray support, closing the last window exits normally.
+Crabdash runs one process and one dashboard per OS user. Launching it again,
+including from the login service, asks the existing process to show its retained
+window and exits. **Show Crabdash** and **Preferences** restore that same window,
+preserving its layouts and terminal sessions. If an existing process cannot be
+reached, the new launch exits with an error instead of opening another instance.
 Minimizing through Crabdash or closing to the tray pauses System sampling and
 automatic table reads for that dashboard; restoring it refreshes visible panes
-and starts fresh counter baselines. SSH sessions remain available. Unfocused
-visible dashboards continue updating. macOS and Windows also detect native
+and starts fresh counter baselines. SSH sessions remain available. The visible
+dashboard continues updating when unfocused. macOS and Windows also detect native
 minimization; Wayland cannot report external minimization, so Linux tracks
 Crabdash's own minimize and restore actions.
 
 The **Workspaces** button beside Terminal saves and switches named workspaces.
+Save as and Rename select the existing name, so typing replaces it immediately.
 Drag tabs along a tab strip to reorder them. Drag onto the edge of a content pane
 to create a split, or onto its center to move the tab into that pane. The preview
 shows where the tab will land. Split dividers resize the panes, and empty panes
@@ -158,7 +183,7 @@ changing font size reveals the active tab; regular dashboard updates preserve
 manual scrolling. Revealing waits until a drag finishes so the drop target stays put.
 
 Workspaces save pane arrangement, tab order and selection, split sizes, sidebar
-width and visibility, and terminal visibility in `workspaces.json` beside
+width and visibility, and terminal visibility and drawer height in `workspaces.json` beside
 Preferences. Changes save automatically. Existing flat layouts retain their tab
 order and selection when migrated. Invalid saved files are preserved until
 explicit recovery; save, rename, and delete controls stay disabled until recovery
@@ -172,15 +197,33 @@ information; switching or rearranging tabs refreshes newly visible pages.
 The **System** tab samples the selected machine every two seconds by default while visible,
 including in an unfocused split. Its mosaic adapts to the pane width, showing CPU,
 memory, network, disk activity, machine details, and a card for each graphics adapter.
-The process table supports filtering and sorting across the full sampled inventory,
-including idle processes; CPU percentages measure a share of the machine's total CPU
+CPU cards show every processor on machines with up to eight logical processors.
+Larger machines show an eight-processor preview with **Show all** / **Show fewer**
+controls; processor order stays stable and every reading remains accessible.
+Processor meters share equally sized columns and fill narrow panes.
+Network and disk cards keep totals and history visible, with **Show interfaces/devices**
+controls for the full inventory. Each machine remembers its expanded sections while
+the app runs; device rows retain their reported order.
+The process table supports filtering by name, PID or user and sorting across the full
+sampled inventory, including idle processes. User names have their own sortable column
+and remain visible in compact rows. Unix collectors report effective owners with
+numeric UID fallbacks; Windows uses creation-checked process tokens with local names
+or SID fallbacks. Protected or unreadable owners stay unavailable without discarding
+the process. Owner collection requires no elevation; Windows avoids per-process
+network account lookups. CPU percentages measure a share of the machine's total CPU
 capacity. The list renders visible rows and retains the collectors' 8,192-process
 safety limit. Counts distinguish search matches, sampled processes, and the detected
 total, with incomplete samples identified explicitly. CPU and throughput start with
 **Sampling…** until two counter
 snapshots are available. Resource sampling is independent of
 automatic table refresh; **Preferences → System → Sample interval** adjusts it
-from 2 to 60 seconds, including for slower SSH connections. Changes apply while running; charts use actual elapsed sample times, with solid/dashed legends for paired I/O and gaps for unavailable samples. Live history stays in memory and resets after a reboot
+from 2 to 60 seconds, including for slower SSH connections. Changes apply while running;
+charts use actual elapsed sample times, with solid/dashed legends for paired I/O and
+gaps for unavailable samples. Chart footers show their vertical range: throughput
+adapts to recent activity, while CPU, memory and GPU usage use a fixed 0–100% scale.
+Hover a plot to inspect the nearest captured values and their age. Paired readings
+use the same capture time; missing measurements remain **Unavailable**.
+Live history stays in memory and resets after a reboot
 or replacement connection. Hiding System or a sleep/clock interruption breaks the
 history and rebaselines cumulative counters before live rates resume. Delayed
 samples change the status to **Waiting** after three sample intervals, including
@@ -199,19 +242,44 @@ tools. Processes, network, disks and GPUs each declare their own domain module,
 with Linux, macOS and Windows collectors beside each other. These command collectors
 also work through SSH from any supported host;
 native desktop integrations remain selected by host `cfg`. macOS reports estimated
-available memory and aggregate CPU; Windows has no Unix load average. GPU telemetry
+available memory. Local macOS CPU uses native aggregate and per-core counters, with
+stable logical CPU names; macOS over SSH uses the target's aggregate `top` interval.
+If local native CPU sampling is unavailable, aggregate `top` is used as a fallback.
+Windows has no Unix load average. GPU telemetry
 depends on the adapter and driver: missing measurements are shown as unavailable.
 Linux re-enumerates DRM devices each sample and reads telemetry once per physical
 adapter, with optional NVIDIA tools. Device removal and unavailable driver data
-appear on the next sample. Windows keeps GPU
-performance-counter identities separate, and macOS reads driver telemetry when exposed.
+appear on the next sample. WSL discovery also checks the projected
+`/usr/lib/wsl/lib/nvidia-smi` when it is absent from `PATH`. If optional telemetry
+queries are unsupported, an inventory-only query retains device names and PCI
+identities without inventing measurements. Both attempts share one timeout.
+Windows discovers adapters on the measured host through
+DXGI and D3DKMT, retaining idle devices when counters are missing. Performance counters
+join by exact logical adapter and physical GPU identity; hardware names join through
+exact PNP registry keys. Memory capacity includes dedicated video and reserved system
+memory, excluding shared memory and dynamic budgets. Linked GPUs retain separate
+capacities; an unavailable capacity stays unknown. Resource scripts travel through
+stdin on local and SSH Windows connections, under the same collection deadline.
+macOS reads driver telemetry when exposed.
+Linux and macOS network totals exclude the loopback interface; VPN and virtual
+interfaces remain included. CPU and GPU meters follow the configured system
+accent alongside the history graphs.
 
 Preferences has **General**, **System**, **Terminal**, and **Interface** sections:
 
 - General: login/background behavior, automatic refresh, refresh interval, and recent log limits.
 - System: resource sampling interval, independent of automatic table refresh.
 - Terminal: installed monospaced font, font size, line height, TERM/terminfo, true-colour advertisement, scrollback buffer, and initial panel rows. Font changes update existing terminals and log views; environment and buffer settings affect new sessions.
-- Interface: system or installed font, font size, sidebar width, minimum equal tab widths, and persistent shortcut hints. Tabs expand together to fit their titles and shortcuts; showing hints does not move them. Controls scale with the interface font size.
+- Interface: system or installed font, font size, sidebar width, minimum equal tab widths, persistent shortcut hints, and system accent colours. macOS also has an independent Liquid Glass toggle. Tabs expand together to fit their titles and shortcuts; showing hints does not move them. Controls scale with the interface font size.
+
+**Use system accent** colours the icon and title of the selected tab in the
+focused pane. Selected tabs in other split panes stay neutral, and tab backgrounds
+retain the dashboard surface colour. The preference also colours primary resource
+graphs and the selected machine in the shared sidebar. macOS uses the AppKit
+control accent, Linux reads the desktop Settings portal, and Windows observes
+the system UI accent. Unavailable accents use the normal dashboard palette.
+Liquid Glass and system accent preferences apply immediately when saved;
+AppKit controls retain their standard system appearance.
 
 Docker, disk, and service tables share rounded cards, neutral controls and consistent labels,
 status filters, and a live search field. Click a data-column heading to sort;
@@ -243,6 +311,49 @@ scrolls forward; Ctrl+Shift+Home/End jumps to the beginning/latest output. Click
 application mode, and paste respects bracketed-paste mode. While the terminal has
 focus, shell editing keys such as Ctrl+A, Ctrl+E, Ctrl+U, and Ctrl+W go to the shell.
 
+Drag over terminal text to select it; double-click selects a word and triple-click
+selects a logical line, including soft wraps. Holding Alt while dragging selects
+a rectangle. Dragging at the grid's top or bottom scrolls through history.
+Copy uses **⌘C** on macOS or **Ctrl+Shift+C**/**Ctrl+Insert** on Linux and Windows;
+the Edit menu's Copy targets the focused terminal pane. **Ctrl+C** interrupts the
+shell on macOS and Linux; on Windows it copies a selection and otherwise interrupts.
+Typing or pasting clears the selection. Copy preserves Unicode and soft wraps.
+
+The terminal drawer combines tabs and the grouped **+** and Hide controls in one header row;
+the controls stay at its upper-right corner, with `user@host` available in each tab's tooltip. Use **+**
+to open another shell, select a tab to switch shells, or close that tab to stop its
+session. Drag tabs to reorder them or to a terminal pane's edge to create a split;
+drop onto its center to join tabs. Splits stay inside the drawer, and each visible
+shell receives its own pane size. Hiding the drawer preserves its sessions and history.
+An open drawer follows machine selection, including after adding or deleting a
+machine. Returning to a machine restores its existing sessions and splits.
+Double-click a tab title to rename that live session. Enter saves the name and
+Escape cancels; clearing the name restores the shell's automatic title. These
+session names last while the app runs.
+Typing and pasting while a shell connects is buffered for that session. A failed
+connection or closed session discards its pending input.
+
+Use **Ctrl+Shift+T** (**⌘T** on macOS) to open a terminal session. With a terminal
+focused, **Ctrl+Shift+W** (**⌘⇧W**) closes that session and **Ctrl+PageUp/PageDown**
+(**⌥⌘←/→**) switches tabs within its pane. These commands also appear in the File
+and View menus; session actions are disabled while editing a modal or dragging.
+
+With a terminal focused, **Ctrl+Shift+D** (**⌘D**) opens a new shell in a split
+to its right; **Ctrl+Shift+E** (**⌘⇧D**) opens one below. These commands appear
+in the File menu. Each split starts an independent session and keeps the original
+pane's selected tab. Use **Ctrl+Shift+arrow** (**⌃⌘arrow**) or the Window menu
+to focus an adjacent terminal pane. Focus follows the pane geometry and stops at
+the drawer's edges.
+
+Drag an empty area of the terminal's upper header or its upper edge to resize it smoothly in pixels;
+buttons and tabs retain their own click and drag actions. Split dividers resize
+terminal panes. The shell's grid changes only when another complete row or column
+fits, while PTY pixel dimensions follow the drawable content and display scale.
+Initial panel rows in Preferences set the height until the drawer is resized.
+Each workspace remembers its chosen pixel height; smaller windows temporarily
+limit it, and enlarging the window restores it. Dragging can use the available
+window height.
+
 GNOME requires AppIndicator support to display tray icons. On Fedora, install
 `gnome-shell-extension-appindicator` and enable
 `appindicatorsupport@rgcjonas.gmail.com` with `gnome-extensions enable`. If the
@@ -251,8 +362,11 @@ extension was newly installed, a new desktop login may be needed to load it.
 ## Windows builds
 
 Native Windows support is experimental until the Windows validation job and device checks
-have run. WSL uses the Linux backend; tray and graphical login startup depend on the WSL
-session's desktop and systemd capabilities.
+have run. The x86-64 GNU release executable has been cross-built on Fedora with its
+application icon, DPI manifest and all sixteen embedded Direct3D shaders. Windows
+rendering, terminals, tray and login startup still require device checks. WSL uses
+the Linux backend and requires a graphical session such as WSLg; tray and graphical
+login startup depend on the session's desktop and systemd capabilities.
 
 Build native `.exe` files on Windows with Rust's `x86_64-pc-windows-msvc` target,
 Visual Studio C++ build tools, the Windows SDK's `fxc.exe`, and Zig **0.16.0**. Set
@@ -265,9 +379,30 @@ cargo build --locked --release --target x86_64-pc-windows-msvc -p crabdash
 cargo test --locked --workspace --target x86_64-pc-windows-msvc -- --test-threads=1
 ```
 
-The manually dispatched **Build and Test - Windows** workflow configures these tools,
-builds release shaders and the executable, runs workspace tests, and uploads the `.exe`.
-It has not yet been executed. Windows Preferences use `%APPDATA%/Crabdash/preferences.json`.
+Linux cross-builds use Rust's `x86_64-pc-windows-gnu` target, MinGW-w64 GCC/binutils
+with an MSVCRT-compatible runtime, Zig **0.16.0**, and a host-native **vkd3d 2.1**
+shader compiler. Fedora's `mingw64-gcc`, `mingw64-binutils` and `mingw64-crt` provide
+the tested C toolchain. Set `GPUI_VKD3D_COMPILER` to the compiler's absolute path;
+older vkd3d 1.17 cannot compile GPUI's structured-buffer shaders. Resources follow
+the Windows target on every host, and release builds embed Shader Model 4.1 DXBC:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+export RC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-windres
+export GPUI_VKD3D_COMPILER=/absolute/path/to/vkd3d-compiler
+cargo build --locked --release --target x86_64-pc-windows-gnu -p crabdash
+```
+
+Distribute the release executable with the bundled IBM Plex Sans font notice.
+Debug builds compile shaders from the build checkout at runtime and are intended
+for development, rather than distribution.
+
+The **Build and Release** workflow configures MSVC, the Windows SDK and Zig,
+builds release shaders and the executable, runs workspace and PTY cleanup tests,
+and packages the `.exe` with notices. Windows Preferences use `%APPDATA%/Crabdash/preferences.json`.
 Windows login startup uses Crabdash's own value under the current user's
 [Run key](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
 Preferences read its command as well as its presence. A different or malformed command
@@ -278,6 +413,28 @@ describes the Run registration, not external Windows startup-blocking policies.
 Windows service logs show recent Service Control Manager events; they are distinct from
 an application's own log files. Docker over Windows SSH uses encoded PowerShell transport
 and direct native argument handling.
+
+## Releases
+
+Download platform packages from [GitHub Releases](https://github.com/th0jensen/crabdash/releases).
+The release pipeline builds and tests native executables for macOS Apple Silicon and
+Intel, Linux ARM64 and x86-64, and Windows x86-64. WSLg uses the matching Linux package.
+Linux packages are built on Ubuntu 22.04 and require glibc 2.35 or newer, Wayland or
+X11, Vulkan, and the runtime libraries documented in the archive. macOS requires
+13 or newer; Liquid Glass is available on macOS 26. Windows requires Windows 10
+version 1809 or newer and Direct3D 11. Windows interactive device validation remains
+pending.
+
+Every package includes third-party license notices. macOS app bundles are ad-hoc
+signed and verified, but are not Developer ID signed or notarized. Gatekeeper may
+require **System Settings → Privacy & Security → Open Anyway** on first launch.
+macOS packaging rejects dependencies on Homebrew or build-machine dylibs; Linux
+packaging checks the declared glibc baseline and resolves its system libraries.
+
+CI runs on pull requests, master pushes, and manual dispatch. Version tags trigger
+publication only after all five jobs pass and their packages and receipts are
+verified. `SHA256SUMS` covers every release asset. Release notes live in
+`releases/<tag>.md`; the tag must match the Cargo workspace and lockfile versions.
 
 ## Motivation
 

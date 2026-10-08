@@ -1,0 +1,17 @@
+Crabdash third-party Rust dependency notices
+Generated from Cargo.lock using cargo-about 0.9.2.
+This listing covers dependencies for the five release targets, including build tools.
+Additional native, font and artwork notices are bundled in the licenses directory.
+Source for the released application: https://github.com/th0jensen/crabdash
+
+{{#each licenses}}
+======================================================================
+{{name}} ({{id}})
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}} {{crate.repository}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

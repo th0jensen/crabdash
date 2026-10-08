@@ -1,0 +1,183 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - name: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: Linux x86-64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: Linux ARM64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: Windows x86-64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      LIBGHOSTTY_VT_SYS_CPU: baseline
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Read pinned Ghostty revision
+        id: ghostty
+        run: echo "revision=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config \
+            libasound2-dev libfontconfig1-dev libglib2.0-dev libva-dev \
+            libwayland-dev libxcb1-dev libx11-xcb-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libssl-dev libzstd-dev zlib1g-dev \
+            libvulkan1 mesa-vulkan-drivers libsqlite3-dev
+          echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+      - name: Configure macOS SDK and static OpenSSL
+        if: runner.os == 'macOS'
+        run: |
+          echo 'DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer' >> "$GITHUB_ENV"
+          export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+          if ! xcrun -sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun -sdk macosx metal --version
+          xcrun -sdk macosx --find metallib
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+      - name: Configure MSVC and Windows SDK
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Locate Windows shader compiler and configure static CRT
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $kitsDirectory = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $shaderCompiler = Get-ChildItem $kitsDirectory -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } |
+            Where-Object { Test-Path $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (-not $shaderCompiler) { throw 'Windows SDK fxc.exe is required.' }
+          "GPUI_FXC_PATH=$shaderCompiler" >> $env:GITHUB_ENV
+          'RUSTFLAGS=-C target-feature=+crt-static' >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/crabdash-target" >> $env:GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}-rust-1.95-zig-0.16-${{ steps.ghostty.outputs.revision }}
+          workspaces: ${{ runner.os == 'Windows' && format('. -> {0}/crabdash-target', runner.temp) || '. -> target' }}
+      - name: Check formatting and release version
+        run: |
+          cargo fmt --all -- --check
+          python script/release/check-version.py "${GITHUB_REF_NAME}"
+      - name: Build executable with embedded shaders
+        run: cargo build --locked --release --target "${{ matrix.target }}" -p crabdash
+      - name: Run platform tests
+        run: cargo test --locked --release --workspace --lib --target "${{ matrix.target }}" -- --test-threads=1
+      - name: Check Windows PTY setup failure cleanup
+        if: runner.os == 'Windows'
+        run: cargo test --locked --release --manifest-path vendor/portable-pty/Cargo.toml --target "${{ matrix.target }}" unclaimed_or_failed_session_closes_without_cursor_reply -- --test-threads=1
+      - name: Package and audit executable
+        run: |
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          suffix=""
+          if [ "$RUNNER_OS" = Windows ]; then suffix=.exe; fi
+          version=$(python script/release/check-version.py)
+          python script/release/package.py --target "${{ matrix.target }}" \
+            --binary "$target_dir/${{ matrix.target }}/release/crabdash$suffix" \
+            --version "$version" --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish complete release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Verify assets and generate checksums
+        run: python script/release/verify-assets.py dist "${GITHUB_REF_NAME}"
+      - name: Publish release notes and all executables
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          notes="releases/$tag.md"
+          test -f "$notes"
+          if gh release view "$tag" --json isDraft,assets > "$RUNNER_TEMP/release.json"; then
+            if ! python -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["isDraft"] else 1)' "$RUNNER_TEMP/release.json"; then
+              python script/release/verify-published.py dist "$RUNNER_TEMP/release.json"
+              exit 0
+            fi
+          else
+            gh release create "$tag" --draft --verify-tag --title "$tag" --notes-file "$notes"
+          fi
+          gh release upload "$tag" dist/* --clobber
+          gh release view "$tag" --json isDraft,assets > "$RUNNER_TEMP/release.json"
+          python script/release/verify-published.py dist "$RUNNER_TEMP/release.json"
+          gh release edit "$tag" --title "$tag" --notes-file "$notes" --draft=false --latest
