@@ -9,6 +9,7 @@ use crate::components::{
 };
 use crate::features::workspaces::model::{Drop, Tab};
 use gpui::{prelude::*, *};
+use lucide_icons::Icon;
 use std::{cell::Cell, rc::Rc};
 use uuid::Uuid;
 
@@ -73,7 +74,7 @@ fn tab_icon(tab: MainTab, accent: Option<u32>) -> Div {
     if tab == MainTab::Docker {
         crate::features::docker::brand::icon_with_color(
             style::ICON,
-            accent.unwrap_or(style::TEXT_PRIMARY),
+            accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
         )
     } else {
         div()
@@ -101,7 +102,7 @@ fn text_width(app: &Crabdash, text: &str, size: f32, window: &Window) -> Pixels 
             &[TextRun {
                 len: text.len(),
                 font: font(family),
-                color: rgb(style::TEXT_PRIMARY).into(),
+                color: crate::components::style::rgb(style::TEXT_PRIMARY).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -111,21 +112,11 @@ fn text_width(app: &Crabdash, text: &str, size: f32, window: &Window) -> Pixels 
         .width
 }
 
-fn tab_width(app: &Crabdash, window: &Window) -> Pixels {
+fn tab_width(app: &Crabdash, tab: MainTab, window: &Window) -> Pixels {
     let scale = window.rem_size() / 16.0;
-    Tab::ALL
-        .iter()
-        .fold(scale * app.preferences.tab_width, |width, tab| {
-            let tab: MainTab = (*tab).into();
-            let title = text_width(app, tab.label(), style::TEXT, window);
-            let hint = text_width(app, tab.shortcut(), style::META, window);
-            let margin = shortcut_reserve(hint, scale);
-            width.max(title + scale * (style::ICON + 4.0) + margin * 2.0)
-        })
-}
-
-fn shortcut_reserve(hint: Pixels, scale: Pixels) -> Pixels {
-    hint + scale * 8.0
+    // Both controls and the two compact gaps belong to this tab's title group.
+    text_width(app, tab.label(), style::TEXT, window)
+        + scale * (16.0 + style::ICON + 4.0 + 4.0 + 18.0)
 }
 
 fn reorder(
@@ -154,7 +145,6 @@ fn tab_button(
     index: usize,
     tab: MainTab,
     active: bool,
-    hints: bool,
     width: Pixels,
     title_width: Pixels,
     cx: &mut Context<Crabdash>,
@@ -164,12 +154,6 @@ fn tab_button(
     let accent = (active && app.workspaces.layout().focused == pane)
         .then(|| crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx))
         .flatten();
-    let shortcut = || {
-        div()
-            .flex_none()
-            .text_size(rems(style::META / 16.0))
-            .child(tab.shortcut())
-    };
     div()
         .id(SharedString::from(format!(
             "pane-{pane}-tab-{}",
@@ -180,41 +164,46 @@ fn tab_button(
         .w(width)
         .flex_none()
         .px(rems(8.0 / 16.0))
-        .relative()
         .flex()
         .items_center()
         .justify_center()
         .text_size(rems(style::TEXT / 16.0))
         .line_height(relative(1.0))
         .whitespace_nowrap()
-        .text_color(rgb(if active && app.workspaces.layout().focused == pane {
-            style::TEXT_SELECTED
-        } else if active {
-            style::TEXT_PRIMARY
-        } else {
-            style::TEXT_MUTED
-        }))
+        .text_color(crate::components::style::rgb(
+            if active && app.workspaces.layout().focused == pane {
+                style::TEXT_SELECTED
+            } else if active {
+                style::TEXT_PRIMARY
+            } else {
+                style::TEXT_MUTED
+            },
+        ))
         .border_r_1()
-        .border_color(rgb(style::BORDER))
-        .bg(rgb(if active { 0x181818 } else { 0x202020 }))
+        .border_color(crate::components::style::rgb(style::BORDER))
+        .bg(crate::components::style::rgb(if active {
+            0x181818
+        } else {
+            0x202020
+        }))
         .when(!active, |this| this.border_b_1())
         .cursor_pointer()
         .hover(move |this| {
-            this.bg(rgb(if active {
+            this.bg(crate::components::style::rgb(if active {
                 0x181818
             } else {
                 style::SURFACE_HOVER
             }))
-            .text_color(rgb(style::TEXT_SELECTED))
+            .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .drag_over::<DraggedTab>(move |this, drag, _, cx| {
             if !valid_hover(&hover_owner, drag, cx) {
                 return this;
             }
             let this = this
-                .bg(rgb(0x383B3D))
+                .bg(crate::components::style::rgb(0x383B3D))
                 .border_0()
-                .border_color(rgb(style::TAB_INDICATOR));
+                .border_color(crate::components::style::rgb(style::TAB_INDICATOR));
             if drag.source_pane != pane || index < drag.source_index {
                 this.border_l_2()
             } else if index > drag.source_index {
@@ -235,8 +224,7 @@ fn tab_button(
                 control_tooltip(format!("{} · drag to reorder or split", tab.label()), cx)
             })
         })
-        // Center the icon and title as one compact group. Reserve shortcut
-        // space on both sides so holding Alt never shifts the group.
+        // The icon, measured title and close control form one compact group.
         .child(
             div()
                 .flex_none()
@@ -253,18 +241,33 @@ fn tab_button(
                         .overflow_hidden()
                         .when_some(accent, |this, accent| this.text_color(rgb(accent)))
                         .child(tab.label()),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "pane-{pane}-close-{}",
+                            tab.label()
+                        )))
+                        .size(rems(18.0 / 16.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .text_color(crate::components::style::rgb(style::TAB_CLOSE))
+                        .opacity(0.65)
+                        .hover(|this| {
+                            this.opacity(1.0)
+                                .bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                        })
+                        .tooltip(move |_, cx| control_tooltip(format!("Close {}", tab.label()), cx))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.close_workspace_tab(pane, tab, cx);
+                            cx.stop_propagation();
+                        }))
+                        .child(lucide_icon(Icon::X, 12.0)),
                 ),
-        )
-        .child(
-            div()
-                .absolute()
-                .right(rems(4.0 / 16.0))
-                .top_0()
-                .bottom_0()
-                .flex()
-                .items_center()
-                .text_color(rgb(style::TEXT_MUTED))
-                .child(shortcut().opacity(if hints { 1.0 } else { 0.0 })),
         )
         .on_click(cx.listener(move |app, _, _, cx| app.select_pane_tab(pane, tab, cx)))
         .on_drag(
@@ -306,16 +309,17 @@ pub(super) fn render(
     viewport: Pixels,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
-    let hints =
-        app.preferences.always_show_shortcuts || window.modifiers().alt || app.open_menu.is_some();
-    let width = tab_width(app, window);
-    let scroll = scroll::handle(app, pane, tabs, active, width, viewport, window, cx);
+    let widths: Vec<_> = tabs
+        .iter()
+        .map(|tab| tab_width(app, (*tab).into(), window))
+        .collect();
+    let scroll = scroll::handle(app, pane, tabs, active, &widths, viewport, window, cx);
     let hover_owner = cx.entity().downgrade();
     div()
         .id(SharedString::from(format!("pane-{pane}-tab-strip")))
         .h(rems(style::BAR / 16.0))
         .flex_none()
-        .bg(rgb(0x202020))
+        .bg(crate::components::style::rgb(0x202020))
         .flex()
         .items_center()
         .overflow_x_scroll()
@@ -334,20 +338,14 @@ pub(super) fn render(
             }),
         )
         .children(tabs.iter().enumerate().map(|(index, tab)| {
-            let hint = text_width(app, MainTab::from(*tab).shortcut(), style::META, window);
-            let scale = window.rem_size() / 16.0;
-            let title_width = text_width(app, MainTab::from(*tab).label(), style::TEXT, window)
-                .min(
-                    (width - scale * (style::ICON + 4.0) - shortcut_reserve(hint, scale) * 2.0)
-                        .max(px(0.0)),
-                );
+            let width = widths[index];
+            let title_width = text_width(app, MainTab::from(*tab).label(), style::TEXT, window);
             tab_button(
                 app,
                 pane,
                 index,
                 (*tab).into(),
                 *tab == active,
-                hints,
                 width,
                 title_width,
                 cx,
@@ -360,11 +358,11 @@ pub(super) fn render(
                 .min_w(rems(24.0 / 16.0))
                 .h_full()
                 .border_b_1()
-                .border_color(rgb(style::BORDER))
+                .border_color(crate::components::style::rgb(style::BORDER))
                 .child("")
                 .drag_over::<DraggedTab>(move |this, drag, _, cx| {
                     if valid_hover(&hover_owner, drag, cx) {
-                        this.bg(rgb(0x383B3D))
+                        this.bg(crate::components::style::rgb(0x383B3D))
                     } else {
                         this
                     }

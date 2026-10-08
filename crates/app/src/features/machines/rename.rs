@@ -151,7 +151,7 @@ pub(crate) fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         .left_0()
         .size_full()
         .occlude()
-        .bg(rgba(0x00000099))
+        .bg(crate::components::style::rgba(0x00000099))
         .flex()
         .items_center()
         .justify_center()
@@ -160,22 +160,26 @@ pub(crate) fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
             div()
                 .w(px(440.0))
                 .p(px(20.0))
-                .bg(rgb(style::CONTENT))
+                .bg(crate::components::style::rgb(style::CONTENT))
                 .border_1()
-                .border_color(rgb(style::BORDER))
+                .border_color(crate::components::style::rgb(style::BORDER))
                 .rounded(px(style::RADIUS))
                 .flex()
                 .flex_col()
                 .gap(px(16.0))
                 .child(
                     div()
-                        .text_color(rgb(style::TEXT_PRIMARY))
+                        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("Rename machine"),
                 )
                 .child(editor.name.clone())
                 .when_some(editor.error.as_ref(), |this, error| {
-                    this.child(div().text_color(rgb(style::DANGER)).child(error.clone()))
+                    this.child(
+                        div()
+                            .text_color(crate::components::style::rgb(style::DANGER))
+                            .child(error.clone()),
+                    )
                 })
                 .child(controls::action_group(
                     div().flex().justify_end().gap(px(8.0)),

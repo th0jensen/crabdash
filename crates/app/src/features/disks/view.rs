@@ -31,9 +31,9 @@ fn status_badge(disk: &Disk) -> StatusControl {
     let normalized = disk.status.to_ascii_lowercase();
     let healthy = matches!(normalized.as_str(), "mounted" | "healthy" | "swap");
     let color = if healthy {
-        rgb(style::SUCCESS)
+        crate::components::style::rgb(style::SUCCESS)
     } else {
-        rgb(style::TEXT_MUTED)
+        crate::components::style::rgb(style::TEXT_MUTED)
     };
     status_label(normalized.capitalize(), color)
 }
@@ -144,14 +144,14 @@ fn node_row(node: &DiskNode, ancestors: &[bool], is_last: bool) -> AnyElement {
                     clipped_text(node.name.clone())
                         .w_full()
                         .text_size(rems(style::TEXT / 16.0))
-                        .text_color(rgb(style::TEXT_PRIMARY)),
+                        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY)),
                 )
                 .when_some(node_meta(node), |this, meta| {
                     this.child(
                         clipped_text(meta)
                             .w_full()
                             .text_size(rems(style::META / 16.0))
-                            .text_color(rgb(style::TEXT_MUTED)),
+                            .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
                     )
                 }),
         )
@@ -194,7 +194,7 @@ fn tree_toggle_button(
         .items_center()
         .justify_center()
         .rounded(px(6.0))
-        .text_color(rgb(0xAEAEB2));
+        .text_color(crate::components::style::rgb(0xAEAEB2));
 
     if !has_nodes {
         return button.into_any_element();
@@ -204,7 +204,7 @@ fn tree_toggle_button(
 
     let button = button
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x343437)))
+        .hover(|style| style.bg(crate::components::style::rgb(0x343437)))
         .child(lucide_icon(
             if expanded {
                 Icon::ChevronDown
@@ -243,9 +243,9 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>, show_id: bo
     }
     div()
         .w_full()
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .py(px(10.0))
         .flex()
         .flex_col()
@@ -253,7 +253,7 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>, show_id: bo
         .child(
             table_row()
                 .id(SharedString::from(format!("disk-row-{}", disk.id)))
-                .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+                .hover(|s| s.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
                 .child(
                     div()
                         .flex_1()
@@ -273,13 +273,17 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>, show_id: bo
                                     clipped_text(disk.name.clone())
                                         .w_full()
                                         .text_size(rems(style::TEXT / 16.0))
-                                        .text_color(rgb(style::TEXT_PRIMARY)),
+                                        .text_color(crate::components::style::rgb(
+                                            style::TEXT_PRIMARY,
+                                        )),
                                 )
                                 .child(
                                     clipped_text(disk_meta(disk))
                                         .w_full()
                                         .text_size(rems(style::META / 16.0))
-                                        .text_color(rgb(style::TEXT_MUTED)),
+                                        .text_color(crate::components::style::rgb(
+                                            style::TEXT_MUTED,
+                                        )),
                                 ),
                         ),
                 )
@@ -289,15 +293,19 @@ fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>, show_id: bo
                             clipped_text(disk.id.clone())
                                 .w_full()
                                 .text_size(rems(style::META / 16.0))
-                                .text_color(rgb(style::TEXT_MUTED)),
+                                .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
                         ),
                     )
                 })
                 .child(fixed_column(STATUS_WIDTH).child(status_badge(disk))),
         )
         .when(expanded && !rows.is_empty(), |this| {
-            this.child(div().h(px(1.0)).bg(rgb(style::BORDER)))
-                .child(div().px(px(12.0)).flex().flex_col().children(rows))
+            this.child(
+                div()
+                    .h(px(1.0))
+                    .bg(crate::components::style::rgb(style::BORDER)),
+            )
+            .child(div().px(px(12.0)).flex().flex_col().children(rows))
         })
 }
 fn table_header(show_id: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {

@@ -20,7 +20,7 @@ fn form() -> Div {
 fn label(text: &'static str) -> Div {
     div()
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .child(text)
 }
 
@@ -37,7 +37,7 @@ fn field(text: &'static str, input: &Entity<TextField>, hint: Option<&'static st
                     row.child(
                         div()
                             .id(SharedString::from(format!("run-hint-{text}")))
-                            .text_color(rgb(style::TEXT_MUTED))
+                            .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                             .child(lucide_icon(Icon::Info, 12.0))
                             .tooltip(move |_, cx| control_tooltip(hint, cx)),
                     )
@@ -64,17 +64,17 @@ fn choice(
     change: impl Fn(&mut Crabdash) + 'static,
 ) -> SurfaceControl {
     let button = surface_button(id, None, Some(text))
-        .bg(rgb(if active {
+        .bg(crate::components::style::rgb(if active {
             style::CONTROL_SELECTED_BG
         } else {
             style::SURFACE
         }))
-        .border_color(rgb(if active {
+        .border_color(crate::components::style::rgb(if active {
             style::CONTROL_SELECTED_BORDER
         } else {
             style::BORDER
         }))
-        .text_color(rgb(if active {
+        .text_color(crate::components::style::rgb(if active {
             style::TEXT_SELECTED
         } else {
             style::TEXT_MUTED
@@ -105,7 +105,7 @@ fn checkbox(
         .items_center()
         .gap(px(7.0))
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .cursor_pointer()
         .child(lucide_icon(
             if active {
@@ -225,7 +225,7 @@ fn bindings(kind: Binding, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                         .child(label(kind.label()))
                         .child(
                             div()
-                                .text_color(rgb(style::TEXT_MUTED))
+                                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                                 .child(lucide_icon(Icon::Info, 12.0)),
                         )
                         .tooltip(move |_, cx| control_tooltip(kind.hint(), cx)),
@@ -325,7 +325,7 @@ fn tabs(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         .flex()
         .gap(px(18.0))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .children(RunSection::ALL.into_iter().map(|section| {
             let active = section == app.docker_run_config.section;
             let button = div()
@@ -336,18 +336,18 @@ fn tabs(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                 .items_center()
                 .border_b_2()
                 .border_color(if active {
-                    rgb(style::TAB_INDICATOR)
+                    crate::components::style::rgb(style::TAB_INDICATOR)
                 } else {
-                    rgba(0x00000000)
+                    crate::components::style::rgba(0x00000000)
                 })
                 .text_size(rems(style::META / 16.0))
-                .text_color(rgb(if active {
+                .text_color(crate::components::style::rgb(if active {
                     style::TEXT_SELECTED
                 } else {
                     style::TEXT_MUTED
                 }))
                 .cursor_pointer()
-                .hover(|s| s.text_color(rgb(style::TEXT_SELECTED)))
+                .hover(|s| s.text_color(crate::components::style::rgb(style::TEXT_SELECTED)))
                 .child(section.label())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if !this.docker_run_config.busy {
@@ -378,7 +378,7 @@ fn preview(app: &Crabdash, cx: &App) -> Stateful<Div> {
         .max_h(rems(72.0 / 16.0))
         .overflow_y_scroll()
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .font_family(app.preferences.terminal_font.clone())
         .whitespace_normal()
         .child(text)
@@ -407,7 +407,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
         .left_0()
         .size_full()
         .occlude()
-        .bg(rgba(0x00000088))
+        .bg(crate::components::style::rgba(0x00000088))
         .flex()
         .items_center()
         .justify_center()
@@ -415,12 +415,17 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
         .child(crate::desktop::controls::modal(
             div()
                 .w(rems(540.0 / 16.0))
-                .max_w(window.viewport_size().width - px(32.0))
+                .max_w(
+                    (window.viewport_size().width
+                        - crate::desktop::shell::native_sidebar_inset(app)
+                        - px(32.0))
+                    .max(px(0.0)),
+                )
                 .h(rems(480.0 / 16.0))
                 .max_h(window.viewport_size().height - px(40.0))
-                .bg(rgb(style::SURFACE))
+                .bg(crate::components::style::rgb(style::SURFACE))
                 .border_1()
-                .border_color(rgb(style::BORDER))
+                .border_color(crate::components::style::rgb(style::BORDER))
                 .rounded(px(style::CARD_RADIUS))
                 .overflow_hidden()
                 .flex()
@@ -448,13 +453,17 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                             div()
                                                 .text_size(rems(style::TEXT / 16.0))
                                                 .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(rgb(style::TEXT_SELECTED))
+                                                .text_color(crate::components::style::rgb(
+                                                    style::TEXT_SELECTED,
+                                                ))
                                                 .child("Run container"),
                                         )
                                         .child(
                                             div()
                                                 .text_size(rems(style::META / 16.0))
-                                                .text_color(rgb(style::TEXT_MUTED))
+                                                .text_color(crate::components::style::rgb(
+                                                    style::TEXT_MUTED,
+                                                ))
                                                 .child(
                                                     app.selected_machine()
                                                         .system_info
@@ -497,7 +506,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                     .left_0()
                                     .size_full()
                                     .occlude()
-                                    .bg(rgba(0x1E1E1E88))
+                                    .bg(crate::components::style::rgba(0x1E1E1E88))
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation()
                                     }),
@@ -510,7 +519,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                         .px(px(18.0))
                         .py(px(12.0))
                         .border_t_1()
-                        .border_color(rgb(style::BORDER))
+                        .border_color(crate::components::style::rgb(style::BORDER))
                         .flex()
                         .flex_col()
                         .gap(px(10.0))
@@ -521,7 +530,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                     .max_h(rems(48.0 / 16.0))
                                     .overflow_y_scroll()
                                     .text_size(rems(style::META / 16.0))
-                                    .text_color(rgb(style::DANGER))
+                                    .text_color(crate::components::style::rgb(style::DANGER))
                                     .child(error),
                             )
                         })
@@ -540,7 +549,9 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                         .items_center()
                                         .gap(px(5.0))
                                         .text_size(rems(style::META / 16.0))
-                                        .text_color(rgb(style::TEXT_MUTED))
+                                        .text_color(crate::components::style::rgb(
+                                            style::TEXT_MUTED,
+                                        ))
                                         .cursor_pointer()
                                         .child(lucide_icon(
                                             if config.show_preview {

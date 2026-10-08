@@ -243,7 +243,7 @@ pub(super) fn render(
         .flex_col()
         .gap(rems(4.0 / 16.0))
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .child(plot)
         .when(has_legend, |this| this.child(legend))
         .child(

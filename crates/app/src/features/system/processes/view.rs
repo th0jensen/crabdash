@@ -118,8 +118,8 @@ fn process_row(process: &ProcessUsage, compact: bool, columns: CompactColumns) -
         .when(compact, |this| this.py(px(7.0)))
         .when(!compact, |this| this.h(rems(style::BAR / 16.0)))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
-        .hover(|this| this.bg(rgb(style::SURFACE_HOVER)))
+        .border_color(crate::components::style::rgb(style::BORDER))
+        .hover(|this| this.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
         .child(if compact {
             div()
                 .w_full()
@@ -148,7 +148,7 @@ fn process_row(process: &ProcessUsage, compact: bool, columns: CompactColumns) -
                         .flex()
                         .justify_between()
                         .text_size(rems(style::META / 16.0))
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child(
                             fixed_column(columns.pid)
                                 .flex_shrink()
@@ -175,7 +175,7 @@ fn process_row(process: &ProcessUsage, compact: bool, columns: CompactColumns) -
                 .child(
                     fixed_column(88.0)
                         .whitespace_nowrap()
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child(process_value(process, "pid", process.pid.to_string())),
                 )
                 .child(process_identity(process))
@@ -243,7 +243,7 @@ pub(crate) fn render(
                     .w_full()
                     .min_w_0()
                     .text_size(rems(style::META / 16.0))
-                    .text_color(rgb(style::TEXT_MUTED))
+                    .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                     .child(coverage),
             )
         })

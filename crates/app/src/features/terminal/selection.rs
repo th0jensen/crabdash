@@ -2,8 +2,9 @@
 mod emulator;
 mod pointer;
 mod shortcuts;
+pub(super) use pointer::Grid;
+use pointer::Held;
 pub(super) use pointer::layer;
-use pointer::{Grid, Held};
 #[cfg(test)]
 mod tests;
 
@@ -94,10 +95,13 @@ pub(super) fn colors(
     settings: &crate::features::preferences::Preferences,
     cx: &App,
 ) -> (Rgba, Option<Rgba>) {
-    let base = background.unwrap_or(rgb(crate::components::style::CONTENT));
+    let base = background.unwrap_or(crate::components::style::rgb(
+        crate::components::style::CONTENT,
+    ));
     let accent = rgb(
-        crate::desktop::appearance::system_accent(settings.use_system_accent, cx)
-            .unwrap_or(crate::components::style::TAB_INDICATOR),
+        crate::desktop::appearance::system_accent(settings.use_system_accent, cx).unwrap_or(
+            crate::components::style::color(crate::components::style::TAB_INDICATOR),
+        ),
     );
     let alpha = 0.30;
     let tinted = Rgba {

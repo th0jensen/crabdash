@@ -75,10 +75,13 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                 .items_center()
                 .justify_center()
                 .text_size(gpui::rems(style::TEXT / 16.0))
-                .text_color(rgb(0xC8C8C8))
+                .text_color(crate::components::style::rgb(0xC8C8C8))
                 .cursor_pointer()
-                .when(app.open_menu == Some(index), |this| this.bg(rgb(0x343434)))
-                .hover(|this| this.bg(rgb(0x2B2B2B)))
+                .occlude()
+                .when(app.open_menu == Some(index), |this| {
+                    this.bg(crate::components::style::rgb(0x343434))
+                })
+                .hover(|this| this.bg(crate::components::style::rgb(0x2B2B2B)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
                     if this.open_menu.is_some() && this.open_menu != Some(index) {
@@ -133,9 +136,9 @@ pub fn popup(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) ->
         .p(px(5.0))
         .rounded(px(6.0))
         .shadow_lg()
-        .bg(rgb(0x242424))
+        .bg(crate::components::style::rgb(0x242424))
         .border_1()
-        .border_color(rgb(0x444444))
+        .border_color(crate::components::style::rgb(0x444444))
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -148,7 +151,7 @@ pub fn popup(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) ->
                     .h(px(1.0))
                     .my(px(5.0))
                     .mx(px(8.0))
-                    .bg(rgb(0x3A3A3A))
+                    .bg(crate::components::style::rgb(0x3A3A3A))
                     .into_any_element(),
                 OwnedMenuItem::Action { name, action, .. } => {
                     let enabled = window.is_action_available(action.as_ref(), cx)
@@ -167,21 +170,22 @@ pub fn popup(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) ->
                         .gap(px(12.0))
                         .text_size(gpui::rems(style::TEXT / 16.0))
                         .text_color(if enabled {
-                            rgb(0xE0E0E0)
+                            crate::components::style::rgb(0xE0E0E0)
                         } else {
-                            rgb(0x777777)
+                            crate::components::style::rgb(0x777777)
                         })
                         .when(enabled, |this| {
-                            this.cursor_pointer().hover(|this| this.bg(rgb(0x3A3A3A)))
+                            this.cursor_pointer()
+                                .hover(|this| this.bg(crate::components::style::rgb(0x3A3A3A)))
                         })
                         .when(app.menu_item == item_index && enabled, |this| {
-                            this.bg(rgb(0x3A3A3A))
+                            this.bg(crate::components::style::rgb(0x3A3A3A))
                         })
                         .child(name)
                         .child(
                             div()
                                 .text_size(gpui::rems(style::META / 16.0))
-                                .text_color(rgb(0x909090))
+                                .text_color(crate::components::style::rgb(0x909090))
                                 .child(shortcut),
                         )
                         .on_mouse_move(cx.listener(move |this, _, _, cx| {

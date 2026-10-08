@@ -44,7 +44,7 @@ pub(crate) fn render(
     let content = if loading || rows.is_empty() {
         div()
             .text_size(rems(style::META / 16.0))
-            .text_color(rgb(style::TEXT_MUTED))
+            .text_color(crate::components::style::rgb(style::TEXT_MUTED))
             .child(if loading {
                 "Loading logs…"
             } else {
@@ -62,9 +62,9 @@ pub(crate) fn render(
         .gap(px(8.0))
         .px(px(12.0))
         .py(px(10.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .child(
             div()
                 .flex()
@@ -72,7 +72,7 @@ pub(crate) fn render(
                 .gap(px(6.0))
                 .h(rems(style::CONTROL / 16.0))
                 .text_size(rems(style::META / 16.0))
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(lucide_icon(Icon::FileText, style::ICON))
                 .child(div().flex_1().child("Recent logs"))
                 .when(!loading && !rows.is_empty(), |this| {
@@ -101,8 +101,8 @@ pub(crate) fn render(
                             .rounded(px(style::RADIUS))
                             .cursor_pointer()
                             .hover(|s| {
-                                s.bg(rgb(style::SURFACE_HOVER))
-                                    .text_color(rgb(style::TEXT_SELECTED))
+                                s.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                                    .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
                             })
                             .tooltip(|_, cx| control_tooltip("Copy logs", cx))
                             .child(lucide_icon(Icon::Copy, style::ICON))

@@ -28,14 +28,6 @@ pub(crate) enum MainTab {
 }
 
 impl MainTab {
-    pub(crate) fn shortcut(self) -> &'static str {
-        match self {
-            Self::Docker => crate::desktop::menus::shortcut("⌘1", "Ctrl+1"),
-            Self::Disks => crate::desktop::menus::shortcut("⌘2", "Ctrl+2"),
-            Self::Services => crate::desktop::menus::shortcut("⌘3", "Ctrl+3"),
-            Self::System => crate::desktop::menus::shortcut("⌘4", "Ctrl+4"),
-        }
-    }
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Docker => "Docker",
@@ -350,6 +342,17 @@ impl Crabdash {
 
 impl Render for Crabdash {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::desktop::appearance::synchronize(window, cx);
+        for drawer in self.quake_terminals.values_mut() {
+            drawer.synchronize_palette();
+        }
+        for terminal in self
+            .expanded_docker_logs
+            .values_mut()
+            .chain(self.expanded_service_logs.values_mut())
+        {
+            terminal.synchronize_palette();
+        }
         window.set_window_title("Crabdash");
         window.set_rem_size(px(
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
@@ -467,7 +470,9 @@ impl Render for Crabdash {
             .relative()
             .size_full()
             .bg(crate::desktop::appearance::root_background())
-            .text_color(white())
+            .text_color(crate::components::style::rgb(
+                crate::components::style::TEXT_SELECTED,
+            ))
             .child(
                 div()
                     .size_full()
@@ -482,6 +487,7 @@ impl Render for Crabdash {
                             .min_h_0()
                             .min_w_0()
                             .flex()
+                            .pl(crate::desktop::shell::native_sidebar_inset(self))
                             .when(
                                 !self.sidebar_collapsed && !crate::desktop::shell::is_native(self),
                                 |this| {
@@ -502,7 +508,6 @@ impl Render for Crabdash {
                             .child(content::render(self, window, cx)),
                     ),
             )
-            .child(crate::desktop::window::resize_handles(window))
             .when(self.quake_terminal_open, |this| {
                 this.child(features::terminal::render_quake(self, window, cx))
             })
@@ -516,23 +521,40 @@ impl Render for Crabdash {
                 )
             })
             .when(self.preferences_open, |this| {
-                this.child(preferences::render(self, window, cx))
+                this.child(crate::desktop::shell::overlay(
+                    self,
+                    preferences::render(self, window, cx),
+                ))
             })
             .when(self.open_menu.is_some(), |this| {
                 this.child(crate::desktop::menus::popup(self, window, cx))
             })
             .when(self.add_machine_modal_open, |this| {
-                this.child(modal::render(self, cx))
+                this.child(crate::desktop::shell::overlay(
+                    self,
+                    modal::render(self, cx),
+                ))
             })
             .when(self.machine_rename.target.is_some(), |this| {
-                this.child(features::machines::rename::render(self, cx))
+                this.child(crate::desktop::shell::overlay(
+                    self,
+                    features::machines::rename::render(self, cx),
+                ))
             })
             .when(self.docker_run_modal_open, |this| {
-                this.child(features::docker::run_modal::render(self, window, cx))
+                this.child(crate::desktop::shell::overlay(
+                    self,
+                    features::docker::run_modal::render(self, window, cx),
+                ))
             })
             .when(self.docker_removal.is_some(), |this| {
-                this.child(features::docker::remove_modal::render(self, cx))
-            });
+                this.child(crate::desktop::shell::overlay(
+                    self,
+                    features::docker::remove_modal::render(self, cx),
+                ))
+            })
+            // Keep window edges reachable above drawers and modal surfaces.
+            .child(crate::desktop::window::resize_handles(window));
         #[cfg(target_os = "macos")]
         let root = root
             .when(crate::desktop::shell::is_native(self), |this| {
@@ -540,7 +562,21 @@ impl Render for Crabdash {
             })
             .when(
                 crate::desktop::shell::is_native(self) && !self.sidebar_collapsed,
-                |this| this.child(crate::desktop::appearance::sidebar_separator()),
+                |this| {
+                    this.child(
+                        crate::desktop::appearance::sidebar_separator()
+                            .left(crate::desktop::shell::native_sidebar_inset(self))
+                            .bottom(
+                                if self.quake_terminal_open
+                                    && self.active_quake_terminal().is_some()
+                                {
+                                    self.quake_height
+                                } else {
+                                    px(0.0)
+                                },
+                            ),
+                    )
+                },
             )
             .when(
                 crate::desktop::shell::is_native(self)

@@ -360,15 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn a_single_pane_drawer_reserves_one_header_and_one_outer_border() {
+    fn a_single_pane_drawer_reserves_one_header_without_an_outer_border() {
         let tab = Uuid::new_v4();
         let layout = Layout::single(vec![tab], tab);
         assert_eq!(
             drawer_minimum(&layout.root, Metrics::new(1.0, 100.0)),
-            159.0
+            158.0
         );
         assert!(
-            (drawer_minimum(&layout.root, Metrics::new(20.0 / 14.0, 100.0)) - 172.7143).abs()
+            (drawer_minimum(&layout.root, Metrics::new(20.0 / 14.0, 100.0)) - 171.7143).abs()
                 < 0.001
         );
     }
@@ -477,8 +477,8 @@ mod tests {
         let metrics = Metrics::new(1.25, 80.0);
         let geometry = Geometry::new(800.0, 150.0, 40.0, 7.8, 80.0);
         let height = clamp_height(geometry, 0.0, Some(&layout.root), metrics);
-        assert_eq!(height, 147.0);
-        assert_eq!(150.0 - height, 3.0);
+        assert_eq!(height, 146.0);
+        assert_eq!(150.0 - height, 4.0);
         assert!(height < drawer_minimum(&layout.root, metrics));
         let body = height - PANEL_BORDER;
         let assigned = visible(&layout.root, 800.0, body, metrics);

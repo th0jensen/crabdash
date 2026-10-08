@@ -12,9 +12,9 @@ use objc2_app_kit::{
     NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSColorSpace,
     NSControlTextEditingDelegate, NSEvent, NSFont, NSFontWeightMedium, NSImage, NSImageScaling,
     NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem, NSScrollView,
-    NSTableCellView, NSTableColumn, NSTableView, NSTableViewColumnAutoresizingStyle,
-    NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
-    NSUserInterfaceItemIdentification, NSView, NSViewController,
+    NSTableCellView, NSTableColumn, NSTableRowView, NSTableView,
+    NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification, NSView, NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSData, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol,
@@ -120,15 +120,27 @@ impl MachineCell {
         let selected =
             self.ivars().selected.get() || self.backgroundStyle() == NSBackgroundStyle::Emphasized;
         let primary = if selected {
-            selection_text_color(
-                self,
-                self.backgroundStyle() == NSBackgroundStyle::Emphasized,
-            )
+            // The cell's backgroundStyle can remain emphasized after focus
+            // leaves the table. Use the row's actual selection appearance.
+            // SAFETY: AppKit retains the cell's enclosing row view.
+            let emphasized = unsafe { self.superview() }
+                .and_then(|view| view.downcast::<NSTableRowView>().ok())
+                .map_or(
+                    self.backgroundStyle() == NSBackgroundStyle::Emphasized,
+                    |row| row.isEmphasized(),
+                );
+            selection_text_color(self, emphasized)
         } else {
             NSColor::labelColor()
         };
         // SAFETY: machine_cell installs the primary field and image view.
         if let Some(text) = unsafe { self.textField() } {
+            // NSTableCellView propagates its backgroundStyle to this registered
+            // field. Its cell otherwise substitutes white highlighted text,
+            // overriding the contrast colour chosen for a light gray selection.
+            if let Some(cell) = text.cell() {
+                cell.setBackgroundStyle(NSBackgroundStyle::Normal);
+            }
             text.setTextColor(Some(&primary));
         }
         let metadata = if selected {
@@ -161,17 +173,14 @@ fn native_color(rgb: u32) -> Retained<NSColor> {
 }
 
 fn selection_text_color(view: &NSView, emphasized: bool) -> Retained<NSColor> {
-    let result = RefCell::new(if emphasized {
-        NSColor::selectedControlTextColor()
-    } else {
-        NSColor::labelColor()
-    });
+    // AppKit's inactive selection is a neutral gray. Keep its foreground
+    // dynamic so light/dark changes and focus transitions resolve at draw time.
+    if !emphasized {
+        return NSColor::labelColor();
+    }
+    let result = RefCell::new(NSColor::selectedControlTextColor());
     let resolve = block2::StackBlock::new(|| {
-        let background = if emphasized {
-            NSColor::selectedContentBackgroundColor()
-        } else {
-            NSColor::unemphasizedSelectedContentBackgroundColor()
-        };
+        let background = NSColor::selectedContentBackgroundColor();
         let Some(background) = background.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
         else {
             return;
@@ -185,7 +194,7 @@ fn selection_text_color(view: &NSView, emphasized: bool) -> Retained<NSColor> {
         if !alpha.is_finite() || !components.iter().all(|component| component.is_finite()) {
             return;
         }
-        let surface = crate::components::style::CONTENT;
+        let surface = crate::components::style::color(crate::components::style::CONTENT);
         let surface =
             [surface >> 16, surface >> 8, surface].map(|channel| f64::from(channel & 255) / 255.0);
         let alpha = alpha.clamp(0.0, 1.0);
@@ -211,12 +220,12 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_surface(&self, _: NSRect) {
-            native_color(crate::components::style::CONTENT).setFill();
+            native_color(crate::components::style::color(crate::components::style::CONTENT)).setFill();
             NSBezierPath::fillRect(self.bounds());
             // The safe area starts below the toolbar. Keep its divider inside
             // this surface, with no outline along the toolbar's left edge.
             let content = self.safeAreaLayoutGuide().frame();
-            native_color(crate::components::style::BORDER).setFill();
+            native_color(crate::components::style::color(crate::components::style::BORDER)).setFill();
             NSBezierPath::fillRect(NSRect::new(
                 NSPoint::new(self.bounds().origin.x, content.origin.y + content.size.height - 1.0),
                 NSSize::new(self.bounds().size.width, 1.0),
@@ -427,6 +436,8 @@ pub(super) struct Sidebar {
     controller: Retained<NSViewController>,
     table: Retained<SidebarTable>,
     add: Retained<NSButton>,
+    scroll: Retained<NSScrollView>,
+    background: Cell<u32>,
 }
 
 impl Sidebar {
@@ -444,7 +455,9 @@ impl Sidebar {
         table.setStyle(NSTableViewStyle::SourceList);
         // Set after SourceList: AppKit then uses its normal native selection
         // highlight, rather than the source-list material and blurred highlight.
-        table.setBackgroundColor(&native_color(crate::components::style::CONTENT));
+        table.setBackgroundColor(&native_color(crate::components::style::color(
+            crate::components::style::CONTENT,
+        )));
         table.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         table.setHeaderView(None);
         table.setIntercellSpacing(NSSize::new(0.0, 6.0));
@@ -493,7 +506,9 @@ impl Sidebar {
 
         let scroll = NSScrollView::new(mtm);
         scroll.setDrawsBackground(true);
-        scroll.setBackgroundColor(&native_color(crate::components::style::CONTENT));
+        scroll.setBackgroundColor(&native_color(crate::components::style::color(
+            crate::components::style::CONTENT,
+        )));
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);
         scroll.setDocumentView(Some(&table));
@@ -556,6 +571,10 @@ impl Sidebar {
             controller,
             table,
             add,
+            scroll,
+            background: Cell::new(crate::components::style::color(
+                crate::components::style::CONTENT,
+            )),
         }
     }
 
@@ -564,6 +583,12 @@ impl Sidebar {
     }
 
     pub(super) fn synchronize(&self, app: &Crabdash) {
+        let color = crate::components::style::color(crate::components::style::CONTENT);
+        if self.background.replace(color) != color {
+            self.table.setBackgroundColor(&native_color(color));
+            self.scroll.setBackgroundColor(&native_color(color));
+            self.controller.view().setNeedsDisplay(true);
+        }
         let blocked = super::commands_blocked(app) || app.workspaces.open;
         self.table.ivars().blocked.set(blocked);
         self.table.setEnabled(!blocked);

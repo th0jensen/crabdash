@@ -22,6 +22,7 @@ enum Action {
     Command(Result<TerminalCommand, smol::channel::RecvError>),
     Worker(Result<Completion, smol::channel::RecvError>),
     ReceiverClosed,
+    PollProgram,
 }
 
 pub(super) async fn run_local_terminal(
@@ -29,6 +30,8 @@ pub(super) async fn run_local_terminal(
     commands: Receiver<TerminalCommand>,
     events: Sender<TerminalEvent>,
 ) {
+    #[cfg(target_os = "windows")]
+    let program_pid = terminal.child.process_id();
     let LocalTerminal {
         master,
         mut reader,
@@ -118,16 +121,37 @@ pub(super) async fn run_local_terminal(
         status
     }));
 
+    let mut next_poll = std::time::Instant::now();
+    #[cfg(target_os = "windows")]
+    let mut program = None;
     let natural_exit = loop {
         let action = smol::future::race(
             async { Action::Command(commands.recv().await) },
-            smol::future::race(async { Action::Worker(completed.recv().await) }, async {
-                events.closed().await;
-                Action::ReceiverClosed
-            }),
+            smol::future::race(
+                smol::future::race(async { Action::Worker(completed.recv().await) }, async {
+                    events.closed().await;
+                    Action::ReceiverClosed
+                }),
+                async {
+                    smol::Timer::at(next_poll).await;
+                    Action::PollProgram
+                },
+            ),
         )
         .await;
         match action {
+            Action::PollProgram => {
+                #[cfg(target_os = "windows")]
+                {
+                    let current =
+                        smol::unblock(move || super::super::program::foreground(program_pid)).await;
+                    if current != program {
+                        program = current.clone();
+                        let _ = events.try_send(TerminalEvent::Program(current));
+                    }
+                }
+                next_poll = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            }
             Action::Command(Ok(TerminalCommand::Input(input))) => {
                 let _ = inputs.try_send(input);
             }
@@ -419,6 +443,7 @@ mod tests {
         loop {
             match next(events).await? {
                 TerminalEvent::Output(bytes) => output.extend(bytes),
+                TerminalEvent::Program(_) => {}
                 TerminalEvent::Exited(code) => {
                     ensure!(code == Some(7));
                     break;

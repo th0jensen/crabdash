@@ -1,4 +1,5 @@
 //! Saved application preferences, shared by desktop launches and running windows.
+pub use crate::desktop::appearance::Appearance;
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, Global};
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use std::{fs, path::PathBuf, time::Duration};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub appearance: Appearance,
     pub start_minimised: bool,
     pub close_to_tray: bool,
     pub auto_refresh: bool,
@@ -33,6 +35,7 @@ impl Global for Preferences {}
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            appearance: crate::desktop::appearance::Appearance::System,
             start_minimised: false,
             close_to_tray: true,
             auto_refresh: true,
@@ -167,12 +170,29 @@ pub(crate) fn current(cx: &App) -> Preferences {
 mod tests {
     use super::*;
     #[test]
+    fn appearance_migrates_and_round_trips_without_changing_other_preferences() -> Result<()> {
+        for appearance in [Appearance::System, Appearance::Light, Appearance::Dark] {
+            let settings = Preferences {
+                appearance,
+                ..Preferences::default()
+            };
+            let restored: Preferences = serde_json::from_slice(&serde_json::to_vec(&settings)?)?;
+            assert_eq!(restored, settings);
+        }
+        assert!(serde_json::from_str::<Preferences>(r#"{"appearance":"unknown"}"#).is_err());
+        Ok(())
+    }
+    #[test]
     fn old_preferences_migrate_with_compatible_defaults() -> Result<()> {
         let settings: Preferences =
             serde_json::from_str(r#"{"start_minimised":true,"refresh_seconds":15}"#)?;
         assert!(settings.start_minimised);
         assert!(settings.liquid_glass);
         assert!(settings.use_system_accent);
+        assert_eq!(
+            settings.appearance,
+            crate::desktop::appearance::Appearance::System
+        );
         assert_eq!(settings.terminal_type, "xterm-256color");
         assert_eq!(settings.terminal_font, "JetBrainsMono Nerd Font");
         assert_eq!(settings.refresh_seconds, 15);

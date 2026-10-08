@@ -25,13 +25,13 @@ fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) ->
     let is_pending = pending_action.is_some();
     let is_failed = label == "Failed";
     let status_fg = if is_running {
-        rgb(style::SUCCESS)
+        crate::components::style::rgb(style::SUCCESS)
     } else if is_pending {
-        rgb(style::WARNING)
+        crate::components::style::rgb(style::WARNING)
     } else if is_failed {
-        rgb(style::DANGER)
+        crate::components::style::rgb(style::DANGER)
     } else {
-        rgb(style::TEXT_MUTED)
+        crate::components::style::rgb(style::TEXT_MUTED)
     };
     status_label(label, status_fg)
 }
@@ -124,10 +124,10 @@ fn service_action_button(
     action: ServiceAction,
     disabled: bool,
 ) -> SurfaceControl {
-    let bg = rgba(0x00000000);
-    let disabled_bg = rgba(0x00000000);
-    let disabled_fg = rgb(0x606060);
-    let hover_bg = rgb(0x303030);
+    let bg = crate::components::style::rgba(0x00000000);
+    let disabled_bg = crate::components::style::rgba(0x00000000);
+    let disabled_fg = crate::components::style::rgb(0x606060);
+    let hover_bg = crate::components::style::rgb(0x303030);
 
     let name = service.name.clone();
     let button_id = SharedString::from(format!("{}-service-{name}", action.command()));
@@ -141,7 +141,11 @@ fn service_action_button(
         .justify_center()
         .bg(if disabled { disabled_bg } else { bg })
         .rounded(px(style::RADIUS))
-        .text_color(if disabled { disabled_fg } else { rgb(0xFFFFFF) })
+        .text_color(if disabled {
+            disabled_fg
+        } else {
+            crate::components::style::rgb(0xFFFFFF)
+        })
         .tooltip(move |_, cx| control_tooltip(format!("{}", action.command()), cx))
         .child(lucide_icon(action.icon(), style::ICON));
 
@@ -170,9 +174,9 @@ fn service_logs_button(
     let log_key = (app.selected_machine().uuid, service_name.clone());
     let logs_open = app.logs_open_services.contains(&log_key);
     let bg = if logs_open {
-        rgb(style::CONTROL_SELECTED_BG)
+        crate::components::style::rgb(style::CONTROL_SELECTED_BG)
     } else {
-        rgba(0x00000000)
+        crate::components::style::rgba(0x00000000)
     };
 
     let button = div()
@@ -184,9 +188,9 @@ fn service_logs_button(
         .justify_center()
         .bg(bg)
         .rounded(px(style::RADIUS))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+        .hover(|s| s.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
         .tooltip(|_, cx| control_tooltip("Show / hide logs", cx))
         .child(lucide_icon(Icon::FileText, style::ICON))
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -223,7 +227,7 @@ fn system_service_row(
             clipped_text(service.name.clone())
                 .w_full()
                 .text_size(gpui::rems(style::TEXT / 16.0))
-                .text_color(rgb(style::TEXT_PRIMARY)),
+                .text_color(crate::components::style::rgb(style::TEXT_PRIMARY)),
         )
         .when_some(
             service.description.as_ref().filter(|description| {
@@ -234,7 +238,7 @@ fn system_service_row(
                     clipped_text(description.clone())
                         .w_full()
                         .text_size(gpui::rems(style::META / 16.0))
-                        .text_color(rgb(style::TEXT_MUTED)),
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
                 )
             },
         );
@@ -244,7 +248,7 @@ fn system_service_row(
                 clipped_text(service_metadata(service))
                     .w_full()
                     .text_size(rems(style::META / 16.0))
-                    .text_color(rgb(style::TEXT_MUTED)),
+                    .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
             )
             .into_any_element()
     });
@@ -290,10 +294,10 @@ fn system_service_row(
                 responsive_status_column(compact).child(status_badge(service, pending_action)),
             )
             .id(SharedString::from(format!("service-row-{}", service.name)))
-            .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+            .hover(|s| s.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
             .py(px(10.0))
             .border_b_1()
-            .border_color(rgb(style::BORDER)),
+            .border_color(crate::components::style::rgb(style::BORDER)),
         )
         .when(logs_open, |this| {
             this.child(crate::features::logs::render(
@@ -421,11 +425,11 @@ pub fn render(
                         div()
                             .w_full()
                             .overflow_hidden()
-                            .bg(rgb(style::SURFACE))
+                            .bg(crate::components::style::rgb(style::SURFACE))
                             .border_t_1()
                             .border_l_1()
                             .border_r_1()
-                            .border_color(rgb(style::BORDER))
+                            .border_color(crate::components::style::rgb(style::BORDER))
                             .rounded_t(px(style::CARD_RADIUS))
                             .child(table_header(show_details, compact, actions_width, app, cx))
                             .into_any_element()
@@ -433,10 +437,10 @@ pub fn render(
                         div()
                             .w_full()
                             .overflow_hidden()
-                            .bg(rgb(style::SURFACE))
+                            .bg(crate::components::style::rgb(style::SURFACE))
                             .border_l_1()
                             .border_r_1()
-                            .border_color(rgb(style::BORDER))
+                            .border_color(crate::components::style::rgb(style::BORDER))
                             .when(index == count, |this| {
                                 this.border_b_1().rounded_b(px(style::CARD_RADIUS))
                             })

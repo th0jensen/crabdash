@@ -10,6 +10,7 @@ use std::io;
 enum LocalAction {
     Output(io::Result<Vec<u8>>),
     Command(Result<TerminalCommand, smol::channel::RecvError>),
+    PollProgram,
 }
 
 pub(super) async fn run_local_terminal(
@@ -20,6 +21,8 @@ pub(super) async fn run_local_terminal(
     let mut reader = smol::Unblock::with_capacity(64 * 1024, terminal.reader);
     let mut writer = smol::Unblock::with_capacity(64 * 1024, terminal.writer);
     let mut natural_exit = false;
+    let mut program = None;
+    let mut next_poll = std::time::Instant::now();
 
     loop {
         let action = smol::future::race(
@@ -31,11 +34,28 @@ pub(super) async fn run_local_terminal(
                 });
                 LocalAction::Output(result)
             },
-            async { LocalAction::Command(commands.recv().await) },
+            smol::future::race(
+                async { LocalAction::Command(commands.recv().await) },
+                async {
+                    smol::Timer::at(next_poll).await;
+                    LocalAction::PollProgram
+                },
+            ),
         )
         .await;
 
         match action {
+            LocalAction::PollProgram => {
+                let pid = terminal.master.process_group_leader();
+                let current = smol::unblock(move || super::super::program::foreground(pid)).await;
+                if current != program {
+                    program = current.clone();
+                    if events.send(TerminalEvent::Program(current)).await.is_err() {
+                        break;
+                    }
+                }
+                next_poll = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            }
             LocalAction::Output(Ok(output)) if output.is_empty() => {
                 natural_exit = true;
                 break;

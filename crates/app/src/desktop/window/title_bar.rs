@@ -37,7 +37,7 @@ pub(crate) fn render(
         .h(platform_title_bar_height(window))
         .px(rems(8.0 / 16.0))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .bg(crate::desktop::appearance::titlebar_background())
         .flex()
         .items_center()
@@ -65,11 +65,11 @@ pub(crate) fn render(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .cursor_pointer()
                         .hover(|this| {
-                            this.bg(rgb(style::SURFACE_HOVER))
-                                .text_color(rgb(style::TEXT_SELECTED))
+                            this.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                                .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
                         })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
@@ -89,8 +89,43 @@ pub(crate) fn render(
                 .when(!menus_visible, |this| {
                     this.child(
                         div()
+                            .id("app-menu-trigger")
                             .text_size(gpui::rems(style::TEXT / 16.0))
-                            .text_color(rgb(style::TEXT_PRIMARY))
+                            .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
+                            .when(
+                                cfg!(any(target_os = "linux", target_os = "windows")),
+                                |this| {
+                                    this.h(rems(style::CONTROL / 16.0))
+                                        .px(rems(4.0 / 16.0))
+                                        .rounded(px(style::RADIUS))
+                                        .flex()
+                                        .items_center()
+                                        .text_color(style::rgb(style::TEXT_MUTED))
+                                        .cursor_pointer()
+                                        .occlude()
+                                        .hover(|this| {
+                                            this.bg(style::rgb(style::SURFACE_HOVER))
+                                                .text_color(style::rgb(style::TEXT_SELECTED))
+                                        })
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            // Pointer controls operate on their owning view;
+                                            // the terminal or field can retain keyboard focus.
+                                            this.open_menu = if this.open_menu.is_some() {
+                                                None
+                                            } else {
+                                                Some(0)
+                                            };
+                                            this.menu_item = 0;
+                                            if window.focused(cx).is_none() {
+                                                window.focus(&this.focus_handle);
+                                            }
+                                            cx.notify();
+                                        }))
+                                },
+                            )
                             .child("Crabdash"),
                     )
                 })

@@ -87,9 +87,9 @@ impl Render for ContextMenu {
             }))
             .w(gpui::rems(180.0 / 16.0))
             .p(px(6.0))
-            .bg(rgb(0x1C1C1E))
+            .bg(crate::components::style::rgb(0x1C1C1E))
             .border_1()
-            .border_color(rgb(0x2F2F31))
+            .border_color(crate::components::style::rgb(0x2F2F31))
             .rounded(px(10.0))
             .flex()
             .flex_col()
@@ -97,9 +97,9 @@ impl Render for ContextMenu {
             .children(entries.into_iter().enumerate().map(|(index, entry)| {
                 let handler = entry.handler.clone();
                 let color = entry.color.unwrap_or(if entry.destructive {
-                    rgb(0xFF453A)
+                    crate::components::style::rgb(0xFF453A)
                 } else {
-                    rgb(0xFFFFFF)
+                    crate::components::style::rgb(0xFFFFFF)
                 });
                 div()
                     .id(SharedString::from(format!("context-menu-item-{index}")))
@@ -110,7 +110,7 @@ impl Render for ContextMenu {
                     .items_center()
                     .gap(px(8.0))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x2A2A2C)))
+                    .hover(|style| style.bg(crate::components::style::rgb(0x2A2A2C)))
                     .text_size(gpui::rems(crate::components::style::TEXT / 16.0))
                     .text_color(color)
                     .child(lucide_icon(entry.icon, 12.0))

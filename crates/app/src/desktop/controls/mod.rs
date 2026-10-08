@@ -71,8 +71,8 @@ fn fallback(control: Control, app: &Crabdash, cx: &mut Context<Crabdash>) -> Sta
         this.text_size(rems(style::TEXT / 16.0))
     })
     .when(selected, |this| {
-        this.text_color(rgb(style::TEXT_SELECTED))
-            .bg(rgb(style::CONTROL_SELECTED_BG))
+        this.text_color(crate::components::style::rgb(style::TEXT_SELECTED))
+            .bg(crate::components::style::rgb(style::CONTROL_SELECTED_BG))
     })
     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     .on_click(cx.listener(move |this, _, window, cx| match control {
@@ -114,34 +114,6 @@ pub(crate) fn action_group(fallback: Div, children: Vec<SurfaceControl>) -> AnyE
     }
 }
 
-/// Window-style toolbar actions, kept separate from content-row controls.
-pub(crate) fn toolbar_group(fallback: Div, children: Vec<SurfaceControl>) -> AnyElement {
-    #[cfg(target_os = "macos")]
-    {
-        macos::Actions::toolbar(fallback.id("native-toolbar-group").children(children))
-            .into_any_element()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        fallback.children(children).into_any_element()
-    }
-}
-
-pub(crate) fn toolbar_icon_button(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    icon: Icon,
-) -> SurfaceControl {
-    let control = icon_button(chrome_icon_button(id, icon), label, icon);
-    #[cfg(target_os = "macos")]
-    {
-        control.set_role(macos::ButtonRole::Toolbar)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        control
-    }
-}
 /// Match the row and heading allocation to AppKit's actual icon-button metrics.
 pub(crate) fn action_group_width(
     fallback: f32,
@@ -162,29 +134,6 @@ pub(crate) fn action_group_width(
     }
 }
 
-pub(crate) fn toolbar_group_width(
-    fallback: f32,
-    slots: &[&[Icon]],
-    liquid_glass: bool,
-    window: &Window,
-    cx: &mut App,
-) -> Pixels {
-    #[cfg(target_os = "macos")]
-    {
-        macos::action_group_width(
-            px(fallback * f32::from(window.rem_size()) / 16.0),
-            slots,
-            liquid_glass,
-            true,
-            window,
-            cx,
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        action_group_width(fallback, slots, liquid_glass, window, cx)
-    }
-}
 pub(crate) fn selected_button(
     fallback: Stateful<Div>,
     label: impl Into<SharedString>,

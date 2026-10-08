@@ -11,9 +11,9 @@ pub(crate) fn render(title: impl Into<SharedString>, icon: Div) -> Div {
         .flex()
         .items_center()
         .gap(rems(4.0 / 16.0))
-        .bg(rgb(style::SURFACE_HOVER))
+        .bg(crate::components::style::rgb(style::SURFACE_HOVER))
         .text_size(rems(style::TEXT / 16.0))
-        .text_color(rgb(style::TEXT_SELECTED))
+        .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         .shadow_md()
         .child(
             div()

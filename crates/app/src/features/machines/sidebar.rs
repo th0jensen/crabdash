@@ -99,11 +99,11 @@ fn machine_item(
     let connection_label = if is_remote { "SSH" } else { "Local" };
     let metadata = format!("{} · {connection_label}", logos::platform_label(machine));
     let name_color = if selected {
-        rgb(style::TEXT_SELECTED)
+        crate::components::style::rgb(style::TEXT_SELECTED)
     } else {
-        rgb(style::TEXT_PRIMARY)
+        crate::components::style::rgb(style::TEXT_PRIMARY)
     };
-    let meta_color = rgb(if cfg!(target_os = "macos") && selected {
+    let meta_color = crate::components::style::rgb(if cfg!(target_os = "macos") && selected {
         style::TEXT_PRIMARY
     } else {
         style::TEXT_MUTED
@@ -111,8 +111,8 @@ fn machine_item(
     // Keep the restored row geometry and dark surfaces. An optional desktop
     // accent changes only the selected row's existing colour treatment.
     let tint = |strength: u32, fallback| {
-        accent.map_or(rgb(fallback), |accent| {
-            rgb(palette::BACKGROUND).blend(rgba((accent << 8) | strength))
+        accent.map_or(crate::components::style::rgb(fallback), |accent| {
+            crate::components::style::rgb(palette::BACKGROUND).blend(rgba((accent << 8) | strength))
         })
     };
     let selected_bg = tint(38, style::SELECTED_BG);
@@ -120,27 +120,27 @@ fn machine_item(
     let bg = if selected {
         selected_bg
     } else {
-        rgb(palette::BACKGROUND)
+        crate::components::style::rgb(palette::BACKGROUND)
     };
     let border = if selected {
         tint(100, style::SELECTED_BORDER)
     } else {
-        rgb(palette::BACKGROUND)
+        crate::components::style::rgb(palette::BACKGROUND)
     };
     let icon_bg = if selected {
         tint(61, 0x304158)
     } else {
-        rgb(style::SURFACE_HOVER)
+        crate::components::style::rgb(style::SURFACE_HOVER)
     };
     let icon_color = if selected {
-        rgb(accent.unwrap_or(style::ACCENT))
+        rgb(accent.unwrap_or(crate::components::style::color(style::ACCENT)))
     } else {
-        rgb(style::TEXT_MUTED)
+        crate::components::style::rgb(style::TEXT_MUTED)
     };
     let dot = if connection_active {
-        rgb(style::SUCCESS)
+        crate::components::style::rgb(style::SUCCESS)
     } else {
-        rgb(style::TEXT_MUTED)
+        crate::components::style::rgb(style::TEXT_MUTED)
     };
 
     div()
@@ -159,7 +159,7 @@ fn machine_item(
             style.bg(if selected {
                 selected_hover
             } else {
-                rgb(style::SURFACE_HOVER)
+                crate::components::style::rgb(style::SURFACE_HOVER)
             })
         })
         .child(
@@ -218,21 +218,23 @@ fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
         .h(gpui::rems(style::BAR / 16.0))
         .w_full()
         .px(px(10.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .rounded(px(style::CARD_RADIUS))
         .flex()
         .items_center()
         .justify_center()
         .gap(px(8.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .text_size(gpui::rems(style::TEXT / 16.0))
         .cursor_pointer()
         .hover(|style| {
             style
-                .bg(rgb(style::SURFACE_HOVER))
-                .border_color(rgb(style::CONTROL_SELECTED_BORDER))
+                .bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                .border_color(crate::components::style::rgb(
+                    style::CONTROL_SELECTED_BORDER,
+                ))
         })
         .tooltip(|_, cx| {
             control_tooltip(
@@ -303,7 +305,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                         menu.destructive_entry(
                             "Delete",
                             Icon::X,
-                            Some(rgb(0xBA3C3C)),
+                            Some(crate::components::style::rgb(0xBA3C3C)),
                             move |window, cx| {
                                 menu_app_delete.update(cx, |app, cx| {
                                     app.delete_machine(machine_uuid, window, cx)
@@ -322,9 +324,9 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .w(app.sidebar_width)
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(palette::BACKGROUND))
+        .bg(crate::components::style::rgb(palette::BACKGROUND))
         .border_r_1()
-        .border_color(rgb(0x2B2B2B))
+        .border_color(crate::components::style::rgb(0x2B2B2B))
         .flex()
         .flex_col()
         .child(
@@ -336,7 +338,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .items_center()
                 .justify_between()
                 .text_size(gpui::rems(style::META / 16.0))
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(
                     div()
                         .flex()
@@ -349,8 +351,8 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                     div()
                         .px(px(6.0))
                         .rounded(px(style::RADIUS))
-                        .bg(rgb(style::SURFACE_HOVER))
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child(app.machine_store.machines.len().to_string()),
                 ),
         )
@@ -375,7 +377,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .flex_none()
                 .p(px(10.0))
                 .border_t_1()
-                .border_color(rgb(style::BORDER))
+                .border_color(crate::components::style::rgb(style::BORDER))
                 .child(add_machine_item(cx)),
         )
         .child(

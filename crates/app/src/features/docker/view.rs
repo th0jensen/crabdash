@@ -31,13 +31,13 @@ fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> 
     let is_running = pending_action.is_none() && container.is_running_status();
     let is_pending = pending_action.is_some();
     let status_fg = if container.is_paused() || is_pending {
-        rgb(style::WARNING)
+        crate::components::style::rgb(style::WARNING)
     } else if is_running {
-        rgb(style::SUCCESS)
+        crate::components::style::rgb(style::SUCCESS)
     } else if matches!(container.status.as_str(), "dead" | "unhealthy") {
-        rgb(style::DANGER)
+        crate::components::style::rgb(style::DANGER)
     } else {
-        rgb(style::TEXT_MUTED)
+        crate::components::style::rgb(style::TEXT_MUTED)
     };
     status_label(label.to_string().capitalize(), status_fg)
 }
@@ -81,11 +81,11 @@ fn action_button(
         .justify_center()
         .rounded(px(style::RADIUS))
         .text_color(if disabled {
-            rgb(0x606060)
+            crate::components::style::rgb(0x606060)
         } else if matches!(action, DockerAction::Remove { .. }) {
-            rgb(0xFF7068)
+            crate::components::style::rgb(0xFF7068)
         } else {
-            rgb(style::TEXT_PRIMARY)
+            crate::components::style::rgb(style::TEXT_PRIMARY)
         })
         .tooltip(move |_, cx| control_tooltip(action.label(), cx))
         .child(lucide_icon(action.icon(), style::ICON));
@@ -94,7 +94,7 @@ fn action_button(
     } else {
         button
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(0x303030)))
+            .hover(|style| style.bg(crate::components::style::rgb(0x303030)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if matches!(action, DockerAction::Remove { .. }) {
                     let Some(machine) = this
@@ -140,9 +140,9 @@ fn logs_button(
     let log_key = (machine_uuid, id.clone());
     let button_id = SharedString::from(format!("logs-container-{id}"));
     let bg = if logs_open {
-        rgb(style::CONTROL_SELECTED_BG)
+        crate::components::style::rgb(style::CONTROL_SELECTED_BG)
     } else {
-        rgba(0x00000000)
+        crate::components::style::rgba(0x00000000)
     };
 
     let button = div()
@@ -154,9 +154,9 @@ fn logs_button(
         .justify_center()
         .bg(bg)
         .rounded(px(style::RADIUS))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
+        .hover(|s| s.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
         .tooltip(|_, cx| control_tooltip("Show / hide logs", cx))
         .child(lucide_icon(Icon::FileText, style::ICON))
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -193,9 +193,9 @@ fn container_row_card(
         .flex()
         .items_center()
         .gap(rems(4.0 / 16.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .cursor_pointer()
-        .hover(|this| this.text_color(rgb(style::TEXT_SELECTED)))
+        .hover(|this| this.text_color(crate::components::style::rgb(style::TEXT_SELECTED)))
         .tooltip(|_, cx| control_tooltip("Container details", cx))
         .child(lucide_icon(
             if details_open {
@@ -307,7 +307,7 @@ fn container_row_card(
                 clipped_text(container.id.chars().take(12).collect::<String>())
                     .w_full()
                     .text_size(rems(style::META / 16.0))
-                    .text_color(rgb(style::TEXT_MUTED)),
+                    .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
             )
             .into_any_element()
     });
@@ -375,10 +375,10 @@ fn container_row_card(
         "container-row-{}",
         container.id
     )))
-    .hover(|s| s.bg(rgb(style::SURFACE_HOVER)))
-    .bg(rgb(style::SURFACE))
+    .hover(|s| s.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
+    .bg(crate::components::style::rgb(style::SURFACE))
     .border_b_1()
-    .border_color(rgb(style::BORDER))
+    .border_color(crate::components::style::rgb(style::BORDER))
     .py(px(12.0))
 }
 
@@ -500,9 +500,9 @@ fn not_installed(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
     div().p(px(16.0)).w_full().min_w_0().child(
         div()
             .w_full()
-            .bg(rgb(style::SURFACE))
+            .bg(crate::components::style::rgb(style::SURFACE))
             .border_1()
-            .border_color(rgb(style::BORDER))
+            .border_color(crate::components::style::rgb(style::BORDER))
             .rounded(px(style::CARD_RADIUS))
             .p(px(18.0))
             .flex()
@@ -517,13 +517,13 @@ fn not_installed(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                     .child(
                         div()
                             .text_size(rems(style::TEXT / 16.0))
-                            .text_color(rgb(style::TEXT_SELECTED))
+                            .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
                             .child("Docker not installed"),
                     )
                     .child(
                         div()
                             .text_size(rems(style::META / 16.0))
-                            .text_color(rgb(style::TEXT_MUTED))
+                            .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                             .child(format!(
                                 "Install Docker on {} to manage containers here.",
                                 app.selected_machine().system_info.machine_name

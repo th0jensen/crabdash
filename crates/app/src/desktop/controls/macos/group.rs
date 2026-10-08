@@ -238,12 +238,6 @@ impl Actions {
             toolbar: false,
         }
     }
-    pub(crate) fn toolbar(inner: Stateful<Div>) -> Self {
-        Self {
-            inner,
-            toolbar: true,
-        }
-    }
 }
 impl IntoElement for Actions {
     type Element = Self;

@@ -1,5 +1,6 @@
 //! Terminal session API; local PTY and SSH transports share this contract.
 mod local;
+mod program;
 mod ssh;
 use crate::machine::Machine;
 use anyhow::{Result, anyhow};
@@ -72,6 +73,8 @@ impl From<TerminalSize> for PtySize {
 #[derive(Debug)]
 pub enum TerminalEvent {
     Output(Vec<u8>),
+    /// Best-effort foreground executable, separate from application OSC titles.
+    Program(Option<String>),
     Exited(Option<i32>),
     Error(String),
 }
@@ -258,6 +261,7 @@ mod tests {
                         }
                         output.extend(bytes);
                     }
+                    TerminalEvent::Program(_) => {}
                     TerminalEvent::Exited(_) => break,
                     TerminalEvent::Error(error) => return Err(anyhow::anyhow!(error)),
                 }

@@ -31,18 +31,18 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
         .gap(rems(8.0 / 16.0))
         .px(rems(12.0 / 16.0))
         .py(rems(10.0 / 16.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(rems(6.0 / 16.0))
                 .h(rems(style::CONTROL / 16.0))
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(lucide_icon(Icon::Info, style::ICON))
                 .child(
                     div()
@@ -66,8 +66,8 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
                             .cursor_pointer()
                             .hover(|style| {
                                 style
-                                    .bg(rgb(style::SURFACE_HOVER))
-                                    .text_color(rgb(style::TEXT_SELECTED))
+                                    .bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                                    .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
                             })
                             .tooltip(|_, cx| control_tooltip("Refresh container details", cx))
                             .child(lucide_icon(Icon::RefreshCw, style::ICON))
@@ -82,14 +82,14 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
     if !target_valid {
         return panel.child(
             div()
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child("Connection changed. Refresh to load current details."),
         );
     }
     match entry {
         Some(Entry::Loading) => panel.child(
             div()
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child("Loading container details…"),
         ),
         Some(Entry::Error(message)) => panel.child(
@@ -97,10 +97,14 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
                 .flex()
                 .flex_col()
                 .gap(rems(8.0 / 16.0))
-                .child(div().text_color(rgb(style::DANGER)).child(message.clone()))
                 .child(
                     div()
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::DANGER))
+                        .child(message.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child("Use Refresh to retry."),
                 ),
         ),
@@ -204,7 +208,7 @@ fn row(label: &'static str, value: String, compact: bool) -> Div {
         .child(
             div()
                 .flex_none()
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .when(!compact, |label| label.w(rems(80.0 / 16.0)))
                 .child(label),
         )
@@ -222,7 +226,7 @@ fn copy_row(label: &'static str, value: &str, compact: bool, id: String) -> Div 
         .child(
             div()
                 .flex_none()
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .when(!compact, |label| label.w(rems(80.0 / 16.0)))
                 .child(label),
         )
@@ -235,13 +239,15 @@ fn copy_row(label: &'static str, value: &str, compact: bool, id: String) -> Div 
                 .items_center()
                 .gap(rems(6.0 / 16.0))
                 .cursor_pointer()
-                .hover(|style| style.text_color(rgb(style::TEXT_SELECTED)))
+                .hover(|style| {
+                    style.text_color(crate::components::style::rgb(style::TEXT_SELECTED))
+                })
                 .tooltip(move |_, cx| control_tooltip(format!("Copy {}", label.to_lowercase()), cx))
                 .child(clipped_text(value.to_string()).flex_1())
                 .child(
                     div()
                         .flex_none()
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child(lucide_icon(Icon::Copy, style::ICON)),
                 )
                 .on_click(move |_, _, cx| {

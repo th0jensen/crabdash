@@ -82,7 +82,7 @@ pub(super) fn render(
         .text_size(rems(style::META / 16.0));
     if cores.is_empty() {
         return section
-            .text_color(rgb(style::TEXT_MUTED))
+            .text_color(crate::components::style::rgb(style::TEXT_MUTED))
             .child("Per-processor usage unavailable");
     }
     let shown = visible(cores, expanded);
@@ -152,9 +152,9 @@ pub(super) fn render(
                                 .justify_between()
                                 .gap(px(4.0))
                                 .child(
-                                    clipped_text(label)
-                                        .flex_1()
-                                        .text_color(rgb(style::TEXT_MUTED)),
+                                    clipped_text(label).flex_1().text_color(
+                                        crate::components::style::rgb(style::TEXT_MUTED),
+                                    ),
                                 )
                                 .child(div().flex_none().child(value_label)),
                         )

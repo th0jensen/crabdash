@@ -23,11 +23,11 @@ pub fn tooltip_text(label: impl Into<SharedString>) -> Div {
         .px(px(8.0))
         .py(px(5.0))
         .rounded(px(style::RADIUS))
-        .bg(rgb(0x242424))
+        .bg(crate::components::style::rgb(0x242424))
         .border_1()
-        .border_color(rgb(0x383838))
+        .border_color(crate::components::style::rgb(0x383838))
         .text_size(gpui::rems(style::META / 16.0))
-        .text_color(rgb(0xD4D4D4))
+        .text_color(crate::components::style::rgb(0xD4D4D4))
         .child(label.into())
 }
 
@@ -74,11 +74,11 @@ pub(crate) fn chrome_icon_button(id: impl Into<ElementId>, icon: Icon) -> Statef
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .cursor_pointer()
         .hover(|this| {
-            this.bg(rgb(style::SURFACE_HOVER))
-                .text_color(rgb(style::TEXT_SELECTED))
+            this.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .child(lucide_icon(icon, style::ICON))
 }
@@ -100,19 +100,19 @@ where
     let native_icon = icon;
 
     let bg = if primary {
-        rgb(0x3A3A3A)
+        crate::components::style::rgb(0x3A3A3A)
     } else {
-        rgb(0x242424)
+        crate::components::style::rgb(0x242424)
     };
     let hover = if primary {
-        rgb(0x484848)
+        crate::components::style::rgb(0x484848)
     } else {
-        rgb(0x323232)
+        crate::components::style::rgb(0x323232)
     };
     let border = if primary {
-        rgb(0x4A4A4A)
+        crate::components::style::rgb(0x4A4A4A)
     } else {
-        rgb(0x303030)
+        crate::components::style::rgb(0x303030)
     };
 
     let fallback = div()
@@ -127,7 +127,9 @@ where
         .border_color(border)
         .rounded(px(style::RADIUS))
         .text_size(gpui::rems(style::TEXT / 16.0))
-        .text_color(white())
+        .text_color(crate::components::style::rgb(
+            crate::components::style::TEXT_SELECTED,
+        ))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .when(has_label, |this| this.gap(px(6.0)))
@@ -179,16 +181,16 @@ fn surface_button_fallback(
         .items_center()
         .justify_center()
         .rounded(px(style::CARD_RADIUS))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .whitespace_nowrap()
         .cursor_pointer()
         .hover(|s| {
-            s.bg(rgb(style::SURFACE_HOVER))
-                .text_color(rgb(style::TEXT_SELECTED))
+            s.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .when(has_label, |control| control.gap(px(6.0)))
         .when_some(icon, |control, icon| {

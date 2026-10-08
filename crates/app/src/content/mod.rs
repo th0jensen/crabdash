@@ -10,7 +10,7 @@ use crate::app::{Crabdash, MainTab};
 use crate::components::style;
 use crate::features::{
     disks, docker, services, system,
-    workspaces::model::{Axis, Node},
+    workspaces::model::{Axis, Node, Tab},
 };
 use gpui::{prelude::*, *};
 use resize::usable_ratio;
@@ -41,6 +41,39 @@ fn panel(
     }
 }
 
+fn empty_dashboard(cx: &mut Context<Crabdash>) -> Div {
+    div()
+        .h_full()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(rems(12.0 / 16.0))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
+        .text_size(rems(style::TEXT / 16.0))
+        .child("Open a dashboard tab")
+        .child(
+            div()
+                .max_w_full()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_center()
+                .gap(rems(8.0 / 16.0))
+                .children(Tab::ALL.into_iter().map(|tab| {
+                    let tab: MainTab = tab.into();
+                    crate::components::common::button::<lucide_icons::Icon, _>(
+                        SharedString::from(format!("open-dashboard-{}", tab.label())),
+                        None,
+                        Some(tab.label()),
+                        false,
+                    )
+                    .on_click(cx.listener(move |app, _, _, cx| app.select_workspace_tab(tab, cx)))
+                })),
+        )
+}
+
 fn render_node(
     app: &Crabdash,
     node: &Node,
@@ -52,13 +85,17 @@ fn render_node(
     match node {
         Node::Pane { id, tabs, active } => {
             let pane = *id;
-            let feature = panel(
-                app,
-                (*active).into(),
-                (width - px(24.0)).max(px(0.0)),
-                window,
-                cx,
-            );
+            let feature = if tabs.is_empty() {
+                empty_dashboard(cx)
+            } else {
+                panel(
+                    app,
+                    (*active).into(),
+                    (width - px(24.0)).max(px(0.0)),
+                    window,
+                    cx,
+                )
+            };
             div()
                 .id(SharedString::from(format!("workspace-pane-{pane}")))
                 // Percentage heights can resolve against System's intrinsic
@@ -73,7 +110,7 @@ fn render_node(
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .bg(rgb(style::CONTENT))
+                .bg(crate::components::style::rgb(style::CONTENT))
                 .capture_any_mouse_down(cx.listener(move |app, _, _, cx| {
                     app.focus_workspace_pane(pane, cx);
                 }))
@@ -172,7 +209,7 @@ fn render_node(
                         div()
                             .flex_none()
                             .relative()
-                            .bg(rgb(style::BORDER))
+                            .bg(crate::components::style::rgb(style::BORDER))
                             .when(horizontal, |this| this.w(px(1.0)).h_full())
                             .when(!horizontal, |this| this.h(px(1.0)).w_full()),
                     )
@@ -191,7 +228,9 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
     let frame = crate::desktop::appearance::frame_inset(window) * 2.0;
     let width = (window.viewport_size().width
         - frame
-        - if app.sidebar_collapsed || crate::desktop::shell::is_native(app) {
+        - if crate::desktop::shell::is_native(app) {
+            crate::desktop::shell::native_sidebar_inset(app)
+        } else if app.sidebar_collapsed {
             px(0.0)
         } else {
             app.sidebar_width
@@ -215,7 +254,7 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .bg(rgb(style::CONTENT))
+        .bg(crate::components::style::rgb(style::CONTENT))
         .child(render_node(
             app,
             &app.workspaces.layout().root,

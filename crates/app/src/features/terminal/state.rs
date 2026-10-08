@@ -47,6 +47,7 @@ pub struct TerminalCursor {
 pub struct TerminalState {
     pub(super) terminal: Terminal<'static, 'static>,
     pub(super) selection: super::selection::State,
+    pub(super) mouse: super::mouse::State,
     render_state: RenderState<'static>,
     pub rendered: RenderedTerminal,
     pub cursor: Option<TerminalCursor>,
@@ -55,6 +56,7 @@ pub struct TerminalState {
     pending_pty_writes: Rc<RefCell<Vec<Vec<u8>>>>,
     pub(super) follow_output: bool,
     wheel_remainder: f32,
+    palette_dark: Option<bool>,
 }
 
 impl TerminalState {
@@ -103,10 +105,18 @@ impl TerminalState {
                 cell_height,
             })
         })?;
+        terminal.on_color_scheme(|_| {
+            Some(if crate::components::style::is_dark() {
+                libghostty_vt::terminal::ColorScheme::Dark
+            } else {
+                libghostty_vt::terminal::ColorScheme::Light
+            })
+        })?;
 
-        Ok(Self {
+        let mut state = Self {
             terminal,
             selection: super::selection::State::default(),
+            mouse: super::mouse::State::default(),
             render_state: RenderState::new()?,
             rendered: Vec::new(),
             cursor: None,
@@ -115,7 +125,10 @@ impl TerminalState {
             pending_pty_writes,
             follow_output: true,
             wheel_remainder: 0.0,
-        })
+            palette_dark: None,
+        };
+        state.synchronize_palette();
+        Ok(state)
     }
 
     pub fn resize(
@@ -127,7 +140,7 @@ impl TerminalState {
     ) -> anyhow::Result<()> {
         self.cancel_selection_gesture();
         self.terminal
-            .resize(columns, rows, cell_width_px, cell_height_px)?;
+            .resize_bottom(columns, rows, cell_width_px, cell_height_px)?;
         if self.follow_output {
             self.terminal.scroll_viewport(ScrollViewport::Bottom);
         }
@@ -203,6 +216,55 @@ impl TerminalState {
             self.rendered = rendered;
             self.cursor = cursor;
         }
+    }
+
+    pub(crate) fn synchronize_palette(&mut self) {
+        let dark = crate::components::style::is_dark();
+        if self.palette_dark == Some(dark) {
+            return;
+        }
+        if let Err(error) = self.apply_palette(dark) {
+            tracing::warn!(%error, "Unable to update terminal appearance");
+            return;
+        }
+        self.palette_dark = Some(dark);
+        if self.loaded {
+            self.refresh_frame();
+        }
+    }
+
+    fn apply_palette(&mut self, dark: bool) -> anyhow::Result<()> {
+        use libghostty_vt::style::{Palette, RgbColor};
+        let color = |value| {
+            let value = crate::components::style::color_for(value, dark);
+            RgbColor {
+                r: (value >> 16) as u8,
+                g: (value >> 8) as u8,
+                b: value as u8,
+            }
+        };
+        self.terminal
+            .set_default_fg_color(Some(color(crate::components::style::TEXT_PRIMARY)))?;
+        self.terminal
+            .set_default_bg_color(Some(color(crate::components::style::CONTENT)))?;
+        self.terminal
+            .set_default_cursor_color(Some(color(crate::components::style::TEXT_PRIMARY)))?;
+        let mut palette = Palette::default();
+        if !dark {
+            for (index, value) in crate::components::style::LIGHT_TERMINAL_ANSI
+                .into_iter()
+                .enumerate()
+            {
+                palette.0[index] = RgbColor {
+                    r: (value >> 16) as u8,
+                    g: (value >> 8) as u8,
+                    b: value as u8,
+                };
+            }
+        }
+        // Only defaults change; OSC colours and true-colour SGR remain app-owned.
+        self.terminal.set_default_color_palette(Some(palette))?;
+        Ok(())
     }
 
     pub fn prepare_input(&mut self, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
@@ -428,6 +490,7 @@ fn rgb_to_rgba(r: u8, g: u8, b: u8) -> Rgba {
 
 pub(crate) struct QuakeTerminal {
     pub endpoint: String,
+    pub(super) program: Option<String>,
     pub(super) custom_name: Option<String>,
     pub(super) rename: Option<super::rename::Editor>,
     pub terminal: TerminalState,
@@ -445,6 +508,11 @@ pub(crate) struct Drawer {
 }
 
 impl Drawer {
+    pub(crate) fn synchronize_palette(&mut self) {
+        for session in self.sessions.values_mut() {
+            session.terminal.synchronize_palette();
+        }
+    }
     pub(crate) fn cancel_drag(&mut self) {
         self.model.drag_target = None;
     }
@@ -470,6 +538,54 @@ impl Drawer {
 #[cfg(test)]
 mod tests {
     use super::TerminalState;
+    #[test]
+    fn changing_theme_preserves_program_colour_overrides_and_true_colour() -> anyhow::Result<()> {
+        use libghostty_vt::style::{PaletteIndex, RgbColor};
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20)?;
+        state.terminal.vt_write(b"\x1b]10;rgb:12/34/56\x07\x1b]11;rgb:21/43/65\x07\x1b]4;1;rgb:11/22/33\x07\x1b[38;2;9;8;7mX");
+        for dark in [false, true] {
+            state.apply_palette(dark)?;
+            assert_eq!(
+                state.terminal.fg_color()?,
+                Some(RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56
+                })
+            );
+            assert_eq!(
+                state.terminal.bg_color()?,
+                Some(RgbColor {
+                    r: 0x21,
+                    g: 0x43,
+                    b: 0x65
+                })
+            );
+            assert_eq!(
+                state.terminal.color_palette()?.get(PaletteIndex::RED),
+                RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33
+                }
+            );
+            let foreground =
+                crate::components::style::color_for(crate::components::style::TEXT_PRIMARY, dark);
+            assert_eq!(
+                state.terminal.default_fg_color()?,
+                Some(RgbColor {
+                    r: (foreground >> 16) as u8,
+                    g: (foreground >> 8) as u8,
+                    b: foreground as u8
+                })
+            );
+            state.refresh_frame();
+            assert!(state.rendered.iter().flatten().any(
+                |span| span.text.contains('X') && span.fg == Some(super::rgb_to_rgba(9, 8, 7))
+            ));
+        }
+        Ok(())
+    }
     use libghostty_vt::terminal::ScrollViewport;
     use std::prelude::v1::test;
 
@@ -612,6 +728,86 @@ mod tests {
         assert!(state.following_output());
         state.feed("\x1b[?1049l");
         assert!(text(&state).contains("prompt>"));
+    }
+
+    #[test]
+    fn growing_primary_adds_blank_rows_above_an_above_bottom_cursor() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(20, 5, 200, 8, 20)?;
+        state.feed("alpha\r\nbeta");
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(1));
+        state.resize(20, 8, 8, 20)?;
+        assert_eq!(text(&state), "\n\n\nalpha\nbeta");
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(4));
+        // The cursor remains attached to the same text, including its column.
+        state.feed("!");
+        assert!(text(&state).ends_with("beta!"));
+        Ok(())
+    }
+
+    #[test]
+    fn primary_shrink_then_growth_reveals_history_above_existing_rows() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(20, 5, 200, 8, 20)?;
+        state.feed("one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        state.resize(20, 3, 8, 20)?;
+        assert_eq!(text(&state), "three\nfour\nfive");
+        state.resize(20, 5, 8, 20)?;
+        assert_eq!(text(&state), "one\ntwo\nthree\nfour\nfive");
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(4));
+        // Native saved-cursor pins must move with the content too.
+        state.feed("\x1b7");
+        state.resize(20, 8, 8, 20)?;
+        state.feed("\x1b[H\x1b8!");
+        assert!(text(&state).ends_with("five!"));
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(7));
+        Ok(())
+    }
+
+    #[test]
+    fn primary_growth_keeps_a_manual_history_view_pinned() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(20, 5, 200, 8, 20)?;
+        for index in 1..=30 {
+            state.feed(format!("line-{index}\r\n"));
+        }
+        state.scroll(ScrollViewport::Delta(-10));
+        let previous = text(&state);
+        state.resize(20, 8, 8, 20)?;
+        assert!(text(&state).starts_with(&previous));
+        assert!(!state.following_output());
+        assert!(state.cursor.is_none());
+        state.feed("new-output\r\n");
+        assert!(text(&state).starts_with(&previous));
+        Ok(())
+    }
+
+    #[test]
+    fn primary_reflow_preserves_content_and_cursor_while_growing() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(8, 3, 200, 8, 20)?;
+        state.feed("abcdefghijklmnop");
+        state.resize(4, 6, 8, 20)?;
+        assert_eq!(text(&state).replace('\n', ""), "abcdefghijklmnop");
+        assert!(
+            state
+                .cursor
+                .is_some_and(|cursor| cursor.row < 6 && cursor.column < 4)
+        );
+        state.resize(8, 8, 8, 20)?;
+        assert_eq!(text(&state).replace('\n', ""), "abcdefghijklmnop");
+        state.feed("!");
+        assert_eq!(text(&state).replace('\n', ""), "abcdefghijklmnop!");
+        Ok(())
+    }
+
+    #[test]
+    fn alternate_screen_growth_keeps_application_coordinates() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(20, 5, 200, 8, 20)?;
+        state.feed("primary\x1b[?1049h\x1b[Happlication");
+        state.resize(20, 8, 8, 20)?;
+        assert_eq!(text(&state), "application");
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(0));
+        state.feed("\x1b[?1049l");
+        assert_eq!(text(&state), "\n\n\nprimary");
+        assert_eq!(state.cursor.map(|cursor| cursor.row), Some(3));
+        Ok(())
     }
 
     #[test]

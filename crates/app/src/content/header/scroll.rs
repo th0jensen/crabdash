@@ -1,4 +1,5 @@
 //! Reveal selected tabs without overriding manual scrolling or an in-progress drag.
+use crate::layout::geometry::reveal_offset;
 use crate::{app::Crabdash, features::workspaces::model::Tab};
 use gpui::{Context, Pixels, ScrollHandle, SharedString, Window, point, px};
 
@@ -6,7 +7,7 @@ use gpui::{Context, Pixels, ScrollHandle, SharedString, Window, point, px};
 struct Geometry {
     tabs: Vec<Tab>,
     active: Tab,
-    width: Pixels,
+    widths: Vec<Pixels>,
     viewport: Pixels,
 }
 
@@ -22,7 +23,7 @@ pub(super) fn handle(
     pane: u32,
     tabs: &[Tab],
     active: Tab,
-    width: Pixels,
+    widths: &[Pixels],
     viewport: Pixels,
     window: &mut Window,
     cx: &mut Context<Crabdash>,
@@ -32,7 +33,7 @@ pub(super) fn handle(
     let geometry = Geometry {
         tabs: tabs.to_vec(),
         active,
-        width,
+        widths: widths.to_vec(),
         viewport: viewport.max(px(0.0)),
     };
     let selection = app
@@ -47,9 +48,9 @@ pub(super) fn handle(
                 || selection.is_some_and(|sequence| state.selection != Some(sequence)))
         {
             if let Some(index) = tabs.iter().position(|tab| *tab == active) {
-                // Equal-width tabs let us use this frame's geometry. GPUI's
-                // scroll_to_item still has default/previous bounds at this point.
-                let offset = reveal_offset(state.scroll.offset().x, width, viewport, index);
+                // Use measured widths from this frame; item bounds still refer
+                // to the preceding layout when titles or pane geometry change.
+                let offset = reveal_offset(state.scroll.offset().x, widths, viewport, index);
                 state.scroll.set_offset(point(offset, px(0.0)));
             }
             state.geometry = Some(geometry);
@@ -61,31 +62,25 @@ pub(super) fn handle(
     })
 }
 
-use crate::layout::geometry::reveal_offset;
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn reveals_clipped_tabs_using_the_current_pane_width() {
-        assert_eq!(reveal_offset(px(0.0), px(154.0), px(430.0), 2), px(-32.0));
-        assert_eq!(
-            reveal_offset(px(-32.0), px(154.0), px(330.0), 2),
-            px(-132.0)
-        );
-        assert_eq!(reveal_offset(px(-132.0), px(154.0), px(330.0), 0), px(0.0));
-        assert_eq!(reveal_offset(px(0.0), px(220.0), px(858.0), 3), px(-22.0));
+    fn reveals_variable_width_tabs_after_selection_and_resize() {
+        let widths = [px(92.0), px(80.0), px(110.0), px(86.0)];
+        assert_eq!(reveal_offset(px(0.0), &widths, px(250.0), 2), px(-32.0));
+        assert_eq!(reveal_offset(px(-32.0), &widths, px(200.0), 3), px(-168.0));
+        assert_eq!(reveal_offset(px(-168.0), &widths, px(200.0), 0), px(0.0));
+        assert_eq!(reveal_offset(px(-32.0), &widths, px(400.0), 2), px(-32.0));
     }
 
     #[test]
-    fn preserves_visible_tabs_and_prefers_identity_when_a_tab_cannot_fit() {
-        assert_eq!(
-            reveal_offset(px(-100.0), px(154.0), px(430.0), 1),
-            px(-100.0)
-        );
-        assert_eq!(reveal_offset(px(-32.0), px(154.0), px(600.0), 2), px(-32.0));
-        assert_eq!(reveal_offset(px(0.0), px(300.0), px(200.0), 1), px(-300.0));
-        assert_eq!(reveal_offset(px(-10.0), px(154.0), px(0.0), 2), px(-10.0));
+    fn keeps_visible_tabs_and_anchors_oversized_titles_to_their_start() {
+        let widths = [px(92.0), px(300.0), px(110.0)];
+        assert_eq!(reveal_offset(px(-92.0), &widths, px(400.0), 1), px(-92.0));
+        assert_eq!(reveal_offset(px(0.0), &widths, px(200.0), 1), px(-92.0));
+        assert_eq!(reveal_offset(px(-10.0), &widths, px(0.0), 2), px(-10.0));
+        assert_eq!(reveal_offset(px(-10.0), &widths, px(200.0), 99), px(-10.0));
     }
 }

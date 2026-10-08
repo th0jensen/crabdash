@@ -6,11 +6,10 @@ use objc2::{
     runtime::Sel, sel,
 };
 use objc2_app_kit::{
-    NSImage, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSImage, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemGroup,
-    NSToolbarItemGroupSelectionMode, NSToolbarItemIdentifier,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarSpaceItemIdentifier,
-    NSToolbarToggleSidebarItemIdentifier,
+    NSToolbarItemGroupSelectionMode, NSToolbarItemIdentifier, NSToolbarSpaceItemIdentifier,
+    NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use smol::channel::Sender;
@@ -18,6 +17,7 @@ use std::cell::RefCell;
 
 const REFRESH: &str = "CrabdashRefresh";
 const GROUP: &str = "CrabdashTerminalWorkspaces";
+const SIDEBAR_SEPARATOR: &str = "CrabdashSidebarSeparator";
 
 define_class!(
     // SAFETY: NSObject has no subclassing requirements. AppKit's weak targets
@@ -50,18 +50,20 @@ struct Items {
 }
 struct DelegateState {
     target: Retained<ToolbarTarget>,
+    split_view: Retained<NSSplitView>,
     inserted: RefCell<Items>,
 }
 
 fn identifiers() -> Retained<NSArray<NSToolbarItemIdentifier>> {
     let refresh = NSString::from_str(REFRESH);
     let group = NSString::from_str(GROUP);
-    // SAFETY: These are immutable AppKit identifiers available on supported
-    // macOS versions. AppKit creates the sidebar toggle and tracking separator.
+    let sidebar_separator = NSString::from_str(SIDEBAR_SEPARATOR);
+    // SAFETY: These immutable AppKit identifiers exist on supported versions.
+    // The delegate binds the stock separator to the nested native split view.
     unsafe {
         NSArray::from_slice(&[
             NSToolbarToggleSidebarItemIdentifier,
-            NSToolbarSidebarTrackingSeparatorItemIdentifier,
+            &sidebar_separator,
             NSToolbarFlexibleSpaceItemIdentifier,
             &refresh,
             NSToolbarSpaceItemIdentifier,
@@ -130,6 +132,13 @@ define_class!(
             let mtm = self.mtm();
             let target = &self.ivars().target;
             match identifier.to_string().as_str() {
+                SIDEBAR_SEPARATOR => Some(
+                    NSTrackingSeparatorToolbarItem::trackingSeparatorToolbarItemWithIdentifier_splitView_dividerIndex(
+                        identifier,
+                        &self.ivars().split_view,
+                        0,
+                    ).into_super(),
+                ),
                 REFRESH => {
                     let refresh = item(
                         REFRESH,
@@ -190,12 +199,17 @@ pub(super) struct Toolbar {
     delegate: Retained<ToolbarDelegate>,
 }
 impl Toolbar {
-    pub(super) fn new(commands: Sender<Command>, mtm: MainThreadMarker) -> Self {
+    pub(super) fn new(
+        commands: Sender<Command>,
+        split_view: Retained<NSSplitView>,
+        mtm: MainThreadMarker,
+    ) -> Self {
         let target = ToolbarTarget::alloc(mtm).set_ivars(commands);
         // SAFETY: NSObject initializes the allocated action target.
         let target: Retained<ToolbarTarget> = unsafe { msg_send![super(target), init] };
         let delegate = ToolbarDelegate::alloc(mtm).set_ivars(DelegateState {
             target,
+            split_view,
             inserted: RefCell::new(Items::default()),
         });
         // SAFETY: NSObject initializes the allocated toolbar delegate.

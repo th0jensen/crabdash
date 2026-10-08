@@ -621,4 +621,30 @@ mod tests {
         assert_eq!(fs::read(&path)?, valid);
         Ok(())
     }
+
+    #[test]
+    fn saving_closed_features_and_empty_dashboards_does_not_restore_them() -> Result<()> {
+        use super::super::model::Tab;
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let mut store = Store::default();
+        assert!(store.current_mut().layout.close_feature(Tab::Disks));
+        store.save_to(&path)?;
+        let bytes = fs::read(&path)?;
+        let mut loaded = Store::load_from(&path, 240.0)?;
+        assert_eq!(fs::read(&path)?, bytes);
+        assert!(!loaded.current().layout.tabs().contains(&Tab::Disks));
+        for tab in loaded.current().layout.tabs() {
+            assert!(loaded.current_mut().layout.close_feature(tab));
+        }
+        loaded.save_to(&path)?;
+        let mut empty = Store::load_from(&path, 240.0)?;
+        assert!(empty.current().layout.tabs().is_empty());
+        assert!(empty.current_mut().layout.show_feature(Tab::Services));
+        empty.save_to(&path)?;
+        let reopened = Store::load_from(&path, 240.0)?;
+        assert_eq!(reopened.current().layout.tabs(), [Tab::Services]);
+        assert_eq!(reopened.current().layout.active(), Tab::Services);
+        Ok(())
+    }
 }

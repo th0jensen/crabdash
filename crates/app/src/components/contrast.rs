@@ -36,6 +36,7 @@ mod tests {
     fn translucent_tint_contrast_accounts_for_its_underlying_surface() {
         let green = [89.0 / 255.0, 198.0 / 255.0, 154.0 / 255.0];
         assert_eq!(tinted_text(green, 0.24, 0x181818), 0xFFFFFF);
+        assert_eq!(tinted_text(green, 0.24, 0xF8F8F8), 0x000000);
         assert_eq!(tinted_text(green, 1.0, 0x181818), 0x000000);
         assert_eq!(tinted_text(green, 0.0, 0xFFFFFF), 0x000000);
     }

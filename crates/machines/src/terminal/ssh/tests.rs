@@ -59,6 +59,7 @@ async fn input_preserves_buffered_remote_terminal_output() -> Result<()> {
         loop {
             match event_receiver.recv().await.context("terminal actor closed without exit")? {
                 TerminalEvent::Output(bytes) => received.extend(bytes),
+                TerminalEvent::Program(_) => {}
                 TerminalEvent::Exited(code) => { ensure!(code == Some(0), "unexpected terminal exit: {code:?}"); break; }
                 TerminalEvent::Error(message) => return Err(anyhow!(message)),
             }

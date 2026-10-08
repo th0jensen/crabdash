@@ -6,7 +6,7 @@ use gpui::{
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
     ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, point, prelude::*, px, relative, rgb, rgba, size,
+    fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -558,9 +558,9 @@ impl Element for TextFieldElement {
             content
         };
         let text_color = if input.content.is_empty() {
-            rgb(0x6C6C70)
+            crate::components::style::rgb(0x6C6C70)
         } else {
-            rgb(0xE5E5EA)
+            crate::components::style::rgb(0xE5E5EA)
         };
 
         let run = TextRun {
@@ -614,7 +614,7 @@ impl Element for TextFieldElement {
                         point(origin_x + cursor_x, bounds.top() + px(1.0)),
                         size(px(2.0), bounds.bottom() - bounds.top() - px(2.0)),
                     ),
-                    rgb(0xD4D4D4),
+                    crate::components::style::rgb(0xD4D4D4),
                 )),
             )
         } else {
@@ -630,7 +630,7 @@ impl Element for TextFieldElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0xFFFFFF24),
+                    crate::components::style::rgba(0xFFFFFF24),
                 )),
                 None,
             )
@@ -716,12 +716,12 @@ impl Render for TextField {
             .px(px(10.0))
             .flex()
             .items_center()
-            .bg(rgb(style::SURFACE))
+            .bg(crate::components::style::rgb(style::SURFACE))
             .border_1()
             .border_color(if focused {
-                rgb(style::FOCUS_BORDER)
+                crate::components::style::rgb(style::FOCUS_BORDER)
             } else {
-                rgb(style::BORDER)
+                crate::components::style::rgb(style::BORDER)
             })
             .rounded(px(if self.compact {
                 style::CARD_RADIUS
@@ -745,7 +745,7 @@ impl Render for TextField {
                 this.child(
                     div()
                         .text_size(gpui::rems(style::META / 16.0))
-                        .text_color(rgb(0xAEAEB2))
+                        .text_color(crate::components::style::rgb(0xAEAEB2))
                         .child(self.label.clone()),
                 )
             })

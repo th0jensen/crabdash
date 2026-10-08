@@ -287,7 +287,7 @@ impl Crabdash {
             .tab_reveal
             .map_or(1, |(_, sequence)| sequence.wrapping_add(1));
         self.workspaces.tab_reveal = Some((tab.into(), sequence));
-        if self.workspaces.layout_mut().show(tab.into()) {
+        if self.workspaces.layout_mut().show_feature(tab.into()) {
             self.active_tab = tab;
             self.persist_workspace(cx);
         } else {
@@ -305,6 +305,26 @@ impl Crabdash {
             .is_some_and(|(tabs, _)| tabs.contains(&tab.into()))
         {
             self.select_workspace_tab(tab, cx);
+        }
+    }
+
+    pub(crate) fn close_workspace_tab(&mut self, pane: u32, tab: MainTab, cx: &mut Context<Self>) {
+        self.sync_workspace_store(cx);
+        if !self
+            .workspaces
+            .layout()
+            .pane(pane)
+            .is_some_and(|(tabs, _)| tabs.contains(&tab.into()))
+        {
+            return;
+        }
+        self.workspaces.drag_target = None;
+        self.workspaces.resizing_split = None;
+        self.workspaces.split_resize_grab = None;
+        if self.workspaces.layout_mut().close_feature(tab.into()) {
+            self.active_tab = self.workspaces.layout().active().into();
+            self.workspaces.tab_reveal = None;
+            self.persist_workspace(cx);
         }
     }
 

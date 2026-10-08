@@ -18,8 +18,15 @@ pub(crate) use platform::{frame, frame_inset, root_background, titlebar_backgrou
 use windows as platform;
 
 mod accent;
+mod theme;
+pub use theme::Appearance;
+pub(crate) use theme::synchronize;
 #[cfg(target_os = "linux")]
 mod linux_accent;
 #[cfg(target_os = "windows")]
 mod windows_accent;
-pub(crate) use accent::{initialize, system_accent};
+pub(crate) use accent::system_accent;
+pub(crate) fn initialize(cx: &mut gpui::App) {
+    theme::initialize(cx);
+    accent::initialize(cx);
+}

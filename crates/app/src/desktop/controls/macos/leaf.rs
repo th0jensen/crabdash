@@ -698,7 +698,7 @@ impl Leaf {
                     let rgb = crate::components::contrast::tinted_text(
                         [f64::from(color.r), f64::from(color.g), f64::from(color.b)],
                         f64::from(color.a * crate::components::style::STATE_TINT_ALPHA),
-                        crate::components::style::SURFACE,
+                        crate::components::style::color(crate::components::style::SURFACE),
                     );
                     NSColor::colorWithSRGBRed_green_blue_alpha(
                         f64::from((rgb >> 16) & 255) / 255.0,

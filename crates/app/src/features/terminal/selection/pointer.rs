@@ -9,7 +9,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Grid {
+pub(in crate::features::terminal) struct Grid {
     pub(super) origin: Point<Pixels>,
     cell_width: f32,
     cell_height: f32,
@@ -19,7 +19,7 @@ pub(super) struct Grid {
 }
 
 impl Grid {
-    pub(super) fn new(
+    pub(in crate::features::terminal) fn new(
         bounds: Bounds<Pixels>,
         columns: u16,
         rows: u16,
@@ -89,6 +89,17 @@ impl Grid {
             },
         )
     }
+
+    pub(in crate::features::terminal) fn mouse_position(
+        self,
+        position: Point<Pixels>,
+    ) -> (f32, f32) {
+        let local = position - self.origin;
+        (
+            f32::from(local.x) / self.cell_width,
+            f32::from(local.y) / self.cell_height,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,7 +115,7 @@ struct Target {
 }
 
 impl Target {
-    fn valid(self, app: &Crabdash, window: &Window, cx: &App) -> bool {
+    fn available(self, app: &Crabdash, window: &Window, cx: &App) -> bool {
         super::super::actions::allowed(app, cx)
             && app.open_menu.is_none()
             && window.is_window_active()
@@ -122,11 +133,21 @@ impl Target {
                 .is_some_and(|drawer| {
                     drawer.model.scope == self.scope
                         && drawer.model.revision == self.revision
-                        && drawer.model.layout.focused_tab() == Some(self.session)
                         && drawer.sessions.get(&self.session).is_some_and(|session| {
-                            session.input.entity_id() == self.input
-                                && session.rename.is_none()
-                                && session.input.focus_handle(cx).is_focused(window)
+                            session.input.entity_id() == self.input && session.rename.is_none()
+                        })
+                })
+    }
+
+    fn valid(self, app: &Crabdash, window: &Window, cx: &App) -> bool {
+        self.available(app, window, cx)
+            && app
+                .quake_terminals
+                .get(&self.machine)
+                .is_some_and(|drawer| {
+                    drawer.model.layout.focused_tab() == Some(self.session)
+                        && drawer.sessions.get(&self.session).is_some_and(|session| {
+                            session.input.focus_handle(cx).is_focused(window)
                         })
                 })
     }
@@ -160,6 +181,30 @@ fn fail(app: &mut Crabdash, target: Target, error: anyhow::Error, cx: &mut Conte
     }
     app.set_status_error(format!("Unable to select terminal text: {error}"));
     cx.notify();
+}
+
+fn report_mouse(
+    app: &mut Crabdash,
+    target: Target,
+    result: anyhow::Result<Option<Vec<u8>>>,
+    cx: &mut Context<Crabdash>,
+) -> bool {
+    let result = match result {
+        Ok(None) => return false,
+        Ok(Some(bytes)) => app
+            .quake_terminals
+            .get(&target.machine)
+            .and_then(|drawer| drawer.sessions.get(&target.session))
+            .and_then(|session| session.controller.as_ref())
+            .filter(|_| !bytes.is_empty())
+            .map_or(Ok(()), |controller| controller.write(bytes)),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        app.set_status_error(format!("Unable to send terminal mouse input: {error}"));
+    }
+    cx.notify();
+    true
 }
 
 /// Canvas listeners own only a held text gesture; other panes and controls keep their events.
@@ -209,10 +254,10 @@ pub(crate) fn layer(
                 return;
             };
             let press_owner = owner.clone();
+            let press_hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture
-                    || event.button != MouseButton::Left
-                    || !hitbox.is_hovered(window)
+                    || !press_hitbox.is_hovered(window)
                     || !grid.bounds().contains(&event.position)
                 {
                     return;
@@ -220,6 +265,26 @@ pub(crate) fn layer(
                 press_owner
                     .update(cx, |app, cx| {
                         if !target.valid(app, window, cx) {
+                            return;
+                        }
+                        if let Some(result) = app
+                            .quake_terminals
+                            .get_mut(&target.machine)
+                            .and_then(|drawer| drawer.sessions.get_mut(&target.session))
+                            .map(|session| {
+                                session.terminal.mouse_press(
+                                    event.button,
+                                    event.modifiers,
+                                    event.position,
+                                    grid,
+                                )
+                            })
+                            && report_mouse(app, target, result, cx)
+                        {
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if event.button != MouseButton::Left {
                             return;
                         }
                         let (x, y, _) = grid.surface(event.position);
@@ -252,12 +317,39 @@ pub(crate) fn layer(
                     .ok();
             });
             let move_owner = owner.clone();
+            let move_hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture {
                     return;
                 }
                 move_owner
                     .update(cx, |app, cx| {
+                        if target.valid(app, window, cx)
+                            && (grid.bounds().contains(&event.position)
+                                && move_hitbox.is_hovered(window)
+                                || app
+                                    .quake_terminals
+                                    .get(&target.machine)
+                                    .and_then(|drawer| drawer.sessions.get(&target.session))
+                                    .is_some_and(|session| session.terminal.has_mouse_press()))
+                            && let Some(result) = app
+                                .quake_terminals
+                                .get_mut(&target.machine)
+                                .and_then(|drawer| drawer.sessions.get_mut(&target.session))
+                                .filter(|session| session.terminal.selection.held.is_none())
+                                .map(|session| {
+                                    session.terminal.mouse_motion(
+                                        event.pressed_button,
+                                        event.modifiers,
+                                        event.position,
+                                        grid,
+                                    )
+                                })
+                            && report_mouse(app, target, result, cx)
+                        {
+                            cx.stop_propagation();
+                            return;
+                        }
                         let held = app
                             .quake_terminals
                             .get(&target.machine)
@@ -285,11 +377,32 @@ pub(crate) fn layer(
             });
             let up_owner = owner.clone();
             window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-                if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+                if phase != DispatchPhase::Capture {
                     return;
                 }
                 up_owner
                     .update(cx, |app, cx| {
+                        if target.valid(app, window, cx)
+                            && let Some(result) = app
+                                .quake_terminals
+                                .get_mut(&target.machine)
+                                .and_then(|drawer| drawer.sessions.get_mut(&target.session))
+                                .map(|session| {
+                                    session.terminal.mouse_release(
+                                        event.button,
+                                        event.modifiers,
+                                        event.position,
+                                        grid,
+                                    )
+                                })
+                            && report_mouse(app, target, result, cx)
+                        {
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if event.button != MouseButton::Left {
+                            return;
+                        }
                         let held = app
                             .quake_terminals
                             .get(&target.machine)
@@ -319,11 +432,55 @@ pub(crate) fn layer(
                     })
                     .ok();
             });
+            let wheel_owner = owner.clone();
+            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture
+                    || !hitbox.is_hovered(window)
+                    || !grid.bounds().contains(&event.position)
+                {
+                    return;
+                }
+                wheel_owner
+                    .update(cx, |app, cx| {
+                        if !target.available(app, window, cx) {
+                            return;
+                        }
+                        let (_, line_height) = super::super::cell_metrics(&app.preferences, cx);
+                        if let Some(result) = app
+                            .quake_terminals
+                            .get_mut(&target.machine)
+                            .and_then(|drawer| drawer.sessions.get_mut(&target.session))
+                            .map(|session| {
+                                session.terminal.mouse_wheel(
+                                    event.delta,
+                                    event.modifiers,
+                                    event.position,
+                                    grid,
+                                    line_height,
+                                )
+                            })
+                            && report_mouse(app, target, result, cx)
+                        {
+                            cx.stop_propagation();
+                        }
+                    })
+                    .ok();
+            });
             let exit_owner = owner.clone();
             window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                 if phase == DispatchPhase::Capture {
                     exit_owner
-                        .update(cx, |app, _| app.cancel_terminal_selection(target))
+                        .update(cx, |app, cx| {
+                            app.cancel_terminal_selection(target);
+                            if let Some(result) = app
+                                .quake_terminals
+                                .get_mut(&target.machine)
+                                .and_then(|drawer| drawer.sessions.get_mut(&target.session))
+                                .map(|session| session.terminal.cancel_mouse().map(Some))
+                            {
+                                report_mouse(app, target, result, cx);
+                            }
+                        })
                         .ok();
                 }
             });
@@ -477,6 +634,32 @@ impl Crabdash {
     }
 
     pub(crate) fn reconcile_terminal_selection(&mut self, window: &Window, cx: &App) {
+        let machine = self.selected_machine().uuid;
+        let allowed = super::super::actions::allowed(self, cx)
+            && self.open_menu.is_none()
+            && window.is_window_active()
+            && self.quake_terminal_open;
+        for (id, drawer) in &mut self.quake_terminals {
+            for (session_id, session) in &mut drawer.sessions {
+                if !allowed
+                    || *id != machine
+                    || drawer.model.layout.focused_tab() != Some(*session_id)
+                    || session.rename.is_some()
+                    || !session.input.focus_handle(cx).is_focused(window)
+                {
+                    let result = session.terminal.cancel_mouse().and_then(|bytes| {
+                        session
+                            .controller
+                            .as_ref()
+                            .filter(|_| !bytes.is_empty())
+                            .map_or(Ok(()), |controller| controller.write(bytes))
+                    });
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "Failed to release terminal mouse input");
+                    }
+                }
+            }
+        }
         let cancel = self
             .quake_terminals
             .values()

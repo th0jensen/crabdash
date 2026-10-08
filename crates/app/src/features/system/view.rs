@@ -112,9 +112,9 @@ pub(super) fn card() -> Div {
         .min_w_0()
         .flex_none()
         .p(rems(12.0 / 16.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .rounded(px(style::CARD_RADIUS))
         .flex()
         .flex_col()
@@ -140,7 +140,7 @@ pub(super) fn heading(name: &str, value: String, detail: String) -> Div {
                     this.child(
                         clipped_text(detail)
                             .text_size(rems(style::META / 16.0))
-                            .text_color(rgb(style::TEXT_MUTED)),
+                            .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
                     )
                 }),
         )
@@ -163,7 +163,7 @@ fn fact(label: &str, value: String) -> Div {
             clipped_text(label.to_string())
                 .w(rems(88.0 / 16.0))
                 .flex_none()
-                .text_color(rgb(style::TEXT_MUTED)),
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
         )
         .child(clipped_text(value).flex_1())
 }
@@ -178,13 +178,15 @@ pub(super) fn meter(value: f64, accent: Option<u32>) -> Div {
         .w_full()
         .h(px(3.0))
         .rounded(px(2.0))
-        .bg(rgb(style::BORDER))
+        .bg(crate::components::style::rgb(style::BORDER))
         .child(
             div()
                 .h_full()
                 .w(relative(value.clamp(0.0, 100.0) as f32 / 100.0))
                 .rounded(px(2.0))
-                .bg(rgb(accent.unwrap_or(style::TEXT_MUTED))),
+                .bg(rgb(accent.unwrap_or(crate::components::style::color(
+                    style::TEXT_MUTED,
+                )))),
         )
 }
 fn cpu_card(
@@ -206,7 +208,7 @@ fn cpu_card(
                 state,
                 |point| point.cpu,
                 None,
-                accent.unwrap_or(style::TEXT_PRIMARY),
+                accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
                 false,
             )],
             charts.percent("cpu", "CPU".into()),
@@ -241,7 +243,7 @@ fn memory_card(
                 state,
                 |point| point.memory,
                 None,
-                accent.unwrap_or(style::TEXT_MUTED),
+                accent.unwrap_or(crate::components::style::color(style::TEXT_MUTED)),
                 false,
             )],
             charts.percent("memory", "Memory".into()),
@@ -279,7 +281,10 @@ fn io_row(
         .flex_col()
         .gap(px(3.0))
         .text_size(rems(style::META / 16.0))
-        .child(clipped_text(id.to_string()).text_color(rgb(style::TEXT_PRIMARY)))
+        .child(
+            clipped_text(id.to_string())
+                .text_color(crate::components::style::rgb(style::TEXT_PRIMARY)),
+        )
         .child(
             div()
                 .w_full()
@@ -290,12 +295,12 @@ fn io_row(
                 .child(
                     clipped_text(format!("{read_label} {}", rate(read)))
                         .max_w_full()
-                        .text_color(rgb(style::TEXT_PRIMARY)),
+                        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY)),
                 )
                 .child(
                     clipped_text(format!("{write_label} {}", rate(write)))
                         .max_w_full()
-                        .text_color(rgb(style::TEXT_MUTED)),
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED)),
                 ),
         )
 }
@@ -356,14 +361,14 @@ fn network_card(
                     state,
                     |point| point.network_rx,
                     Some("Receive"),
-                    accent.unwrap_or(style::TEXT_PRIMARY),
+                    accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
                     false,
                 ),
                 history_series(
                     state,
                     |point| point.network_tx,
                     Some("Send"),
-                    style::TEXT_MUTED,
+                    style::color(style::TEXT_MUTED),
                     true,
                 ),
             ],
@@ -439,14 +444,14 @@ fn disk_card(
                     state,
                     |point| point.disk_read,
                     Some("Read"),
-                    accent.unwrap_or(style::TEXT_PRIMARY),
+                    accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
                     false,
                 ),
                 history_series(
                     state,
                     |point| point.disk_write,
                     Some("Write"),
-                    style::TEXT_MUTED,
+                    style::color(style::TEXT_MUTED),
                     true,
                 ),
             ],
@@ -518,7 +523,8 @@ fn gpu_card(
                     vec![Series {
                         label: None,
                         samples: history.iter().copied().collect(),
-                        color: accent.unwrap_or(style::TEXT_PRIMARY),
+                        color:
+                            accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
                         dashed: false,
                     }],
                     charts.percent(
@@ -560,7 +566,7 @@ fn gpu_card(
                 this.child(
                     div()
                         .text_size(rems(style::META / 16.0))
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child("Telemetry unavailable for this sample."),
                 )
             },
@@ -683,7 +689,7 @@ pub(crate) fn render(
         mosaic = mosaic.child(
             card()
                 .col_span_full()
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(status.empty_message()),
         );
     }
@@ -698,7 +704,7 @@ pub(crate) fn render(
                 .min_w_0()
                 .flex_1()
                 .text_size(rems(style::META / 16.0))
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(status.label()),
         )
         .child(
@@ -726,13 +732,19 @@ pub(crate) fn render(
         .child(toolbar)
         .when_some(
             state.and_then(|state| state.error.as_ref()),
-            |this, error| this.child(card().text_color(rgb(style::DANGER)).child(error.clone())),
+            |this, error| {
+                this.child(
+                    card()
+                        .text_color(crate::components::style::rgb(style::DANGER))
+                        .child(error.clone()),
+                )
+            },
         )
         .child(mosaic)
         .child(
             div()
                 .text_size(rems(style::META / 16.0))
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(
                     "Recent samples · rates require two samples · used memory = total − available",
                 ),
@@ -744,7 +756,7 @@ pub(crate) fn render(
         .min_w_0()
         .min_h_0()
         .overflow_y_scroll()
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .text_size(rems(style::TEXT / 16.0))
         .child(content)
 }

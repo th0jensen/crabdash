@@ -214,7 +214,7 @@ pub(super) fn render(
             div()
                 .relative()
                 .flex_none()
-                .bg(rgb(style::BORDER))
+                .bg(crate::components::style::rgb(style::BORDER))
                 .when(horizontal, |this| this.w(px(1.0)).h_full())
                 .when(!horizontal, |this| this.h(px(1.0)).w_full()),
         )

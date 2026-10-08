@@ -58,14 +58,20 @@ pub(crate) fn drag_ratio(
 
 pub(crate) fn reveal_offset(
     current: Pixels,
-    width: Pixels,
+    widths: &[Pixels],
     viewport: Pixels,
     index: usize,
 ) -> Pixels {
+    let Some(width) = widths.get(index).copied() else {
+        return current;
+    };
     if viewport <= px(0.0) {
         return current;
     }
-    let left = width * index as f32;
+    let left = widths[..index]
+        .iter()
+        .copied()
+        .fold(px(0.0), |sum, width| sum + width);
     let right = left + width;
     if left + current < px(0.0) || width > viewport {
         -left

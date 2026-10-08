@@ -20,12 +20,12 @@ pub(crate) fn table_row() -> Div {
 pub(crate) fn table_heading() -> Div {
     table_row()
         .h(gpui::rems(style::BAR / 16.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_b_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .text_size(gpui::rems(style::META / 16.0))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
 }
 
 pub(crate) fn fixed_column(width: f32) -> Div {
@@ -76,9 +76,9 @@ pub(crate) fn responsive_status_column(compact: bool) -> Div {
 pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
     div()
         .w_full()
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .rounded(px(style::CARD_RADIUS))
         .px(px(10.0))
         .py(px(9.0))
@@ -99,7 +99,7 @@ pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
                         .min_w_0()
                         .whitespace_normal()
                         .text_size(gpui::rems(style::TEXT / 16.0))
-                        .text_color(rgb(style::TEXT_PRIMARY))
+                        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
                         .child(title.to_string()),
                 )
                 .child(
@@ -108,7 +108,7 @@ pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
                         .min_w_0()
                         .whitespace_normal()
                         .text_size(gpui::rems(style::META / 16.0))
-                        .text_color(rgb(style::TEXT_MUTED))
+                        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                         .child(description.to_string()),
                 ),
         )
@@ -116,9 +116,9 @@ pub(crate) fn placeholder_card(title: &str, description: &str) -> Div {
 
 pub(crate) fn error_panel(title: &str, error: String) -> Div {
     div()
-        .bg(rgb(0x47232B))
+        .bg(crate::components::style::rgb(0x47232B))
         .border_1()
-        .border_color(rgb(0x4A252C))
+        .border_color(crate::components::style::rgb(0x4A252C))
         .rounded(px(style::CARD_RADIUS))
         .p(px(16.0))
         .flex()
@@ -127,13 +127,13 @@ pub(crate) fn error_panel(title: &str, error: String) -> Div {
         .child(
             div()
                 .text_size(gpui::rems(style::TEXT / 16.0))
-                .text_color(rgb(0xFF9F99))
+                .text_color(crate::components::style::rgb(0xFF9F99))
                 .child(title.to_string()),
         )
         .child(
             div()
                 .text_size(gpui::rems(style::TEXT / 16.0))
-                .text_color(rgb(0xF2B6B2))
+                .text_color(crate::components::style::rgb(0xF2B6B2))
                 .child(error),
         )
 }
@@ -182,9 +182,9 @@ pub(crate) fn table_card() -> Div {
         .flex()
         .flex_col()
         .overflow_hidden()
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .rounded(px(style::CARD_RADIUS))
 }
 
@@ -213,12 +213,12 @@ pub(crate) fn sort_heading(
         .items_center()
         .gap(px(5.0))
         .cursor_pointer()
-        .text_color(rgb(if direction.is_some() {
+        .text_color(crate::components::style::rgb(if direction.is_some() {
             style::TEXT_SELECTED
         } else {
             style::TEXT_MUTED
         }))
-        .hover(|s| s.text_color(rgb(style::TEXT_SELECTED)))
+        .hover(|s| s.text_color(crate::components::style::rgb(style::TEXT_SELECTED)))
         .tooltip(move |_, cx| control_tooltip(hint.clone(), cx))
         .child(clipped_text(label.to_owned()).flex_1())
         .child(lucide_icon(
@@ -246,12 +246,12 @@ pub(crate) fn filter_chip(
         .items_center()
         .gap(px(6.0))
         .border_1()
-        .border_color(rgb(if active {
+        .border_color(crate::components::style::rgb(if active {
             style::CONTROL_SELECTED_BORDER
         } else {
             style::BORDER
         }))
-        .bg(rgb(if active {
+        .bg(crate::components::style::rgb(if active {
             style::CONTROL_SELECTED_BG
         } else {
             style::SURFACE
@@ -259,19 +259,19 @@ pub(crate) fn filter_chip(
         .rounded(px(style::CARD_RADIUS))
         .cursor_pointer()
         .text_size(rems(style::META / 16.0))
-        .text_color(rgb(if active {
+        .text_color(crate::components::style::rgb(if active {
             style::TEXT_SELECTED
         } else {
             style::TEXT_MUTED
         }))
         .hover(|s| {
-            s.bg(rgb(style::SURFACE_HOVER))
-                .text_color(rgb(style::TEXT_SELECTED))
+            s.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .child(label.to_owned())
         .child(
             div()
-                .text_color(rgb(if active {
+                .text_color(crate::components::style::rgb(if active {
                     style::TEXT_SELECTED
                 } else {
                     style::TEXT_PRIMARY
@@ -288,7 +288,7 @@ pub(crate) fn status_label(
     let label = label.into();
     let semantic = [style::SUCCESS, style::WARNING, style::DANGER]
         .into_iter()
-        .any(|state| color == rgb(state));
+        .any(|state| color == crate::components::style::rgb(state));
     let tint = Rgba {
         a: color.a * style::STATE_TINT_ALPHA,
         ..color
@@ -297,7 +297,7 @@ pub(crate) fn status_label(
         rgb(crate::components::contrast::tinted_text(
             [f64::from(color.r), f64::from(color.g), f64::from(color.b)],
             f64::from(tint.a),
-            style::SURFACE,
+            crate::components::style::color(style::SURFACE),
         ))
     } else {
         color

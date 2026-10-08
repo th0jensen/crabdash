@@ -5,7 +5,10 @@ pub(crate) const PATH: &str = "brands/docker.svg";
 pub(crate) const BYTES: &[u8] = include_bytes!("../../../assets/brands/docker.svg");
 
 pub(crate) fn icon(size: f32) -> Div {
-    icon_with_color(size, crate::components::style::TEXT_PRIMARY)
+    icon_with_color(
+        size,
+        crate::components::style::color(crate::components::style::TEXT_PRIMARY),
+    )
 }
 
 pub(crate) fn icon_with_color(size: f32, color: u32) -> Div {

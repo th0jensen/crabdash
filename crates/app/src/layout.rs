@@ -350,9 +350,6 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         self.focused = pane;
         changed
     }
-    pub(crate) fn show(&mut self, tab: T) -> bool {
-        self.select(tab)
-    }
     pub(crate) fn set_ratio(&mut self, split: u32, ratio: f32) -> bool {
         if !ratio.is_finite() {
             return false;

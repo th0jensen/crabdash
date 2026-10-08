@@ -374,7 +374,7 @@ pub(super) fn render(
                                         ),
                                     size(px(1.5), px((line_height - 4.0).max(0.0))),
                                 ),
-                                rgb(0xD7D7D7),
+                                crate::components::style::rgb(0xD7D7D7),
                             ));
                         }
                     });

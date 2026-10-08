@@ -354,6 +354,7 @@ impl Crabdash {
         });
         let session = terminal::QuakeTerminal {
             endpoint,
+            program: None,
             custom_name: None,
             rename: None,
             terminal,
@@ -474,6 +475,9 @@ impl Crabdash {
                                             tracing::warn!(%error, "Failed to send Ghostty PTY response");
                                         }
                                     }
+                                }
+                                TerminalEvent::Program(program) => {
+                                    quake.program = program;
                                 }
                                 TerminalEvent::Exited(status) => {
                                     quake.controller = None;

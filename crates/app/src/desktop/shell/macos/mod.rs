@@ -8,14 +8,19 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSLayoutConstraint, NSSplitViewController,
-    NSSplitViewDidResizeSubviewsNotification, NSSplitViewItem, NSTitlebarSeparatorStyle, NSView,
-    NSViewController, NSWindow, NSWindowTitleVisibility,
+    NSAutoresizingMaskOptions, NSLayoutConstraint, NSSplitView, NSSplitViewController,
+    NSSplitViewDidResizeSubviewsNotification, NSSplitViewDividerStyle, NSSplitViewItem,
+    NSTitlebarSeparatorStyle, NSView, NSViewController, NSWindow, NSWindowTitleVisibility,
 };
-use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol};
+use objc2_foundation::{
+    NSArray, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use smol::channel::Sender;
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 use uuid::Uuid;
 
 pub(super) enum Command {
@@ -48,11 +53,100 @@ define_class!(
     struct SplitController;
     unsafe impl NSObjectProtocol for SplitController {}
     impl SplitController {
+        #[unsafe(method(loadView))]
+        fn load_view(&self) {
+            let split = self.splitView();
+            // SAFETY: NSView initializes the pass-through controller root on
+            // AppKit's normal loadView -> viewDidLoad lifecycle. Setting view
+            // externally skips NSSplitViewController's native item setup.
+            let plane: Retained<NavigationPlane> = unsafe {
+                msg_send![super(NavigationPlane::alloc(self.mtm()).set_ivars(())), initWithFrame: split.frame()]
+            };
+            plane.addSubview(&split);
+            split.setTranslatesAutoresizingMaskIntoConstraints(false);
+            NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+                split.leadingAnchor().constraintEqualToAnchor(&plane.leadingAnchor()),
+                split.trailingAnchor().constraintEqualToAnchor(&plane.trailingAnchor()),
+                split.topAnchor().constraintEqualToAnchor(&plane.topAnchor()),
+                split.bottomAnchor().constraintEqualToAnchor(&plane.bottomAnchor()),
+            ]));
+            self.setView(&plane);
+        }
+
         #[unsafe(method(toggleSidebar:))]
         fn toggle_sidebar(&self, _: Option<&NSObject>) {
             // The built-in toolbar item uses the normal responder chain. Queue
             // the domain action so keyboard, toolbar and saved layouts agree.
             let _ = self.ivars().try_send(Command::ToggleSidebar);
+        }
+    }
+);
+
+define_class!(
+    // SAFETY: A regular NSViewController routes the stock toolbar's responder
+    // action to the native split controller's shared domain command.
+    #[unsafe(super = NSViewController)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = Sender<Command>]
+    struct ContentController;
+    unsafe impl NSObjectProtocol for ContentController {}
+    impl ContentController {
+        #[unsafe(method(toggleSidebar:))]
+        fn toggle_sidebar(&self, _: Option<&NSObject>) {
+            let _ = self.ivars().try_send(Command::ToggleSidebar);
+        }
+    }
+);
+
+define_class!(
+    // SAFETY: Retain the controller's normal native descendants, but let the
+    // empty navigation hosting plane pass input to the renderer below it.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct NavigationPlane;
+    unsafe impl NSObjectProtocol for NavigationPlane {}
+    impl NavigationPlane {
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            // SAFETY: NSView performs ordinary native descendant hit testing.
+            let hit: Option<Retained<NSView>> = unsafe { msg_send![super(self), hitTest: point] };
+            hit.filter(|view| Retained::as_ptr(view).cast::<()>() != (self as *const Self).cast())
+        }
+    }
+);
+
+define_class!(
+    // SAFETY: The detail plane is an empty NSView. Dashboard input belongs to
+    // the full-width renderer immediately below this native split view.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct DetailPlane;
+    unsafe impl NSObjectProtocol for DetailPlane {}
+    impl DetailPlane {
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, _: NSPoint) -> Option<Retained<NSView>> { None }
+    }
+);
+
+define_class!(
+    // SAFETY: Keep AppKit's divider dragging and sidebar hit testing, while
+    // allowing the otherwise empty dashboard detail to pass input through.
+    #[unsafe(super = NSSplitView)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RefCell<Option<Retained<NSView>>>]
+    struct NavigationSplit;
+    unsafe impl NSObjectProtocol for NavigationSplit {}
+    impl NavigationSplit {
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            // SAFETY: Forward native descendant and divider hit testing.
+            let hit: Option<Retained<NSView>> = unsafe { msg_send![super(self), hitTest: point] };
+            let detail = self.ivars().borrow().clone();
+            // SAFETY: The retained detail remains alive on the UI thread.
+            let wrapper = detail.and_then(|detail| unsafe { detail.superview() });
+            // Preserve AppKit's effective divider grab region exactly. Only
+            // empty detail hits pass through; the split itself owns resizing.
+            hit.filter(|hit| wrapper.as_ref().is_none_or(|wrapper| !hit.isDescendantOf(wrapper)))
         }
     }
 );
@@ -111,7 +205,11 @@ pub(crate) struct State {
     id: Uuid,
     shared_host: SharedHost,
     split: Retained<SplitController>,
+    host: Retained<ContentController>,
+    drawer_inset: Retained<NSLayoutConstraint>,
+    drawer_height: Cell<f32>,
     sidebar_item: Retained<NSSplitViewItem>,
+    detail_view: Retained<NSView>,
     sidebar: sidebar::Sidebar,
     toolbar: toolbar::Toolbar,
     applying: Rc<Cell<bool>>,
@@ -134,12 +232,21 @@ impl State {
         let content_frame = renderer.frame();
         let (commands, receiver) = smol::channel::unbounded();
         let sidebar = sidebar::Sidebar::new(commands.clone(), mtm);
-        let toolbar = toolbar::Toolbar::new(commands.clone(), mtm);
         let allocated = SplitController::alloc(mtm).set_ivars(commands.clone());
         // SAFETY: Initializes the retained NSSplitViewController subclass.
         let split: Retained<SplitController> = unsafe { msg_send![super(allocated), init] };
-        split.view().setFrame(content_frame);
+        // SAFETY: NSSplitView initializes the empty navigation subclass.
+        let navigation: Retained<NavigationSplit> = unsafe {
+            msg_send![super(NavigationSplit::alloc(mtm).set_ivars(RefCell::new(None))), initWithFrame: content_frame]
+        };
+        split.setSplitView(&navigation);
         split.splitView().setVertical(true);
+        // Match NSSplitViewController's stock split. A standalone NSSplitView
+        // starts with Thick, which has different divider metrics and grab zones.
+        split
+            .splitView()
+            .setDividerStyle(NSSplitViewDividerStyle::Thin);
+        let toolbar = toolbar::Toolbar::new(commands.clone(), split.splitView(), mtm);
 
         let sidebar_item = NSSplitViewItem::sidebarWithViewController(sidebar.controller());
         sidebar_item.setMinimumThickness(180.0);
@@ -147,40 +254,86 @@ impl State {
         sidebar_item.setCanCollapse(true);
 
         let detail = NSViewController::new(mtm);
-        let detail_view = NSView::initWithFrame(NSView::alloc(mtm), content_frame);
+        // SAFETY: NSView initializes the pass-through detail subclass.
+        let detail_view: Retained<DetailPlane> = unsafe {
+            msg_send![super(DetailPlane::alloc(mtm).set_ivars(())), initWithFrame: content_frame]
+        };
         detail.setView(&detail_view);
-        renderer.removeFromSuperview();
-        detail_view.addSubview(&renderer);
-        renderer.setTranslatesAutoresizingMaskIntoConstraints(false);
-        let safe = detail_view.safeAreaLayoutGuide();
-        // The system owns toolbar height, safe-area insets and the sidebar.
-        // GPUI receives only the unobscured dashboard viewport.
-        let constraints = [
-            renderer
-                .leadingAnchor()
-                .constraintEqualToAnchor(&safe.leadingAnchor()),
-            renderer
-                .trailingAnchor()
-                .constraintEqualToAnchor(&safe.trailingAnchor()),
-            renderer
-                .topAnchor()
-                .constraintEqualToAnchor(&safe.topAnchor()),
-            renderer
-                .bottomAnchor()
-                .constraintEqualToAnchor(&safe.bottomAnchor()),
-        ];
-        let constraints = NSArray::from_retained_slice(&constraints);
-        NSLayoutConstraint::activateConstraints(&constraints);
+        *navigation.ivars().borrow_mut() = Some(detail_view.clone().into_super());
+        // Register both items before loading the custom split view. AppKit's
+        // first constraint pass asks the controller about every divider, so
+        // its item model must already match the managed navigation children.
         let detail_item = NSSplitViewItem::splitViewItemWithViewController(&detail);
         detail_item.setMinimumThickness(360.0);
         split.addSplitViewItem(&sidebar_item);
         split.addSplitViewItem(&detail_item);
-        native.setContentViewController(Some(&split));
+        let allocated = ContentController::alloc(mtm).set_ivars(commands.clone());
+        // SAFETY: NSViewController initializes the retained content host.
+        let host: Retained<ContentController> = unsafe { msg_send![super(allocated), init] };
+        let host_view = NSView::initWithFrame(NSView::alloc(mtm), content_frame);
+        host.setView(&host_view);
+        host.addChildViewController(&split);
+        let render_host = NSView::initWithFrame(NSView::alloc(mtm), content_frame);
+        host_view.addSubview(&render_host);
+        render_host.setTranslatesAutoresizingMaskIntoConstraints(false);
+        renderer.removeFromSuperview();
+        // GPUI recognizes an embedded renderer by its parent differing from
+        // NSWindow.contentView and defers resize callbacks until App is unborrowed.
+        render_host.addSubview(&renderer);
+        renderer.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let safe = host_view.safeAreaLayoutGuide();
+        // GPUI owns one full-width safe content plane. Native navigation is
+        // overlaid only over the dashboard, so the terminal can reach both edges.
+        let split_view = split.view();
+        host_view.addSubview(&split_view);
+        split_view.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let drawer_inset = split_view
+            .bottomAnchor()
+            .constraintEqualToAnchor(&safe.bottomAnchor());
+        let constraints = [
+            render_host
+                .leadingAnchor()
+                .constraintEqualToAnchor(&safe.leadingAnchor()),
+            render_host
+                .trailingAnchor()
+                .constraintEqualToAnchor(&safe.trailingAnchor()),
+            render_host
+                .topAnchor()
+                .constraintEqualToAnchor(&safe.topAnchor()),
+            render_host
+                .bottomAnchor()
+                .constraintEqualToAnchor(&safe.bottomAnchor()),
+            renderer
+                .leadingAnchor()
+                .constraintEqualToAnchor(&render_host.leadingAnchor()),
+            renderer
+                .trailingAnchor()
+                .constraintEqualToAnchor(&render_host.trailingAnchor()),
+            renderer
+                .topAnchor()
+                .constraintEqualToAnchor(&render_host.topAnchor()),
+            renderer
+                .bottomAnchor()
+                .constraintEqualToAnchor(&render_host.bottomAnchor()),
+            split_view
+                .leadingAnchor()
+                .constraintEqualToAnchor(&safe.leadingAnchor()),
+            split_view
+                .trailingAnchor()
+                .constraintEqualToAnchor(&safe.trailingAnchor()),
+            split_view
+                .topAnchor()
+                .constraintEqualToAnchor(&safe.topAnchor()),
+            drawer_inset.clone(),
+        ];
+        let constraints = NSArray::from_retained_slice(&constraints);
+        NSLayoutConstraint::activateConstraints(&constraints);
+        native.setContentViewController(Some(&host));
         native.setToolbar(Some(toolbar.toolbar()));
         native.setTitleVisibility(NSWindowTitleVisibility::Visible);
         native.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::Line);
         native.setFrame_display(original_frame, false);
-        split.view().layoutSubtreeIfNeeded();
+        host_view.layoutSubtreeIfNeeded();
         native.makeFirstResponder(Some(&renderer));
         window.refresh_native_viewport(cx);
 
@@ -238,7 +391,11 @@ impl State {
                 separator,
             },
             split,
+            host,
+            drawer_inset,
+            drawer_height: Cell::new(0.0),
             sidebar_item,
+            detail_view: detail_view.into_super(),
             sidebar,
             toolbar,
             applying,
@@ -284,6 +441,28 @@ impl State {
         }
         self.sidebar.synchronize(app);
         self.toolbar.synchronize(app);
+        let drawer_height = if app.quake_terminal_open && app.active_quake_terminal().is_some() {
+            f32::from(app.quake_height).clamp(
+                0.0,
+                self.host
+                    .view()
+                    .safeAreaLayoutGuide()
+                    .frame()
+                    .size
+                    .height
+                    .max(0.0) as f32,
+            )
+        } else {
+            0.0
+        };
+        if self.drawer_height.replace(drawer_height) != drawer_height {
+            self.applying.set(true);
+            // AppKit's bottom anchor increases downwards; a negative inset
+            // raises native navigation above the full-width terminal drawer.
+            self.drawer_inset.setConstant(-f64::from(drawer_height));
+            self.host.view().layoutSubtreeIfNeeded();
+            self.applying.set(false);
+        }
         let desired = (app.sidebar_collapsed, f32::from(app.sidebar_width));
         if self.geometry.get() != desired {
             self.applying.set(true);
@@ -298,6 +477,20 @@ impl State {
             self.geometry.set(desired);
             window.refresh_native_viewport(cx);
         }
+    }
+
+    pub(crate) fn sidebar_inset(&self) -> gpui::Pixels {
+        if self.sidebar_item.isCollapsed() {
+            return px(0.0);
+        }
+        // AppKit may overlay the visual divider inside the sidebar rather
+        // than allocating dividerThickness between items. Use its laid-out
+        // detail origin so dashboard content and the native grab seam agree.
+        let origin = self
+            .split
+            .splitView()
+            .convertPoint_fromView(NSPoint::new(0.0, 0.0), Some(&self.detail_view));
+        px(origin.x as f32)
     }
 }
 
@@ -395,7 +588,8 @@ impl Crabdash {
         }
         if matches!(
             command,
-            Command::Terminal
+            Command::ToggleSidebar
+                | Command::Terminal
                 | Command::Workspaces
                 | Command::AddMachine
                 | Command::RenameMachine(_)

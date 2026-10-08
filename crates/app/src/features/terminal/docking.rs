@@ -143,9 +143,9 @@ pub(super) fn body(
         .child(
             div()
                 .absolute()
-                .bg(rgba(0x383B3D88))
+                .bg(crate::components::style::rgba(0x383B3D88))
                 .border_1()
-                .border_color(rgb(style::TAB_INDICATOR))
+                .border_color(crate::components::style::rgb(style::TAB_INDICATOR))
                 .map(|this| match drop {
                     Some(Drop::Left) => this.left_0().top_0().bottom_0().w(relative(0.5)),
                     Some(Drop::Right) => this.right_0().top_0().bottom_0().w(relative(0.5)),

@@ -36,7 +36,12 @@ pub(crate) fn quake_height_for_rows(rows: u16, cell_height: f32, header_height: 
 
 /// Render a Ghostty terminal frame as styled text rows.
 pub fn render_view(logs: &[Vec<TerminalSpan>], cx: &App) -> Div {
-    render_view_with_cursor(logs, None, rgb(style::TEXT_PRIMARY), cx)
+    render_view_with_cursor(
+        logs,
+        None,
+        crate::components::style::rgb(style::TEXT_PRIMARY),
+        cx,
+    )
 }
 
 fn render_view_with_cursor(
@@ -102,7 +107,7 @@ fn content(
                 div()
                     .font_family(app.preferences.terminal_font.clone())
                     .text_size(rems(style::META / 16.0))
-                    .text_color(rgb(style::TEXT_MUTED))
+                    .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                     .child("Starting terminal session…"),
             )
         })
@@ -110,7 +115,7 @@ fn content(
             this.child(render_view_with_cursor(
                 &quake.terminal.rendered,
                 quake.terminal.cursor,
-                rgba(0xAEAEB2FF),
+                crate::components::style::rgba(0xAEAEB2FF),
                 cx,
             ))
         })
@@ -212,10 +217,6 @@ pub(crate) fn render_quake(
     let Some(_) = drawer.active() else {
         return div();
     };
-    let focused = drawer
-        .sessions
-        .values()
-        .any(|session| session.input.focus_handle(cx).is_focused(window));
     let (width, _) = panes::viewport(window);
     let height = (app.quake_height - px(geometry::PANEL_BORDER)).max(px(0.0));
     let body = render_node(
@@ -232,13 +233,7 @@ pub(crate) fn render_quake(
         .right_0()
         .bottom_0()
         .h(app.quake_height)
-        .bg(rgb(style::CONTENT))
-        .border_t_1()
-        .border_color(rgb(if focused {
-            style::FOCUS_BORDER
-        } else {
-            style::BORDER
-        }))
+        .bg(crate::components::style::rgb(style::CONTENT))
         .shadow_lg()
         .flex()
         .flex_col()

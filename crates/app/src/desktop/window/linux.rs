@@ -29,15 +29,17 @@ fn window_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(0xB8B8B8))
+        .text_color(crate::components::style::rgb(0xB8B8B8))
         .cursor_pointer()
         .hover(move |this| {
             this.bg(if area == WindowControlArea::Close {
-                rgb(0xB72E38)
+                crate::components::style::rgb(0xB72E38)
             } else {
-                rgb(0x343434)
+                crate::components::style::rgb(0x343434)
             })
-            .text_color(white())
+            .text_color(crate::components::style::rgb(
+                crate::components::style::TEXT_SELECTED,
+            ))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(lucide_icon(icon, 14.0))

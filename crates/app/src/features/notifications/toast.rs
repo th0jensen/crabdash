@@ -12,9 +12,9 @@ pub fn render(message: impl Into<SharedString>, cx: &mut Context<Crabdash>) -> D
     div()
         .w(px(360.0))
         .p(px(14.0))
-        .bg(rgb(0x18181A))
+        .bg(crate::components::style::rgb(0x18181A))
         .border_1()
-        .border_color(rgb(0x2F2F31))
+        .border_color(crate::components::style::rgb(0x2F2F31))
         .rounded(px(style::RADIUS))
         .flex()
         .flex_col()
@@ -34,13 +34,13 @@ pub fn render(message: impl Into<SharedString>, cx: &mut Context<Crabdash>) -> D
                         .child(
                             div()
                                 .flex_none()
-                                .text_color(rgb(0xFF453A))
+                                .text_color(crate::components::style::rgb(0xFF453A))
                                 .child(lucide_icon(Icon::CircleAlert, 16.0)),
                         )
                         .child(
                             div()
                                 .text_size(gpui::rems(style::META / 16.0))
-                                .text_color(rgb(0xFF453A))
+                                .text_color(crate::components::style::rgb(0xFF453A))
                                 .child("Error"),
                         ),
                 )
@@ -55,8 +55,16 @@ pub fn render(message: impl Into<SharedString>, cx: &mut Context<Crabdash>) -> D
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .text_color(white())
-                        .hover(|style| style.bg(rgb(0x2C2C2E)).text_color(white()))
+                        .text_color(crate::components::style::rgb(
+                            crate::components::style::TEXT_SELECTED,
+                        ))
+                        .hover(|style| {
+                            style
+                                .bg(crate::components::style::rgb(0x2C2C2E))
+                                .text_color(crate::components::style::rgb(
+                                    crate::components::style::TEXT_SELECTED,
+                                ))
+                        })
                         .child(lucide_icon(Icon::X, 12.0))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.clear_status_message();
@@ -69,7 +77,9 @@ pub fn render(message: impl Into<SharedString>, cx: &mut Context<Crabdash>) -> D
                 .w_full()
                 .whitespace_normal()
                 .text_size(gpui::rems(style::TEXT / 16.0))
-                .text_color(white())
+                .text_color(crate::components::style::rgb(
+                    crate::components::style::TEXT_SELECTED,
+                ))
                 .child(message),
         )
 }

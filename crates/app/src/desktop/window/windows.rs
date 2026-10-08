@@ -121,15 +121,17 @@ fn control(
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .cursor_pointer()
         .hover(move |this| {
             this.bg(if area == WindowControlArea::Close {
-                rgb(0xB72E38)
+                crate::components::style::rgb(0xB72E38)
             } else {
-                rgb(style::SURFACE_HOVER)
+                crate::components::style::rgb(style::SURFACE_HOVER)
             })
-            .text_color(white())
+            .text_color(crate::components::style::rgb(
+                crate::components::style::TEXT_SELECTED,
+            ))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(lucide_icon(icon, style::ICON))

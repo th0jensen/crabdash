@@ -32,7 +32,7 @@ fn wrapped_height(
         &[TextRun {
             len: text.len(),
             font: font(family),
-            color: rgb(style::TEXT_MUTED).into(),
+            color: crate::components::style::rgb(style::TEXT_MUTED).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -72,14 +72,14 @@ pub(crate) fn button(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .when(app.workspaces.open, |this| {
-            this.bg(rgb(style::CONTROL_SELECTED_BG))
+            this.bg(crate::components::style::rgb(style::CONTROL_SELECTED_BG))
         })
         .cursor_pointer()
         .hover(|this| {
-            this.bg(rgb(style::SURFACE_HOVER))
-                .text_color(rgb(style::TEXT_SELECTED))
+            this.bg(crate::components::style::rgb(style::SURFACE_HOVER))
+                .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .tooltip(move |_, cx| control_tooltip(format!("Workspaces · {name}"), cx))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -248,10 +248,12 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .items_center()
                 .gap(rems(6.0 / 16.0))
                 .rounded(px(style::RADIUS))
-                .when(active, |this| this.bg(rgb(style::CONTROL_SELECTED_BG)))
+                .when(active, |this| {
+                    this.bg(crate::components::style::rgb(style::CONTROL_SELECTED_BG))
+                })
                 .when(!editing, |this| {
                     this.cursor_pointer()
-                        .hover(|this| this.bg(rgb(style::SURFACE_HOVER)))
+                        .hover(|this| this.bg(crate::components::style::rgb(style::SURFACE_HOVER)))
                 })
                 .child(lucide_icon(
                     if active {
@@ -295,13 +297,13 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
         .flex_col()
         .gap(rems(8.0 / 16.0))
         .p(rems(10.0 / 16.0))
-        .bg(rgb(style::SURFACE))
+        .bg(crate::components::style::rgb(style::SURFACE))
         .border_1()
-        .border_color(rgb(style::BORDER))
+        .border_color(crate::components::style::rgb(style::BORDER))
         .rounded(px(style::CARD_RADIUS))
         .shadow_lg()
         .text_size(rems(style::TEXT / 16.0))
-        .text_color(rgb(style::TEXT_PRIMARY))
+        .text_color(crate::components::style::rgb(style::TEXT_PRIMARY))
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(|_, _, cx| cx.stop_propagation())
@@ -348,7 +350,7 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                     .text_size(rems(style::META / 16.0))
                     .line_height(rems(INFO_LINE / 16.0))
                     .line_clamp(6)
-                    .text_color(rgb(style::DANGER))
+                    .text_color(crate::components::style::rgb(style::DANGER))
                     .child(error.clone()),
             )
         })
@@ -365,7 +367,7 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
         .child(
             div()
                 .border_t_1()
-                .border_color(rgb(style::BORDER))
+                .border_color(crate::components::style::rgb(style::BORDER))
                 .flex_none()
                 .h(save_height)
                 .pt(rems(8.0 / 16.0))
@@ -390,7 +392,7 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .text_size(rems(style::META / 16.0))
                 .line_height(rems(INFO_LINE / 16.0))
                 .line_clamp(4)
-                .text_color(rgb(style::TEXT_MUTED))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
                 .child(footer),
         )
 }
@@ -400,11 +402,11 @@ fn disabled(
 ) -> crate::desktop::controls::SurfaceControl {
     let control = control
         .cursor_default()
-        .text_color(rgb(style::TEXT_MUTED))
+        .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         .opacity(0.5)
         .hover(|this| {
-            this.bg(rgb(style::SURFACE))
-                .text_color(rgb(style::TEXT_MUTED))
+            this.bg(crate::components::style::rgb(style::SURFACE))
+                .text_color(crate::components::style::rgb(style::TEXT_MUTED))
         })
         .on_click(|_, _, cx| cx.stop_propagation());
     crate::desktop::controls::enabled(control, false)

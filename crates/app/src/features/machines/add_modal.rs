@@ -25,23 +25,23 @@ fn auth_mode_button(
         .rounded(px(style::RADIUS))
         .border_1()
         .border_color(if selected {
-            rgb(0x555555)
+            crate::components::style::rgb(0x555555)
         } else {
-            rgb(0x303030)
+            crate::components::style::rgb(0x303030)
         })
         .bg(if selected {
-            rgb(0x363636)
+            crate::components::style::rgb(0x363636)
         } else {
-            rgb(0x242424)
+            crate::components::style::rgb(0x242424)
         })
         .text_size(gpui::rems(style::META / 16.0))
         .text_color(if selected {
-            rgb(0xFFFFFF)
+            crate::components::style::rgb(0xFFFFFF)
         } else {
-            rgb(0xAEAEB2)
+            crate::components::style::rgb(0xAEAEB2)
         })
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x3A3A3C)))
+        .hover(|style| style.bg(crate::components::style::rgb(0x3A3A3C)))
         .child(mode.label())
         .on_click(cx.listener(move |this, _, _, cx| {
             this.set_add_machine_auth_mode(mode, cx);
@@ -58,7 +58,7 @@ fn auth_field(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         .child(
             div()
                 .text_size(gpui::rems(style::META / 16.0))
-                .text_color(rgb(0xAEAEB2))
+                .text_color(crate::components::style::rgb(0xAEAEB2))
                 .child("Authentication Method"),
         )
         .child(
@@ -111,7 +111,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(rgba(0x00000099)),
+                .bg(crate::components::style::rgba(0x00000099)),
         )
         .child(
             div()
@@ -130,9 +130,9 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                         .child(
                             controls::modal(div()
                                 .w(px(440.0))
-                                .bg(rgb(0x1C1C1E))
+                                .bg(crate::components::style::rgb(0x1C1C1E))
                                 .border_1()
-                                .border_color(rgb(0x2F2F31))
+                                .border_color(crate::components::style::rgb(0x2F2F31))
                                 .rounded(px(14.0))
                                 .overflow_hidden()
                                 .on_action(cx.listener(Crabdash::focus_next))
@@ -142,7 +142,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .px(px(18.0))
                                         .py(px(16.0))
                                         .border_b_1()
-                                        .border_color(rgb(0x2F2F31))
+                                        .border_color(crate::components::style::rgb(0x2F2F31))
                                         .flex()
                                         .justify_between()
                                         .items_start()
@@ -150,7 +150,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .child(
                                             div()
                                                 .mt(px(2.0))
-                                                .text_color(rgb(0x8AB4FF))
+                                                .text_color(crate::components::style::rgb(0x8AB4FF))
                                                 .child(lucide_icon(Icon::Server, 16.0)),
                                         )
                                         .child(
@@ -162,13 +162,13 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                                 .child(
                                                     div()
                                                         .text_size(gpui::rems(style::TEXT / 16.0))
-                                                        .text_color(white())
+                                                        .text_color(crate::components::style::rgb(crate::components::style::TEXT_SELECTED))
                                                         .child("Add New Machine"),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(gpui::rems(style::TEXT / 16.0))
-                                                        .text_color(rgb(0x8E8E93))
+                                                        .text_color(crate::components::style::rgb(0x8E8E93))
                                                         .child(
                                                             "Connect over SSH and capture its system information.",
                                                         ),
@@ -201,7 +201,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .child(
                                             div()
                                                 .text_size(gpui::rems(style::META / 16.0))
-                                                .text_color(rgb(0xAEAEB2))
+                                                .text_color(crate::components::style::rgb(0xAEAEB2))
                                                 .when(app.add_machine_auth_mode
                                                    != AddMachineAuthMode::None,
                                                 |this| this.child("Passwords and SSH key passphrases are stored in your local encrypted keychain and not uploaded anywhere."))
@@ -214,11 +214,11 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                                 div()
                                                     .p(px(10.0))
                                                     .rounded(px(8.0))
-                                                    .bg(rgb(0x47232B))
+                                                    .bg(crate::components::style::rgb(0x47232B))
                                                     .border_1()
-                                                    .border_color(rgb(0x4A252C))
+                                                    .border_color(crate::components::style::rgb(0x4A252C))
                                                     .text_size(gpui::rems(style::META / 16.0))
-                                                    .text_color(rgb(0xFF9F99))
+                                                    .text_color(crate::components::style::rgb(0xFF9F99))
                                                     .child(error.to_string()),
                                             )
                                         }),
@@ -227,7 +227,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                     div()
                                         .p(px(18.0))
                                         .border_t_1()
-                                        .border_color(rgb(0x2F2F31))
+                                        .border_color(crate::components::style::rgb(0x2F2F31))
                                         .flex()
                                         .justify_end()
                                         .child(actions),

@@ -70,7 +70,37 @@ impl Layout {
         Ok(layout)
     }
     pub(crate) fn validate(&self) -> Result<()> {
-        self.validate_members(&Tab::ALL)
+        let tabs = self.tabs();
+        // A closed dashboard retains one empty pane so menu actions can reopen
+        // a feature without fabricating a split or restoring closed tabs.
+        if tabs.is_empty() {
+            return match &self.root {
+                Node::Pane { id, tabs, active }
+                    if *id != 0
+                        && *id == self.focused
+                        && tabs.is_empty()
+                        && *active == Tab::Docker =>
+                {
+                    Ok(())
+                }
+                _ => bail!("An empty workspace must contain one focused pane."),
+            };
+        }
+        self.validate_members(&tabs)
+    }
+    pub(crate) fn show_feature(&mut self, tab: Tab) -> bool {
+        self.select(tab) || self.insert(tab)
+    }
+    pub(crate) fn close_feature(&mut self, tab: Tab) -> bool {
+        if self.tabs() == [tab] {
+            self.root = Node::Pane {
+                id: self.focused,
+                tabs: Vec::new(),
+                active: Tab::Docker,
+            };
+            return true;
+        }
+        self.remove(tab)
     }
     pub(crate) fn active(&self) -> Tab {
         self.focused_tab().unwrap_or(Tab::Docker)
@@ -384,7 +414,7 @@ mod tests {
         assert_eq!(layout.active(), Tab::Docker);
         assert!(layout.select(Tab::Disks));
         assert_eq!(layout.active(), Tab::Disks);
-        assert!(layout.show(Tab::Services));
+        assert!(layout.select(Tab::Services));
         assert_eq!(layout.focused, services_pane);
         assert!(!layout.select(Tab::Services));
         layout.validate()
@@ -545,5 +575,80 @@ mod tests {
         invalid_active["root"]["active"] = serde_json::json!("services");
         assert!(Layout::from_saved(invalid_active, 1).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn closed_features_stay_closed_and_reopen_in_the_focused_pane() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert!(layout.close_feature(Tab::Disks));
+        assert_eq!(layout.focused, right);
+        assert!(!layout.tabs().contains(&Tab::Disks));
+        let saved = serde_json::to_value(&layout)?;
+        let mut loaded = Layout::from_saved(saved, 5)?;
+        assert_eq!(loaded, layout);
+        assert!(loaded.show_feature(Tab::Disks));
+        assert_eq!(
+            loaded.pane(right),
+            Some((&[Tab::Services, Tab::Disks][..], Tab::Disks))
+        );
+        loaded.validate()
+    }
+
+    #[test]
+    fn closing_the_last_tab_persists_an_empty_dashboard_and_reopens_normally() -> Result<()> {
+        let mut layout = Layout::single(vec![Tab::System], Tab::System);
+        assert!(layout.close_feature(Tab::System));
+        assert!(layout.tabs().is_empty());
+        assert_eq!(layout.pane(layout.focused), Some((&[][..], Tab::Docker)));
+        layout.validate()?;
+        let mut loaded: Layout = serde_json::from_value(serde_json::to_value(&layout)?)?;
+        assert!(!loaded.close_feature(Tab::System));
+        assert!(loaded.show_feature(Tab::Services));
+        assert_eq!(loaded.tabs(), [Tab::Services]);
+        assert_eq!(loaded.active(), Tab::Services);
+        loaded.validate()
+    }
+
+    #[test]
+    fn closing_a_focused_split_collapses_it_and_preserves_unrelated_ratios() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert!(layout.drop_tab(Tab::System, right, Drop::Bottom));
+        let bottom = layout.focused;
+        let Node::Split {
+            id: outer, second, ..
+        } = &layout.root
+        else {
+            bail!("Expected split")
+        };
+        let outer = *outer;
+        let Node::Split { id: inner, .. } = second.as_ref() else {
+            bail!("Expected nested split")
+        };
+        let inner = *inner;
+        assert!(layout.set_ratio(outer, 0.7));
+        assert!(layout.set_ratio(inner, 0.65));
+        // Removing a tab from a different pane must not resize either split.
+        assert!(layout.close_feature(Tab::Disks));
+        assert!(matches!(&layout.root, Node::Split { ratio, second, .. }
+            if *ratio == 0.7 && matches!(second.as_ref(), Node::Split { ratio, .. } if *ratio == 0.65)));
+        assert!(layout.close_feature(Tab::System));
+        assert!(layout.pane(bottom).is_none());
+        assert!(layout.pane(layout.focused).is_some());
+        assert!(layout.show_feature(Tab::System));
+        layout.validate()
+    }
+
+    #[test]
+    fn subsets_still_reject_duplicates_and_malformed_empty_panes() {
+        let mut value = serde_json::to_value(Layout::default()).expect("serializable layout");
+        value["root"]["tabs"] = serde_json::json!(["docker", "docker"]);
+        assert!(serde_json::from_value::<Layout>(value.clone()).is_err());
+        value["root"]["tabs"] = serde_json::json!([]);
+        value["root"]["active"] = serde_json::json!("services");
+        assert!(serde_json::from_value::<Layout>(value).is_err());
     }
 }

@@ -20,9 +20,9 @@ pub(crate) fn bounded(header: AnyElement, body: impl IntoElement, is_scrolled: b
                 .pb(px(12.0))
                 .border_b_1()
                 .border_color(if is_scrolled {
-                    rgb(crate::components::style::BORDER)
+                    crate::components::style::rgb(crate::components::style::BORDER)
                 } else {
-                    rgba(0x00000000)
+                    crate::components::style::rgba(0x00000000)
                 })
                 .child(header),
         )
@@ -55,9 +55,9 @@ pub fn render(
                     .pb(px(12.0))
                     .border_b_1()
                     .border_color(if is_scrolled {
-                        rgb(crate::components::style::BORDER)
+                        crate::components::style::rgb(crate::components::style::BORDER)
                     } else {
-                        rgba(0x00000000)
+                        crate::components::style::rgba(0x00000000)
                     })
                     .child(header),
             )
