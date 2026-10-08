@@ -122,11 +122,22 @@ jobs:
           cargo fmt --all -- --check
           python script/release/check-version.py "${GITHUB_REF_NAME}"
       - name: Build executable with embedded shaders
+        if: runner.os != 'Windows'
+        run: cargo build --locked --release --target "${{ matrix.target }}" -p crabdash
+      - name: Build Windows executable with embedded shaders
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: cargo build --locked --release --target "${{ matrix.target }}" -p crabdash
       - name: Run platform tests
+        if: runner.os != 'Windows'
+        run: cargo test --locked --release --workspace --lib --target "${{ matrix.target }}" -- --test-threads=1
+      - name: Run Windows platform tests
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: cargo test --locked --release --workspace --lib --target "${{ matrix.target }}" -- --test-threads=1
       - name: Check Windows PTY setup failure cleanup
         if: runner.os == 'Windows'
+        shell: pwsh
         run: cargo test --locked --release --manifest-path vendor/portable-pty/Cargo.toml --target "${{ matrix.target }}" unclaimed_or_failed_session_closes_without_cursor_reply -- --test-threads=1
       - name: Package and audit executable
         run: |
