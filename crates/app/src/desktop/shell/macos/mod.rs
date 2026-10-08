@@ -8,8 +8,9 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
 };
 use objc2_app_kit::{
-    NSLayoutConstraint, NSSplitViewController, NSSplitViewDidResizeSubviewsNotification,
-    NSSplitViewItem, NSView, NSViewController, NSWindow,
+    NSAutoresizingMaskOptions, NSLayoutConstraint, NSSplitViewController,
+    NSSplitViewDidResizeSubviewsNotification, NSSplitViewItem, NSTitlebarSeparatorStyle, NSView,
+    NSViewController, NSWindow, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -25,6 +26,7 @@ pub(super) enum Command {
     AddMachine,
     SelectMachine(Uuid),
     RefreshMachine(Uuid),
+    RenameMachine(Uuid),
     DeleteMachine(Uuid),
     SidebarGeometry { collapsed: bool, width: f32 },
 }
@@ -32,6 +34,7 @@ pub(super) enum Command {
 pub(crate) fn commands_blocked(app: &Crabdash) -> bool {
     app.preferences_open
         || app.add_machine_modal_open
+        || app.machine_rename.target.is_some()
         || app.docker_run_modal_open
         || app.docker_removal.is_some()
         || app.open_menu.is_some()
@@ -92,7 +95,21 @@ impl Drop for Observer {
     }
 }
 
+/// Original GPUI host, retained so switching appearance preserves the window
+/// and every dashboard/terminal entity rather than opening a replacement.
+struct SharedHost {
+    content: Retained<NSView>,
+    controller: Option<Retained<NSViewController>>,
+    constraints: Retained<NSArray<NSLayoutConstraint>>,
+    autoresizing: NSAutoresizingMaskOptions,
+    translates: bool,
+    title_visibility: NSWindowTitleVisibility,
+    separator: NSTitlebarSeparatorStyle,
+}
+
 pub(crate) struct State {
+    id: Uuid,
+    shared_host: SharedHost,
     split: Retained<SplitController>,
     sidebar_item: Retained<NSSplitViewItem>,
     sidebar: sidebar::Sidebar,
@@ -107,6 +124,12 @@ impl State {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Crabdash>) -> Option<Self> {
         let mtm = MainThreadMarker::new()?;
         let (renderer, native) = native_views(window)?;
+        let shared_content = native.contentView()?;
+        let original_controller = native.contentViewController();
+        let autoresizing = renderer.autoresizingMask();
+        let translates = renderer.translatesAutoresizingMaskIntoConstraints();
+        let title_visibility = native.titleVisibility();
+        let separator = native.titlebarSeparatorStyle();
         let original_frame = native.frame();
         let content_frame = renderer.frame();
         let (commands, receiver) = smol::channel::unbounded();
@@ -146,15 +169,19 @@ impl State {
                 .bottomAnchor()
                 .constraintEqualToAnchor(&safe.bottomAnchor()),
         ];
-        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
+        let constraints = NSArray::from_retained_slice(&constraints);
+        NSLayoutConstraint::activateConstraints(&constraints);
         let detail_item = NSSplitViewItem::splitViewItemWithViewController(&detail);
         detail_item.setMinimumThickness(360.0);
         split.addSplitViewItem(&sidebar_item);
         split.addSplitViewItem(&detail_item);
         native.setContentViewController(Some(&split));
         native.setToolbar(Some(toolbar.toolbar()));
+        native.setTitleVisibility(NSWindowTitleVisibility::Visible);
+        native.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::Line);
         native.setFrame_display(original_frame, false);
         split.view().layoutSubtreeIfNeeded();
+        native.makeFirstResponder(Some(&renderer));
         window.refresh_native_viewport(cx);
 
         let applying = Rc::new(Cell::new(false));
@@ -175,12 +202,23 @@ impl State {
                 Some(&split.splitView()),
             );
         }
+        let id = Uuid::new_v4();
         let handle = Window::window_handle(window);
         let owner = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             while let Ok(command) = receiver.recv().await {
                 let result = handle.update(cx, |_, window, cx| {
-                    owner.update(cx, |app, cx| app.native_shell_command(command, window, cx))
+                    owner.update(cx, |app, cx| {
+                        // A replaced shell may still have buffered commands. Only
+                        // the exact currently installed shell owns this window.
+                        if app
+                            .native_shell
+                            .as_ref()
+                            .is_some_and(|shell| shell.id == id)
+                        {
+                            app.native_shell_command(command, window, cx);
+                        }
+                    })
                 });
                 if !matches!(result, Ok(Ok(()))) {
                     break;
@@ -189,6 +227,16 @@ impl State {
         })
         .detach();
         Some(Self {
+            id,
+            shared_host: SharedHost {
+                content: shared_content,
+                controller: original_controller,
+                constraints,
+                autoresizing,
+                translates,
+                title_visibility,
+                separator,
+            },
             split,
             sidebar_item,
             sidebar,
@@ -198,6 +246,31 @@ impl State {
             overlay_open: Cell::new(false),
             _observer: Observer { center, target },
         })
+    }
+
+    fn restore_shared_host(self, window: &mut Window, cx: &mut App) {
+        let Some((renderer, native)) = native_views(window) else {
+            return;
+        };
+        self.applying.set(true);
+        let frame = native.frame();
+        native.setToolbar(None);
+        NSLayoutConstraint::deactivateConstraints(&self.shared_host.constraints);
+        renderer.removeFromSuperview();
+        native.setContentViewController(self.shared_host.controller.as_deref());
+        native.setContentView(Some(&self.shared_host.content));
+        native.setTitleVisibility(self.shared_host.title_visibility);
+        native.setTitlebarSeparatorStyle(self.shared_host.separator);
+        native.setFrame_display(frame, false);
+        self.shared_host.content.layoutSubtreeIfNeeded();
+        renderer.setTranslatesAutoresizingMaskIntoConstraints(self.shared_host.translates);
+        renderer.setAutoresizingMask(self.shared_host.autoresizing);
+        // Resize while unparented so GPUI queues the native viewport callback;
+        // its original direct-content resize callback cannot reenter this render.
+        renderer.setFrame(self.shared_host.content.bounds());
+        self.shared_host.content.addSubview(&renderer);
+        native.makeFirstResponder(Some(&renderer));
+        window.refresh_native_viewport(cx);
     }
 
     pub(crate) fn synchronize(&self, app: &Crabdash, window: &mut Window, cx: &mut App) {
@@ -242,14 +315,22 @@ fn native_views(window: &Window) -> Option<(Retained<NSView>, Retained<NSWindow>
 
 impl Crabdash {
     pub(crate) fn install_native_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.native_shell = State::new(window, cx);
-        if self.native_shell.is_none() {
-            tracing::error!("Unable to install the native macOS navigation shell");
-        }
         self.synchronize_native_shell(window, cx);
     }
 
     pub(crate) fn synchronize_native_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.preferences.liquid_glass {
+            if let Some(shell) = self.native_shell.take() {
+                shell.restore_shared_host(window, cx);
+            }
+            return;
+        }
+        if self.native_shell.is_none() {
+            self.native_shell = State::new(window, cx);
+            if self.native_shell.is_none() {
+                tracing::error!("Unable to install the native macOS navigation shell");
+            }
+        }
         if let Some(shell) = self.native_shell.take() {
             shell.synchronize(self, window, cx);
             self.native_shell = Some(shell);
@@ -262,6 +343,10 @@ impl Crabdash {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Ignore actions queued by a native shell that has been removed.
+        if self.native_shell.is_none() {
+            return;
+        }
         // Native divider layout has already happened. Persist it even while a
         // popup is open, without stealing keyboard focus from its text fields.
         if let Command::SidebarGeometry { collapsed, width } = command {
@@ -302,6 +387,7 @@ impl Crabdash {
                 Command::AddMachine
                     | Command::SelectMachine(_)
                     | Command::RefreshMachine(_)
+                    | Command::RenameMachine(_)
                     | Command::DeleteMachine(_)
             )
         {
@@ -309,7 +395,10 @@ impl Crabdash {
         }
         if matches!(
             command,
-            Command::Terminal | Command::Workspaces | Command::AddMachine
+            Command::Terminal
+                | Command::Workspaces
+                | Command::AddMachine
+                | Command::RenameMachine(_)
         ) && let Some((renderer, native)) = native_views(window)
         {
             native.makeFirstResponder(Some(&renderer));
@@ -325,6 +414,7 @@ impl Crabdash {
             Command::AddMachine => self.open_add_machine_modal(window, cx),
             Command::SelectMachine(id) => self.select_machine(id, window, cx),
             Command::RefreshMachine(id) => self.refresh_machine(id, cx),
+            Command::RenameMachine(id) => self.open_machine_rename(id, window, cx),
             Command::DeleteMachine(id) => {
                 if self
                     .machine_store
@@ -332,7 +422,7 @@ impl Crabdash {
                     .iter()
                     .any(|machine| machine.uuid == id && machine.id != "localhost")
                 {
-                    self.delete_machine(id, cx);
+                    self.delete_machine(id, window, cx);
                 }
             }
             Command::SidebarGeometry { .. } => unreachable!("geometry handled before actions"),

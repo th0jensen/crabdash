@@ -15,9 +15,9 @@ mod in_window;
 mod keymap;
 use crate::components::text_field::{FieldCopy, FieldCut, FieldPaste, FieldSelectAll};
 use crate::{
-    AboutCrabdash, CloseWindow, MinimizeWindow, NewWindow, OpenAddMachine, OpenPreferences,
-    OpenRepository, Quit, RefreshServices, ReportIssue, ToggleFullScreen, ToggleSidebar,
-    ToggleTerminal, ZoomWindow,
+    AboutCrabdash, CloseWindow, MinimizeWindow, OpenAddMachine, OpenPreferences, OpenRepository,
+    Quit, RefreshServices, ReportIssue, ToggleFullScreen, ToggleSidebar, ToggleTerminal,
+    ZoomWindow,
 };
 use gpui::*;
 pub(crate) use platform::{popup, render, visible};
@@ -51,9 +51,20 @@ pub(super) fn app_menus() -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 MenuItem::action("Add New Machine", OpenAddMachine),
+                MenuItem::action(
+                    "New Terminal Session",
+                    crate::features::terminal::NewSession,
+                ),
+                MenuItem::action(
+                    "Split Terminal Right",
+                    crate::features::terminal::SplitRight,
+                ),
+                MenuItem::action("Split Terminal Below", crate::features::terminal::SplitDown),
                 MenuItem::separator(),
-                MenuItem::action("New Window", NewWindow),
-                MenuItem::separator(),
+                MenuItem::action(
+                    "Close Terminal Session",
+                    crate::features::terminal::CloseSession,
+                ),
                 MenuItem::action("Close Window", CloseWindow),
             ],
         },
@@ -74,6 +85,11 @@ pub(super) fn app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Terminal", ToggleTerminal),
+                MenuItem::action(
+                    "Previous Terminal Tab",
+                    crate::features::terminal::PreviousTab,
+                ),
+                MenuItem::action("Next Terminal Tab", crate::features::terminal::NextTab),
                 MenuItem::separator(),
                 MenuItem::action("Docker", crate::ShowDocker),
                 MenuItem::action("Disks", crate::ShowDisks),
@@ -88,6 +104,13 @@ pub(super) fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Zoom", ZoomWindow),
                 MenuItem::action("Full Screen", ToggleFullScreen),
                 MenuItem::separator(),
+                MenuItem::action("Focus Terminal Left", crate::features::terminal::FocusLeft),
+                MenuItem::action(
+                    "Focus Terminal Right",
+                    crate::features::terminal::FocusRight,
+                ),
+                MenuItem::action("Focus Terminal Above", crate::features::terminal::FocusUp),
+                MenuItem::action("Focus Terminal Below", crate::features::terminal::FocusDown),
             ],
         },
         Menu {

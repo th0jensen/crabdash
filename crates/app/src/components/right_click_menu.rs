@@ -245,6 +245,13 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
 
                     window
                         .subscribe(&new_menu, cx, move |modal, _: &DismissEvent, window, cx| {
+                            if !menu_handle
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|menu| menu.entity_id() == modal.entity_id())
+                            {
+                                return;
+                            }
                             if modal.focus_handle(cx).contains_focused(window, cx)
                                 && let Some(previous_focus_handle) = previous_focus_handle.as_ref()
                             {
@@ -256,9 +263,26 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                         .detach();
 
                     let focus_handle = new_menu.focus_handle(cx);
+                    let menu_id = new_menu.entity_id();
+                    let pending_menu = menu.clone();
                     window.on_next_frame(move |window, _cx| {
+                        if !pending_menu
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|menu| menu.entity_id() == menu_id)
+                        {
+                            return;
+                        }
                         window.on_next_frame(move |window, _cx| {
-                            window.focus(&focus_handle);
+                            // A dismissed or replaced menu must not take focus
+                            // from the view opened by its selected action.
+                            let menu_is_current = pending_menu
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|menu| menu.entity_id() == menu_id);
+                            if menu_is_current {
+                                window.focus(&focus_handle);
+                            }
                         });
                     });
 

@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use async_ssh2_lite::{
     AsyncSession, TokioTcpStream,
     ssh2::{ExtendedData, KnownHostFileKind},
-    tokio::io::AsyncReadExt,
+    tokio::io::{AsyncReadExt, AsyncWriteExt},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -194,6 +194,29 @@ impl RemoteConnection {
         args: &Args,
         deadline: Instant,
     ) -> Result<Output> {
+        self.run_ssh_with_stdin_until(cmd, args, None, deadline)
+            .await
+    }
+
+    pub(crate) async fn run_ssh_command_with_input_until(
+        &mut self,
+        cmd: &str,
+        args: &Args,
+        input: &[u8],
+        deadline: Instant,
+    ) -> Result<Output> {
+        crate::command::check_deadline(deadline)?;
+        self.run_ssh_with_stdin_until(cmd, args, Some(input.to_vec()), deadline)
+            .await
+    }
+
+    async fn run_ssh_with_stdin_until(
+        &mut self,
+        cmd: &str,
+        args: &Args,
+        input: Option<Vec<u8>>,
+        deadline: Instant,
+    ) -> Result<Output> {
         crate::command::check_deadline(deadline)?;
         let connection = self.clone();
         let command = self.build_command(cmd, args);
@@ -208,7 +231,7 @@ impl RemoteConnection {
                         connection.set_connected(true);
                     }
                     let session = cached.as_ref().ok_or_else(|| anyhow!("Not connected!"))?;
-                    execute(session, &command).await
+                    execute_with_input(session, &command, input.as_deref()).await
                 })
             })
             .await
@@ -243,11 +266,53 @@ impl RemoteConnection {
 }
 
 async fn execute(session: &AsyncSession<TokioTcpStream>, command: &str) -> Result<Output> {
+    execute_with_input(session, command, None).await
+}
+
+async fn execute_with_input(
+    session: &AsyncSession<TokioTcpStream>,
+    command: &str,
+    input: Option<&[u8]>,
+) -> Result<Output> {
     let mut channel = session.channel_session().await?;
     channel.handle_extended_data(ExtendedData::Merge).await?;
     channel.exec(command).await?;
     let mut output = Vec::new();
-    channel.read_to_end(&mut output).await?;
+    let written = if let Some(input) = input {
+        // An independent stream handle allows output to drain while channel
+        // input is backpressured. EOF finishes only stdin, not the session.
+        let mut reader = channel.stream(0);
+        let (finished, closed) = tokio::sync::oneshot::channel();
+        let (read, written) = tokio::join!(
+            async {
+                let result = reader.read_to_end(&mut output).await;
+                let _ = finished.send(());
+                result
+            },
+            async {
+                // A peer can exit without consuming stdin. Its output EOF
+                // must stop a blocked writer so its diagnostic remains visible.
+                let written = tokio::select! {
+                    biased;
+                    result = channel.write_all(input) => result,
+                    _ = closed => Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe, "SSH peer closed command output before accepting its input"
+                    )),
+                };
+                // ssh2::Stream::flush discards received data; it is not a
+                // send-buffer flush. EOF also completes a rejected command.
+                let eof = channel.send_eof().await;
+                written?;
+                eof?;
+                Ok::<_, anyhow::Error>(())
+            }
+        );
+        read?;
+        written
+    } else {
+        channel.read_to_end(&mut output).await?;
+        Ok(())
+    };
     channel.wait_close().await?;
     let exit_status = channel.exit_status()?;
     if exit_status != 0 {
@@ -257,6 +322,9 @@ async fn execute(session: &AsyncSession<TokioTcpStream>, command: &str) -> Resul
         }
         bail!("{command} failed with exit status {exit_status}: {message}");
     }
+    // A rejected command can close stdin early; retain its status and stderr
+    // before reporting a transport write failure from an otherwise successful command.
+    written?;
     Ok(Output::from(output))
 }
 
@@ -416,6 +484,7 @@ enum AuthMethodDef {
 mod deadline_tests {
     use super::*;
     use std::time::Duration;
+    #[cfg(target_os = "linux")]
     use utils::args;
 
     #[tokio::test]
@@ -576,6 +645,67 @@ mod deadline_tests {
             ),
         )
         .await??;
+        // Input exceeds both Windows command-line limits and common pipe/SSH
+        // windows. The peer writes before reading, so delivery must drain
+        // merged stdout/stderr concurrently and finish stdin with EOF.
+        let input = "雪 ‘stdin’\n".repeat(600_000).into_bytes();
+        let command = "python3 -c \"import sys; sys.stdout.buffer.write(b'o'*4194304); sys.stdout.flush(); sys.stderr.buffer.write(b'e'*4194304); sys.stderr.flush(); sys.stdout.buffer.write(sys.stdin.buffer.read())\"";
+        let output = connection
+            .run_ssh_command_with_input_until(
+                command,
+                &Args::new(),
+                &input,
+                Instant::now() + Duration::from_secs(15),
+            )
+            .await
+            .map_err(|error| anyhow!("Large SSH input/output delivery: {error:#}"))?;
+        let output = output.as_ref();
+        assert_eq!(output.len(), 8_388_608 + input.len());
+        assert_eq!(&output[8_388_608..], input);
+        assert!(
+            output[..8_388_608]
+                .iter()
+                .all(|byte| matches!(byte, b'o' | b'e'))
+        );
+        assert_eq!(
+            connection
+                .run_ssh_command_with_input_until(
+                    "cat; printf eof",
+                    &Args::new(),
+                    &[],
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .await?
+                .as_ref(),
+            b"eof",
+        );
+        let rejected = connection
+            .run_ssh_command_with_input_until(
+                "printf denied >&2; exit 7",
+                &Args::new(),
+                &vec![b'i'; 8 * 1024 * 1024],
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await;
+        let diagnostic = rejected
+            .err()
+            .ok_or_else(|| anyhow!("Expected rejection"))?;
+        assert!(diagnostic.to_string().contains("denied"), "{diagnostic:#}");
+        assert!(
+            diagnostic.to_string().contains("exit status 7"),
+            "{diagnostic:#}"
+        );
+        let blocked = connection
+            .run_ssh_command_with_input_until(
+                "exec sleep 10",
+                &Args::new(),
+                &input,
+                Instant::now() + Duration::from_millis(300),
+            )
+            .await;
+        assert!(blocked.is_err());
+        assert!(!connection.connected());
+        assert!(connection.session.lock().await.is_none());
         let timed_out = connection
             .run_ssh_command_until(
                 "exec sleep 10",

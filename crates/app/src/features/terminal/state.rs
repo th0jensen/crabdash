@@ -1,5 +1,5 @@
 //! Ghostty emulation and session state; rendering consumes snapshots from this module.
-use super::view::QuakeTerminalStatus;
+use super::{sizing::EmulatorSize, view::QuakeTerminalStatus};
 use crate::components::terminal_input::TerminalInput;
 use gpui::*;
 use libghostty_vt::{
@@ -9,7 +9,16 @@ use libghostty_vt::{
     terminal::{Mode, ScrollViewport},
 };
 use machines::terminal::{TerminalController, TerminalSize};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use uuid::Uuid;
+/// A complete native cell grapheme; spacer tails belong to their wide head.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalCluster {
+    pub text: SharedString,
+    pub column: u16,
+    pub columns: u16,
+}
+
 /// A contiguous run of identically-styled text within a terminal row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalSpan {
@@ -18,6 +27,8 @@ pub struct TerminalSpan {
     pub bg: Option<Rgba>,
     pub bold: bool,
     pub columns: u16,
+    pub selected: bool,
+    pub clusters: Vec<TerminalCluster>,
 }
 
 /// A rendered terminal frame: one entry per visible row, each row a list of spans.
@@ -34,14 +45,15 @@ pub struct TerminalCursor {
 /// `Terminal` and `RenderState` are `!Send + !Sync` and must only be
 /// accessed from the main GPUI thread (inside entity update callbacks).
 pub struct TerminalState {
-    terminal: Terminal<'static, 'static>,
+    pub(super) terminal: Terminal<'static, 'static>,
+    pub(super) selection: super::selection::State,
     render_state: RenderState<'static>,
     pub rendered: RenderedTerminal,
     pub cursor: Option<TerminalCursor>,
     pub scroll_handle: ScrollHandle,
     pub loaded: bool,
     pending_pty_writes: Rc<RefCell<Vec<Vec<u8>>>>,
-    follow_output: bool,
+    pub(super) follow_output: bool,
     wheel_remainder: f32,
 }
 
@@ -53,8 +65,19 @@ impl TerminalState {
         Ok(state)
     }
 
-    pub fn new_interactive(columns: u16, rows: u16, scrollback: u32) -> anyhow::Result<Self> {
-        Self::new(columns, rows, scrollback)
+    pub fn new_interactive(
+        columns: u16,
+        rows: u16,
+        scrollback: u32,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> anyhow::Result<Self> {
+        let mut state = Self::new(columns, rows, scrollback)?;
+        // Set metrics before the first PTY output can query cell dimensions.
+        state
+            .terminal
+            .resize(columns, rows, cell_width_px, cell_height_px)?;
+        Ok(state)
     }
 
     fn new(columns: u16, rows: u16, scrollback: u32) -> anyhow::Result<Self> {
@@ -68,9 +91,22 @@ impl TerminalState {
             let pending_pty_writes = pending_pty_writes.clone();
             move |_terminal, data| pending_pty_writes.borrow_mut().push(data.to_vec())
         })?;
+        terminal.on_size(|terminal| {
+            let columns = terminal.cols().ok()?;
+            let rows = terminal.rows().ok()?;
+            let cell_width = terminal.width_px().ok()?.checked_div(u32::from(columns))?;
+            let cell_height = terminal.height_px().ok()?.checked_div(u32::from(rows))?;
+            (cell_width > 0 && cell_height > 0).then_some(libghostty_vt::terminal::SizeReportSize {
+                columns,
+                rows,
+                cell_width,
+                cell_height,
+            })
+        })?;
 
         Ok(Self {
             terminal,
+            selection: super::selection::State::default(),
             render_state: RenderState::new()?,
             rendered: Vec::new(),
             cursor: None,
@@ -89,6 +125,7 @@ impl TerminalState {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> anyhow::Result<()> {
+        self.cancel_selection_gesture();
         self.terminal
             .resize(columns, rows, cell_width_px, cell_height_px)?;
         if self.follow_output {
@@ -105,6 +142,18 @@ impl TerminalState {
         self.pending_pty_writes.take()
     }
 
+    pub(super) fn title(&self) -> String {
+        self.terminal
+            .title()
+            .unwrap_or_default()
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(256)
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    }
+
     pub fn feed_string(&mut self, data: String) {
         self.feed(data.into_bytes());
     }
@@ -112,6 +161,7 @@ impl TerminalState {
     /// Feed raw PTY bytes into Ghostty and update the rendered output.
     pub fn feed(&mut self, data: impl AsRef<[u8]>) {
         self.terminal.vt_write(data.as_ref());
+        self.reconcile_selection_screen();
         if self.follow_output {
             self.terminal.scroll_viewport(ScrollViewport::Bottom);
         }
@@ -148,7 +198,7 @@ impl TerminalState {
         }
     }
 
-    fn refresh_frame(&mut self) {
+    pub(super) fn refresh_frame(&mut self) {
         if let Some((rendered, cursor)) = self.extract_rendered() {
             self.rendered = rendered;
             self.cursor = cursor;
@@ -156,6 +206,7 @@ impl TerminalState {
     }
 
     pub fn prepare_input(&mut self, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+        self.clear_selection()?;
         self.scroll(ScrollViewport::Bottom);
         // Honour application cursor mode in full-screen programs.
         let key = match bytes {
@@ -181,6 +232,7 @@ impl TerminalState {
     }
 
     pub fn prepare_paste(&mut self, text: &str) -> anyhow::Result<Vec<u8>> {
+        self.clear_selection()?;
         self.scroll(ScrollViewport::Bottom);
         let mut data = text.as_bytes().to_vec();
         let mut encoded = vec![0; data.len() + 12];
@@ -213,15 +265,21 @@ impl TerminalState {
 
         while let Some(row) = row_iter.next() {
             let mut line: Vec<TerminalSpan> = Vec::new();
+            let selected = row.selection().ok().flatten();
 
             if let Ok(mut cell_iter) = cells_iter.update(row) {
                 let mut current_text = String::new();
+                let mut current_clusters = Vec::new();
                 let mut current_fg: Option<Rgba> = None;
                 let mut current_bg: Option<Rgba> = None;
                 let mut current_bold = false;
                 let mut current_columns = 0;
+                let mut current_selected = false;
+                let mut column = 0u16;
 
                 while let Some(cell) = cell_iter.next() {
+                    let cell_column = column;
+                    column = column.saturating_add(1);
                     let wide = cell.raw_cell().ok().and_then(|cell| cell.wide().ok());
                     if wide == Some(libghostty_vt::screen::CellWide::SpacerTail) {
                         continue;
@@ -243,8 +301,16 @@ impl TerminalState {
                         .flatten()
                         .map(|color| rgb_to_rgba(color.r, color.g, color.b));
                     let bold = style.bold;
+                    let selected = selected.as_ref().is_some_and(|range| {
+                        cell_column <= range.end_x
+                            && cell_column.saturating_add(columns - 1) >= range.start_x
+                    });
 
-                    if fg != current_fg || bg != current_bg || bold != current_bold {
+                    if fg != current_fg
+                        || bg != current_bg
+                        || bold != current_bold
+                        || selected != current_selected
+                    {
                         push_span(
                             &mut line,
                             &current_text,
@@ -252,21 +318,31 @@ impl TerminalState {
                             current_bg,
                             current_bold,
                             current_columns,
+                            current_selected,
+                            &current_clusters,
                         );
                         current_text.clear();
+                        current_clusters.clear();
                         current_columns = 0;
                         current_fg = fg;
                         current_bg = bg;
                         current_bold = bold;
+                        current_selected = selected;
                     }
 
                     current_columns += columns;
                     let graphemes = cell.graphemes().unwrap_or_default();
+                    let start = current_text.len();
                     if graphemes.is_empty() {
                         current_text.push(' ');
                     } else {
                         current_text.extend(graphemes);
                     }
+                    current_clusters.push(TerminalCluster {
+                        text: current_text[start..].to_owned().into(),
+                        column: cell_column,
+                        columns,
+                    });
                 }
                 push_span(
                     &mut line,
@@ -275,6 +351,8 @@ impl TerminalState {
                     current_bg,
                     current_bold,
                     current_columns,
+                    current_selected,
+                    &current_clusters,
                 );
                 trim_trailing_blank_cells(&mut line);
             }
@@ -300,6 +378,8 @@ fn push_span(
     bg: Option<Rgba>,
     bold: bool,
     columns: u16,
+    selected: bool,
+    clusters: &[TerminalCluster],
 ) {
     if !text.is_empty() {
         line.push(TerminalSpan {
@@ -308,13 +388,15 @@ fn push_span(
             bg,
             bold,
             columns,
+            selected,
+            clusters: clusters.to_vec(),
         });
     }
 }
 
 fn trim_trailing_blank_cells(line: &mut Vec<TerminalSpan>) {
     while let Some(span) = line.last_mut() {
-        if span.bg.is_some() {
+        if span.bg.is_some() || span.selected {
             break;
         }
         let trimmed_length = span.text.trim_end_matches(' ').len();
@@ -324,6 +406,13 @@ fn trim_trailing_blank_cells(line: &mut Vec<TerminalSpan>) {
         }
 
         if trimmed_length != span.text.len() {
+            while span
+                .clusters
+                .last()
+                .is_some_and(|cell| cell.text.as_ref() == " ")
+            {
+                span.clusters.pop();
+            }
             span.columns = span
                 .columns
                 .saturating_sub((span.text.len() - trimmed_length) as u16);
@@ -338,14 +427,44 @@ fn rgb_to_rgba(r: u8, g: u8, b: u8) -> Rgba {
 }
 
 pub(crate) struct QuakeTerminal {
-    pub machine_name: String,
     pub endpoint: String,
+    pub(super) custom_name: Option<String>,
+    pub(super) rename: Option<super::rename::Editor>,
     pub terminal: TerminalState,
     pub controller: Option<TerminalController>,
     pub size: TerminalSize,
+    pub(super) emulator_size: EmulatorSize,
     pub status: QuakeTerminalStatus,
     pub input: Entity<TerminalInput>,
     pub(crate) _input_events: Subscription,
+}
+
+pub(crate) struct Drawer {
+    pub(super) model: super::model::Model,
+    pub(super) sessions: HashMap<Uuid, QuakeTerminal>,
+}
+
+impl Drawer {
+    pub(crate) fn cancel_drag(&mut self) {
+        self.model.drag_target = None;
+    }
+
+    pub(super) fn active(&self) -> Option<&QuakeTerminal> {
+        self.model
+            .layout
+            .focused_tab()
+            .and_then(|id| self.sessions.get(&id))
+    }
+
+    pub(crate) fn shutdown(&self) {
+        for session in self.sessions.values() {
+            if let Some(controller) = &session.controller
+                && let Err(error) = controller.shutdown()
+            {
+                tracing::debug!(%error, "Failed to shut down drawer terminal");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -368,8 +487,83 @@ mod tests {
     }
 
     #[test]
+    fn osc_zero_and_two_titles_survive_every_stream_byte_boundary() -> anyhow::Result<()> {
+        let title = "Build · 雪:~/src";
+        for command in [0, 2] {
+            for terminator in ["\x07", "\x1b\\"] {
+                let sequence = format!("\x1b]{command};{title}{terminator}");
+                for boundary in 0..=sequence.len() {
+                    let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20)?;
+                    state.feed(&sequence.as_bytes()[..boundary]);
+                    state.feed(&sequence.as_bytes()[boundary..]);
+                    assert_eq!(state.title(), title, "OSC {command}, byte {boundary}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_output_and_icon_titles_preserve_the_current_window_title() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20)?;
+        state.feed(b"\x1b]2;Build\x07");
+        state.feed("ordinary 雪 output\r\n");
+        state.feed(b"\x1b]1;Icon only\x1b\\");
+        assert_eq!(state.title(), "Build");
+        assert!(text(&state).contains("ordinary 雪 output"));
+        state.feed(b"\x1b]0;New window\x1b\\");
+        assert_eq!(state.title(), "New window");
+        Ok(())
+    }
+
+    #[test]
+    fn interactive_cell_metrics_are_available_before_first_resize() {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 16, 40).unwrap();
+        assert!(state.rendered.is_empty());
+        assert_eq!(state.terminal.width_px().unwrap(), 480);
+        assert_eq!(state.terminal.height_px().unwrap(), 200);
+        state.feed("\x1b[16t");
+        assert!(
+            state
+                .take_pty_writes()
+                .iter()
+                .any(|response| response == b"\x1b[6;40;16t")
+        );
+    }
+
+    #[test]
+    fn resize_notifications_are_pending_without_waiting_for_more_output() {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
+        state.feed("\x1b[?2048h");
+        state.take_pty_writes();
+        state.resize(30, 5, 16, 40).unwrap();
+        assert!(
+            state
+                .take_pty_writes()
+                .iter()
+                .any(|response| response == b"\x1b[48;5;30;200;480t")
+        );
+    }
+
+    #[test]
+    fn osc_titles_are_unicode_bounded_and_sanitized_for_chrome() {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
+        assert!(state.title().is_empty());
+        state.feed("\x1b]2;  build 雪  \x07");
+        assert_eq!(state.title(), "build 雪");
+        state.feed(format!("\x1b]2;{}\x07", "界".repeat(300)));
+        assert_eq!(state.title().chars().count(), 256);
+        assert!(
+            state
+                .title()
+                .chars()
+                .all(|character| !character.is_control())
+        );
+    }
+
+    #[test]
     fn output_follows_live_screen_and_keeps_prompt_visible() {
-        let mut state = TerminalState::new_interactive(30, 5, 200).unwrap();
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
         for index in 1..=100 {
             state.feed(format!("line-{index}\r\n"));
         }
@@ -382,7 +576,7 @@ mod tests {
 
     #[test]
     fn reading_history_stays_put_until_returning_to_prompt() {
-        let mut state = TerminalState::new_interactive(30, 5, 200).unwrap();
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
         for index in 1..=30 {
             state.feed(format!("line-{index}\r\n"));
         }
@@ -404,7 +598,7 @@ mod tests {
 
     #[test]
     fn resize_and_alternate_screen_keep_live_cursor_visible() {
-        let mut state = TerminalState::new_interactive(30, 5, 200).unwrap();
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
         for _ in 0..40 {
             state.feed("output\r\n");
         }
@@ -422,7 +616,7 @@ mod tests {
 
     #[test]
     fn cursor_keys_and_paste_follow_terminal_modes() {
-        let mut state = TerminalState::new_interactive(30, 5, 200).unwrap();
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
         assert_eq!(state.prepare_input(b"\x1b[A").unwrap(), b"\x1b[A");
         state.feed("\x1b[?1h");
         assert_eq!(state.prepare_input(b"\x1b[A").unwrap(), b"\x1bOA");
@@ -436,7 +630,7 @@ mod tests {
 
     #[test]
     fn unicode_cells_and_coloured_blank_background_keep_grid_width() {
-        let mut state = TerminalState::new_interactive(20, 5, 200).unwrap();
+        let mut state = TerminalState::new_interactive(20, 5, 200, 8, 20).unwrap();
         state.feed("A界e\u{301}B");
         assert_eq!(state.cursor.unwrap().column, 5);
         assert_eq!(

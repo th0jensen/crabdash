@@ -2,6 +2,7 @@
 pub(crate) mod about;
 pub(crate) mod appearance;
 pub(crate) mod controls;
+mod instance;
 pub(crate) mod menus;
 mod runtime;
 pub(crate) mod shell;

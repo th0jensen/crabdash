@@ -16,6 +16,12 @@ pub struct CpuCounter {
 }
 
 impl CpuCounter {
+    fn is_monotonic_since(self, previous: Self) -> bool {
+        self.total >= previous.total
+            && self.idle >= previous.idle
+            && self.total - self.idle >= previous.total - previous.idle
+    }
+
     fn usage_since(self, previous: Self) -> Option<f64> {
         let total = self.total.checked_sub(previous.total)?;
         let idle = self.idle.checked_sub(previous.idle)?;
@@ -197,18 +203,18 @@ impl ResourceMonitor {
                     CpuSample::Counters {
                         aggregate: old,
                         cores: old_cores,
-                    } if cores
-                        .iter()
-                        .zip(old_cores)
-                        .all(|(new, old)| new.name == old.name) =>
+                    } if cores.iter().zip(old_cores).all(|(new, old)| {
+                        new.name == old.name && new.counter.is_monotonic_since(old.counter)
+                    }) =>
                     {
                         Some((*old, old_cores))
                     }
                     _ => None,
                 });
                 let cpu = previous_counters.and_then(|(old, _)| aggregate.usage_since(old));
-                // A reset of the aggregate invalidates every per-core interval,
-                // even when an individual core's counter happens to increase.
+                // A reset of any core rebaselines the entire CPU snapshot: its
+                // regression can otherwise be hidden by other cores' increases
+                // in the aggregate. Unchanged cores may still have no interval.
                 let cores = cores
                     .iter()
                     .enumerate()
@@ -381,6 +387,133 @@ mod tests {
         invalid.uptime_seconds = 15.0;
         invalid.memory.available_bytes = 5000;
         assert!(monitor.update(invalid).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn individual_core_regressions_rebaseline_even_when_aggregate_increases() -> Result<()> {
+        let two_cores = |a: CpuCounter, b: CpuCounter, uptime| {
+            let mut sample = sample(a.total + b.total, a.idle + b.idle, uptime);
+            sample.logical_cpus = 2;
+            sample.cpu = CpuSample::Counters {
+                aggregate: CpuCounter {
+                    total: a.total + b.total,
+                    idle: a.idle + b.idle,
+                },
+                cores: vec![
+                    CpuCoreCounter {
+                        name: "0".into(),
+                        counter: a,
+                    },
+                    CpuCoreCounter {
+                        name: "1".into(),
+                        counter: b,
+                    },
+                ],
+            };
+            sample
+        };
+        for (before, after) in [
+            // A u32 Mach tick counter wraps, masked by another core increasing.
+            (
+                CpuCounter {
+                    total: u32::MAX as u64,
+                    idle: 10,
+                },
+                CpuCounter {
+                    total: 20,
+                    idle: 15,
+                },
+            ),
+            // Idle regresses while total increases.
+            (
+                CpuCounter {
+                    total: 100,
+                    idle: 40,
+                },
+                CpuCounter {
+                    total: 110,
+                    idle: 30,
+                },
+            ),
+            // Busy regresses while total and idle both increase.
+            (
+                CpuCounter {
+                    total: 100,
+                    idle: 40,
+                },
+                CpuCounter {
+                    total: 110,
+                    idle: 60,
+                },
+            ),
+        ] {
+            let mut monitor = ResourceMonitor::default();
+            let other_before = CpuCounter {
+                total: 100,
+                idle: 20,
+            };
+            let other_after = CpuCounter {
+                total: u32::MAX as u64 + 200,
+                idle: 100,
+            };
+            monitor.update(two_cores(before, other_before, 10.0))?;
+            let reset = monitor.update(two_cores(after, other_after, 11.0))?;
+            assert_eq!(reset.cpu_percent, None);
+            assert!(reset.cores.iter().all(|core| core.percent.is_none()));
+            let recovered = monitor.update(two_cores(
+                CpuCounter {
+                    total: after.total + 100,
+                    idle: after.idle + 20,
+                },
+                CpuCounter {
+                    total: other_after.total + 100,
+                    idle: other_after.idle + 20,
+                },
+                12.0,
+            ))?;
+            assert_eq!(recovered.cpu_percent, Some(80.0));
+            assert!(
+                recovered
+                    .cores
+                    .iter()
+                    .all(|core| core.percent == Some(80.0))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_core_does_not_erase_other_core_interval() -> Result<()> {
+        let mut monitor = ResourceMonitor::default();
+        let mut first = sample(200, 80, 10.0);
+        first.logical_cpus = 2;
+        if let CpuSample::Counters { cores, .. } = &mut first.cpu {
+            cores[0].counter = CpuCounter {
+                total: 100,
+                idle: 40,
+            };
+            cores.push(CpuCoreCounter {
+                name: "1".into(),
+                counter: CpuCounter {
+                    total: 100,
+                    idle: 40,
+                },
+            });
+        }
+        let mut next = first.clone();
+        next.uptime_seconds = 11.0;
+        if let CpuSample::Counters { aggregate, cores } = &mut next.cpu {
+            aggregate.total += 100;
+            aggregate.idle += 20;
+            cores[1].counter.total += 100;
+            cores[1].counter.idle += 20;
+        }
+        monitor.update(first)?;
+        let usage = monitor.update(next)?;
+        assert_eq!(usage.cpu_percent, Some(80.0));
+        assert_eq!(usage.cores[0].percent, None);
+        assert_eq!(usage.cores[1].percent, Some(80.0));
         Ok(())
     }
 

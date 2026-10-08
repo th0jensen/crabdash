@@ -1,6 +1,6 @@
 use crate::remote_connection::{AuthMethod, RemoteConnection};
 pub use crate::system_info::{LinuxDistribution, MachineKind, SystemInfo};
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use services::MachineServices;
 use utils::{args::Args, output::Output};
@@ -10,6 +10,9 @@ use uuid::Uuid;
 pub struct Machine {
     pub uuid: Uuid,
     pub id: String,
+    /// User-facing name; connection identity remains in `id` and `remote`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub system_info: SystemInfo,
     pub kind: MachineKind,
     pub remote: Option<RemoteConnection>,
@@ -19,6 +22,13 @@ pub struct Machine {
 }
 
 impl Machine {
+    pub fn display_name(&self) -> &str {
+        self.alias.as_deref().unwrap_or_else(|| {
+            let name = self.system_info.machine_name.trim();
+            if name.is_empty() { &self.id } else { name }
+        })
+    }
+
     /// Snapshot identity and command transport without copying cached inventories.
     ///
     /// Authentication and shared SSH session ownership are retained so background
@@ -27,6 +37,7 @@ impl Machine {
         Self {
             uuid: self.uuid,
             id: self.id.clone(),
+            alias: self.alias.clone(),
             system_info: self.system_info.clone(),
             kind: self.kind,
             remote: self.remote.clone(),
@@ -115,6 +126,7 @@ impl Default for Machine {
         Machine {
             uuid: Uuid::new_v4(),
             id: "localhost".to_string(),
+            alias: None,
             system_info: SystemInfo {
                 machine_name: "localhost".into(),
                 os_version: "0.1.1".into(),
@@ -129,12 +141,69 @@ impl Default for Machine {
     }
 }
 
+/// Validate before trimming so pasted newlines and tabs cannot become names.
+pub fn validated_display_name(name: &str) -> Result<String> {
+    ensure!(
+        !name.chars().any(char::is_control),
+        "Machine names cannot contain control characters"
+    );
+    let name = name.trim();
+    ensure!(!name.is_empty(), "Enter a machine name");
+    ensure!(
+        name.chars().count() <= 80,
+        "Machine names must be 80 characters or fewer"
+    );
+    Ok(name.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::anyhow;
     use std::path::PathBuf;
     use utils::{container::Container, disks::Disk, services::ServiceItem};
+
+    #[test]
+    fn aliases_are_backward_compatible_and_do_not_replace_identity() -> Result<()> {
+        let mut machine = Machine::default();
+        machine.system_info.machine_name = "  detected-host  ".into();
+        let legacy = serde_json::to_value(&machine)?;
+        assert!(legacy.get("alias").is_none());
+        let restored: Machine = serde_json::from_value(legacy)?;
+        assert_eq!(restored.alias, None);
+        assert_eq!(restored.display_name(), "detected-host");
+        machine.alias = Some(validated_display_name("  My server 界  ")?);
+        machine.system_info.machine_name = "new-hostname".into();
+        assert_eq!(machine.display_name(), "My server 界");
+        assert_eq!(machine.id, "localhost");
+        let snapshot = machine.command_snapshot();
+        assert_eq!(snapshot.alias, machine.alias);
+        assert_eq!(snapshot.uuid, machine.uuid);
+        assert_eq!(snapshot.display_name(), "My server 界");
+        let restored: Machine = serde_json::from_str(&serde_json::to_string(&machine)?)?;
+        assert_eq!(restored.display_name(), "My server 界");
+        machine.alias = None;
+        machine.system_info.machine_name = " ".into();
+        assert_eq!(machine.display_name(), machine.id);
+        Ok(())
+    }
+
+    #[test]
+    fn machine_names_validate_characters_before_trimming() -> Result<()> {
+        assert_eq!(validated_display_name("  Living room  ")?, "Living room");
+        assert_eq!(validated_display_name(&"界".repeat(80))?, "界".repeat(80));
+        for name in [
+            "".to_owned(),
+            "  ".into(),
+            "\nname".into(),
+            "name\t".into(),
+            "name\0".into(),
+            "界".repeat(81),
+        ] {
+            assert!(validated_display_name(&name).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn command_snapshot_preserves_authentication_and_shared_transport() -> Result<()> {

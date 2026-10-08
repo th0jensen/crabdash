@@ -9,7 +9,10 @@ pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Proces
     let output = machine
         .run(
             "sh",
-            &args!["-c", "LC_ALL=C /bin/ps -axo pid=,lstart=,time=,rss=,comm="],
+            &args![
+                "-c",
+                "LC_ALL=C /bin/ps -ww -axo pid=,lstart=,time=,rss=,uid=,user=,comm="
+            ],
         )
         .await?;
     parse(&output)
@@ -24,7 +27,7 @@ fn parse(output: &str) -> Result<ProcessesSample> {
             continue;
         }
         let fields: Vec<_> = line.split_whitespace().collect();
-        ensure!(fields.len() >= 9, "Incomplete macOS process row");
+        ensure!(fields.len() >= 11, "Incomplete macOS process row");
         let pid = fields[0].parse().context("Invalid macOS process PID")?;
         let cpu = cpu_centiseconds(fields[6])?;
         let memory_bytes = fields[7]
@@ -35,8 +38,8 @@ fn parse(output: &str) -> Result<ProcessesSample> {
         entries.push(ProcessSample {
             pid,
             start_id: fields[1..6].join(" "),
-            name: fields[8..].join(" "),
-            user: None,
+            name: fields[10..].join(" "),
+            user: process_user(fields[8], fields[9]),
             memory_bytes: Some(memory_bytes),
             cpu: ProcessCpu::TimedCounter {
                 ticks: cpu,
@@ -50,6 +53,17 @@ fn parse(output: &str) -> Result<ProcessesSample> {
         total_count,
         truncated: total_count > LIMIT,
     })
+}
+
+fn process_user(uid: &str, user: &str) -> Option<String> {
+    let uid = uid.parse::<u32>().ok();
+    if user.is_empty()
+        || matches!(user, "-" | "?")
+        || uid.is_some_and(|uid| user.parse::<u32>().ok() == Some(uid))
+    {
+        return uid.map(|uid| format!("UID {uid}"));
+    }
+    (!user.chars().any(char::is_control)).then(|| user.to_string())
 }
 
 fn cpu_centiseconds(value: &str) -> Result<u64> {
@@ -109,12 +123,14 @@ mod tests {
     use super::*;
     #[test]
     fn cumulative_time_and_pid_start_identity_are_preserved() -> Result<()> {
-        let processes = parse(" 12 Sat Oct 7 12:00:00 2026 1:02.34 2048 /Applications/My App\n")?;
+        let processes =
+            parse(" 12 Sat Oct 7 12:00:00 2026 1:02.34 2048 501 alice /Applications/My App\n")?;
         assert_eq!(processes.total_cpu, None);
         assert_eq!(processes.total_count, 1);
         assert!(!processes.truncated);
         assert_eq!(processes.entries[0].start_id, "Sat Oct 7 12:00:00 2026");
         assert_eq!(processes.entries[0].name, "/Applications/My App");
+        assert_eq!(processes.entries[0].user.as_deref(), Some("alice"));
         assert_eq!(processes.entries[0].memory_bytes, Some(2048 * 1024));
         assert!(matches!(
             processes.entries[0].cpu,
@@ -126,6 +142,20 @@ mod tests {
         assert_eq!(cpu_centiseconds("2-01:02:03.4")?, 17652340);
         assert!(cpu_centiseconds("1:60.00").is_err());
         assert!(cpu_centiseconds("1:02.雪").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn full_unicode_user_and_numeric_uid_fallback_are_retained() -> Result<()> {
+        let sample = parse(
+            "12 Sat Oct 7 12:00:00 2026 0:00.01 1 501 非常に長いowner /Applications/雪 App\n13 Sat Oct 7 12:00:00 2026 0:00.02 2 98765 98765 worker\n14 Sat Oct 7 12:00:00 2026 0:00.03 3 76543 ? worker\n",
+        )?;
+        assert_eq!(sample.entries[0].user.as_deref(), Some("非常に長いowner"));
+        assert_eq!(sample.entries[0].name, "/Applications/雪 App");
+        assert_eq!(sample.entries[1].user.as_deref(), Some("UID 98765"));
+        assert_eq!(sample.entries[2].user.as_deref(), Some("UID 76543"));
+        assert_eq!(sample.entries[2].start_id, sample.entries[0].start_id);
+        assert_eq!(process_user("unavailable", "?"), None);
         Ok(())
     }
 }

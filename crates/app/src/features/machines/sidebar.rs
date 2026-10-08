@@ -1,4 +1,5 @@
 use super::logos;
+pub(crate) mod palette;
 // Keep the restored sidebar presentation independent of the newer dashboard chrome.
 mod style {
     pub(super) const TEXT: f32 = 13.0;
@@ -68,8 +69,7 @@ impl Render for MachineTooltip {
                     || "This machine".to_owned(),
                     |remote| format!("{}@{}", remote.user, remote.host),
                 );
-                let name = machine.system_info.machine_name.trim();
-                let name = if name.is_empty() { &machine.id } else { name };
+                let name = machine.display_name();
                 let release = machine
                     .system_info
                     .distribution
@@ -86,15 +86,16 @@ impl Render for MachineTooltip {
     }
 }
 
-fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+fn machine_item(
+    machine: &Machine,
+    selected: bool,
+    accent: Option<u32>,
+    cx: &mut Context<Crabdash>,
+) -> Stateful<Div> {
     let machine_uuid = machine.uuid;
     let connection_active = machine.connected();
     let is_remote = machine.remote.is_some();
-    let name = if machine.system_info.machine_name.trim().is_empty() {
-        machine.id.clone()
-    } else {
-        machine.system_info.machine_name.trim().to_owned()
-    };
+    let name = machine.display_name().to_owned();
     let connection_label = if is_remote { "SSH" } else { "Local" };
     let metadata = format!("{} · {connection_label}", logos::platform_label(machine));
     let name_color = if selected {
@@ -102,24 +103,37 @@ fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -
     } else {
         rgb(style::TEXT_PRIMARY)
     };
-    let meta_color = rgb(style::TEXT_MUTED);
-    let bg = if selected {
-        rgb(style::SELECTED_BG)
+    let meta_color = rgb(if cfg!(target_os = "macos") && selected {
+        style::TEXT_PRIMARY
     } else {
-        rgb(0x1B1B1B)
+        style::TEXT_MUTED
+    });
+    // Keep the restored row geometry and dark surfaces. An optional desktop
+    // accent changes only the selected row's existing colour treatment.
+    let tint = |strength: u32, fallback| {
+        accent.map_or(rgb(fallback), |accent| {
+            rgb(palette::BACKGROUND).blend(rgba((accent << 8) | strength))
+        })
+    };
+    let selected_bg = tint(38, style::SELECTED_BG);
+    let selected_hover = tint(56, 0x2B3849);
+    let bg = if selected {
+        selected_bg
+    } else {
+        rgb(palette::BACKGROUND)
     };
     let border = if selected {
-        rgb(style::SELECTED_BORDER)
+        tint(100, style::SELECTED_BORDER)
     } else {
-        rgb(0x1B1B1B)
+        rgb(palette::BACKGROUND)
     };
     let icon_bg = if selected {
-        rgb(0x304158)
+        tint(61, 0x304158)
     } else {
         rgb(style::SURFACE_HOVER)
     };
     let icon_color = if selected {
-        rgb(style::ACCENT)
+        rgb(accent.unwrap_or(style::ACCENT))
     } else {
         rgb(style::TEXT_MUTED)
     };
@@ -143,7 +157,7 @@ fn machine_item(machine: &Machine, selected: bool, cx: &mut Context<Crabdash>) -
         .cursor_pointer()
         .hover(move |style| {
             style.bg(if selected {
-                rgb(0x2B3849)
+                selected_hover
             } else {
                 rgb(style::SURFACE_HOVER)
             })
@@ -238,13 +252,14 @@ fn add_machine_item(cx: &mut Context<Crabdash>) -> impl IntoElement {
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
     let app_entity = cx.entity();
+    let accent = crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx);
     let machine_entries: Vec<_> = app
         .machine_store
         .machines
         .iter()
         .enumerate()
         .map(|(index, machine)| {
-            let row = machine_item(machine, app.selected_machine == index, cx);
+            let row = machine_item(machine, app.selected_machine == index, accent, cx);
             let machine_uuid = machine.uuid;
 
             let tooltip_app = app_entity.clone();
@@ -271,9 +286,17 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                 ContextMenu::build(window, cx, move |menu, _, _| {
                     let menu_app_refresh = menu_app.clone();
                     let menu_app_delete = menu_app.clone();
-                    let menu = menu.entry("Refresh", Icon::RefreshCw, None, move |_, cx| {
-                        menu_app_refresh.update(cx, |app, cx| app.refresh_machine(machine_uuid, cx))
-                    });
+                    let menu_app_rename = menu_app.clone();
+                    let menu = menu
+                        .entry("Refresh", Icon::RefreshCw, None, move |_, cx| {
+                            menu_app_refresh
+                                .update(cx, |app, cx| app.refresh_machine(machine_uuid, cx))
+                        })
+                        .entry("Rename…", Icon::Pencil, None, move |window, cx| {
+                            menu_app_rename.update(cx, |app, cx| {
+                                app.open_machine_rename(machine_uuid, window, cx)
+                            })
+                        });
                     if is_localhost {
                         menu
                     } else {
@@ -281,9 +304,10 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                             "Delete",
                             Icon::X,
                             Some(rgb(0xBA3C3C)),
-                            move |_, cx| {
-                                menu_app_delete
-                                    .update(cx, |app, cx| app.delete_machine(machine_uuid, cx))
+                            move |window, cx| {
+                                menu_app_delete.update(cx, |app, cx| {
+                                    app.delete_machine(machine_uuid, window, cx)
+                                })
                             },
                         )
                     }
@@ -298,7 +322,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
         .w(app.sidebar_width)
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(0x1B1B1B))
+        .bg(rgb(palette::BACKGROUND))
         .border_r_1()
         .border_color(rgb(0x2B2B2B))
         .flex()

@@ -4,21 +4,61 @@ use super::super::{ProcessCpu, ProcessSample, ProcessesSample};
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
 
+const OWNER: &str = include_str!("windows/owner.cs");
 const SCRIPT: &str = r#"
+$ownerReady = $false
+try {
+    Add-Type -TypeDefinition $crabdash_process_owner -Language CSharp -ErrorAction Stop
+    $ownerReady = $true
+} catch {}
+$owners = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+$owners['S-1-5-18'] = 'NT AUTHORITY\SYSTEM'
+$owners['S-1-5-19'] = 'NT AUTHORITY\LOCAL SERVICE'
+$owners['S-1-5-20'] = 'NT AUTHORITY\NETWORK SERVICE'
+try {
+    Get-CimInstance -ClassName Win32_UserAccount -Filter 'LocalAccount=True' -Property SID,Name,Domain -OperationTimeoutSec 2 -ErrorAction Stop |
+        Select-Object -First 8192 | ForEach-Object {
+            if (-not [string]::IsNullOrEmpty($_.SID) -and -not [string]::IsNullOrEmpty($_.Name)) {
+                $label = [string]$_.Name
+                if (-not [string]::IsNullOrEmpty($_.Domain)) { $label = [string]$_.Domain + '\' + $label }
+                if (-not $owners.ContainsKey([string]$_.SID)) { $owners[[string]$_.SID] = $label }
+            }
+        }
+} catch {}
+if ($ownerReady) {
+    try {
+        $current = [CrabdashProcessOwner]::CurrentAccount()
+        if ($null -ne $current -and $current.Length -eq 2 -and -not $owners.ContainsKey($current[0])) { $owners[$current[0]] = $current[1] }
+    } catch {}
+}
 $all = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
 $rows = @($all | Select-Object -First 8192 | ForEach-Object {
-    $cpu = $null; $start = ''
+    $cpu = $null; $start = ''; $creation = $null; $user = $null
     if ($null -ne $_.KernelModeTime -and $null -ne $_.UserModeTime) { $cpu = ([uint64]$_.KernelModeTime + [uint64]$_.UserModeTime).ToString() }
-    if ($null -ne $_.CreationDate) { $start = $_.CreationDate.ToUniversalTime().ToString('o') }
+    if ($null -ne $_.CreationDate) {
+        $creation = $_.CreationDate.ToUniversalTime()
+        $start = $creation.ToString('o')
+    }
     $memory = $null
     if ($null -ne $_.WorkingSetSize) { $memory = ([uint64]$_.WorkingSetSize).ToString() }
-    [pscustomobject]@{ pid = [uint32]$_.ProcessId; name = [string]$_.Name; start = $start; cpu = $cpu; memory = $memory }
+    if ($ownerReady -and $null -ne $creation) {
+        try {
+            $sid = [CrabdashProcessOwner]::SidForProcess([uint32]$_.ProcessId, [int64]$creation.ToFileTimeUtc())
+            if (-not [string]::IsNullOrEmpty($sid)) {
+                $user = $sid
+                if ($owners.ContainsKey($sid)) { $user = $owners[$sid] }
+            }
+        } catch {}
+    }
+    [pscustomobject]@{ pid = [uint32]$_.ProcessId; name = [string]$_.Name; start = $start; cpu = $cpu; memory = $memory; user = $user }
 })
 [pscustomobject]@{ count = $all.Count; rows = $rows } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
 pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ProcessesSample> {
-    parse(&machine.powershell(SCRIPT).await?)
+    // Static native source is a literal here-string; target data is never code.
+    let script = format!("$crabdash_process_owner = @'\n{OWNER}\n'@\n{SCRIPT}");
+    parse(&machine.powershell(&script).await?)
 }
 #[derive(Deserialize)]
 struct Row {
@@ -27,6 +67,8 @@ struct Row {
     start: String,
     cpu: Option<String>,
     memory: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
 }
 #[derive(Deserialize)]
 struct Snapshot {
@@ -72,7 +114,7 @@ fn parse(output: &str) -> Result<ProcessesSample> {
             pid: row.pid,
             start_id: row.start,
             name: row.name,
-            user: None,
+            user: row.user.filter(|user| !user.trim().is_empty()),
             memory_bytes,
             cpu,
         });
@@ -106,6 +148,31 @@ mod tests {
         assert_eq!(sample.entries[0].memory_bytes, Some(9_007_199_254_740_993));
         assert!(matches!(sample.entries[1].cpu, ProcessCpu::Unknown));
         assert!(parse("{}").is_err());
+        Ok(())
+    }
+    #[test]
+    fn ownership_names_sid_fallback_and_unknowns_preserve_rows_and_creation_identity() -> Result<()>
+    {
+        // JSON and Rust each escape the single Domain\User separator.
+        let sample = parse(
+            r#"{"count":4,"rows":[{"pid":1,"name":"雪.exe","start":"first","cpu":"9007199254740993","memory":"1","user":"HOST\\雪-owner"},{"pid":2,"name":"app.exe","start":"second","cpu":"1","memory":"2","user":"S-1-5-21-123-456-789-1001"},{"pid":3,"name":"protected.exe","start":"third","cpu":null,"memory":null,"user":null},{"pid":4,"name":"empty.exe","start":"fourth","cpu":"0","memory":"0","user":""}]}"#,
+        )?;
+        assert_eq!(sample.entries.len(), 4);
+        assert_eq!(sample.entries[0].user.as_deref(), Some("HOST\\雪-owner"));
+        assert_eq!(
+            sample.entries[1].user.as_deref(),
+            Some("S-1-5-21-123-456-789-1001")
+        );
+        assert_eq!(sample.entries[2].user, None);
+        assert_eq!(sample.entries[3].user, None);
+        assert_eq!(sample.entries[0].start_id, "first");
+        assert!(matches!(
+            sample.entries[0].cpu,
+            ProcessCpu::TimedCounter {
+                ticks: 9_007_199_254_740_993,
+                ..
+            }
+        ));
         Ok(())
     }
     #[test]

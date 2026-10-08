@@ -46,8 +46,26 @@ $device
     printf 'DRM\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$device" "${device##*/}" "${driver##*/}" "$vendor" "$device_id" "$busy" "$used" "$total" "$temperature"
 done
 printf '\n[nvidia]\n'
-if command -v nvidia-smi >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
-    if output=$(timeout -k 1s 2s nvidia-smi --query-gpu=pci.bus_id,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null); then
+wsl_nvidia=/usr/lib/wsl/lib/nvidia-smi
+resolve_nvidia() {
+    if command -v nvidia-smi 2>/dev/null; then return 0; fi
+    if [ -f "$wsl_nvidia" ] && [ -x "$wsl_nvidia" ]; then printf '%s\n' "$wsl_nvidia"; return 0; fi
+    return 1
+}
+nvidia=$(resolve_nvidia) || nvidia=
+if [ -n "$nvidia" ] && command -v timeout >/dev/null 2>&1; then
+    # Optional WSL NVML fields can reject the full query. Both attempts share
+    # one deadline, so unavailable telemetry cannot double the sample budget.
+    if output=$(timeout -k 1s 2s /bin/sh -c '
+        smi=$1
+        if output=$("$smi" --query-gpu=pci.bus_id,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null); then
+            printf "%s\n" "$output"
+        elif output=$("$smi" --query-gpu=pci.bus_id,name --format=csv,noheader,nounits 2>/dev/null); then
+            printf "%s\n" "$output"
+        else
+            exit 1
+        fi
+    ' nvidia-query "$nvidia" 2>/dev/null); then
         printf 'STATUS\tok\n%s\n' "$output"
     else
         printf 'STATUS\tunavailable\n'
@@ -115,9 +133,9 @@ pub(in crate::resources) fn parse(drm: &str, nvidia: Option<&str>) -> Option<Vec
         });
     }
     if let Some(output) = nvidia {
-        for line in output.lines() {
+        for line in output.lines().take(8192) {
             let fields: Vec<_> = line.split(',').map(str::trim).collect();
-            if fields.len() != 6 {
+            if !matches!(fields.len(), 2 | 6) {
                 continue;
             }
             let Some(id) = pci_id(fields[0]) else {
@@ -130,7 +148,7 @@ pub(in crate::resources) fn parse(drm: &str, nvidia: Option<&str>) -> Option<Vec
             };
             let card = cards.entry(id.clone()).or_insert(GpuSample {
                 id,
-                name: fields[1].into(),
+                name: fields[1].chars().take(256).collect(),
                 vendor: "NVIDIA".into(),
                 driver: Some("nvidia".into()),
                 busy_percent: None,
@@ -139,6 +157,9 @@ pub(in crate::resources) fn parse(drm: &str, nvidia: Option<&str>) -> Option<Vec
                 temperature_celsius: None,
             });
             card.name = fields[1].chars().take(256).collect();
+            if fields.len() == 2 {
+                continue;
+            }
             card.busy_percent = finite(fields[2]).filter(|value| (0.0..=100.0).contains(value));
             card.memory_total_bytes = bytes(fields[4]).filter(|value| *value > 0);
             card.memory_used_bytes = bytes(fields[3])

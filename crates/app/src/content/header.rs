@@ -65,24 +65,16 @@ impl Render for DraggedTab {
         {
             return div();
         }
-        div()
-            .h(rems(style::BAR / 16.0))
-            .px(px(12.0))
-            .flex()
-            .items_center()
-            .gap(rems(4.0 / 16.0))
-            .bg(rgb(style::SURFACE_HOVER))
-            .text_size(rems(style::TEXT / 16.0))
-            .text_color(rgb(style::TEXT_SELECTED))
-            .shadow_md()
-            .child(tab_icon(self.tab))
-            .child(self.tab.label())
+        crate::components::drag_preview::render(self.tab.label(), tab_icon(self.tab, None))
     }
 }
 
-fn tab_icon(tab: MainTab) -> Div {
+fn tab_icon(tab: MainTab, accent: Option<u32>) -> Div {
     if tab == MainTab::Docker {
-        crate::features::docker::brand::icon(style::ICON)
+        crate::features::docker::brand::icon_with_color(
+            style::ICON,
+            accent.unwrap_or(style::TEXT_PRIMARY),
+        )
     } else {
         div()
             .size(rems(style::ICON / 16.0))
@@ -90,6 +82,7 @@ fn tab_icon(tab: MainTab) -> Div {
             .flex()
             .items_center()
             .justify_center()
+            .when_some(accent, |this, accent| this.text_color(rgb(accent)))
             .child(lucide_icon(tab.icon(), style::ICON))
     }
 }
@@ -168,6 +161,9 @@ fn tab_button(
 ) -> Stateful<Div> {
     let owner = cx.entity().downgrade();
     let hover_owner = owner.clone();
+    let accent = (active && app.workspaces.layout().focused == pane)
+        .then(|| crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx))
+        .flatten();
     let shortcut = || {
         div()
             .flex_none()
@@ -248,13 +244,14 @@ fn tab_button(
                 .flex()
                 .items_center()
                 .gap(rems(4.0 / 16.0))
-                .child(tab_icon(tab))
+                .child(tab_icon(tab, accent))
                 .child(
                     div()
                         .w(title_width)
                         .min_w_0()
                         .text_ellipsis()
                         .overflow_hidden()
+                        .when_some(accent, |this, accent| this.text_color(rgb(accent)))
                         .child(tab.label()),
                 ),
         )

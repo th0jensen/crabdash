@@ -206,5 +206,6 @@ impl Crabdash {
                 Some("CrabdashTerminalInput"),
             )]);
         }
+        crate::features::terminal::bind_keys(cx);
     }
 }

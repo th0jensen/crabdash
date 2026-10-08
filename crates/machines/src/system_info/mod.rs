@@ -1,11 +1,11 @@
 //! Identity and platform detection for a selected machine.
+mod identity;
 mod linux;
 mod macos;
 mod windows;
 use crate::{machine::Machine, store::MachineStore};
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use utils::{args, args::Args};
 
 impl Machine {
     /// Refreshes system information from the machine and updates internal state
@@ -34,33 +34,7 @@ impl Machine {
     }
 
     pub(crate) async fn get_system_info(&mut self) -> Result<SystemInfo> {
-        if cfg!(target_os = "windows") && self.remote.is_none() {
-            return windows::identity(self).await;
-        }
-        let cmd = "uname";
-        let unix_identity = async {
-            Ok::<_, anyhow::Error>((
-                self.run(cmd, &args!["-n"]).await?.into(),
-                self.run(cmd, &args!["-sr"]).await?.into(),
-                self.run(cmd, &args!["-m"]).await?.into(),
-            ))
-        }
-        .await;
-        let (machine_name, os_version, arch) = match unix_identity {
-            Ok(identity) => identity,
-            Err(error) if self.remote.is_some() => {
-                return windows::identity(self).await.context(format!(
-                    "Unix identity unavailable ({error}); Windows identity probe failed"
-                ));
-            }
-            Err(error) => return Err(error),
-        };
-        let mut info = SystemInfo {
-            machine_name,
-            os_version,
-            arch,
-            distribution: None,
-        };
+        let mut info = identity::query(self).await?;
         let distribution = match MachineKind::get_kind_from_info(&info) {
             MachineKind::Linux => linux::distribution(self).await,
             MachineKind::MacOS => macos::distribution(self).await,
@@ -113,13 +87,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saved_machines_without_distribution_metadata_still_load() {
+    fn saved_machines_without_distribution_metadata_still_load() -> Result<()> {
         let info: SystemInfo = serde_json::from_str(
             r#"{"machine_name":"fedora","os_version":"Linux 7.2","arch":"aarch64"}"#,
-        )
-        .unwrap();
+        )?;
         assert!(info.distribution.is_none());
         assert_eq!(info.platform_label(), "Linux");
+        Ok(())
     }
 }
 

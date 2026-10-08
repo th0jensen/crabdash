@@ -1,5 +1,6 @@
 use super::table::{Column, Filter};
 use crate::components::style;
+use crate::desktop::controls::{self, StatusControl, SurfaceControl};
 use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
@@ -26,7 +27,7 @@ const TREE_COL_WIDTH: f32 = 14.0;
 const TREE_ELBOW_Y: f32 = 18.0;
 const TREE_ROW_GAP: f32 = 10.0;
 
-fn status_badge(disk: &Disk) -> Div {
+fn status_badge(disk: &Disk) -> StatusControl {
     let normalized = disk.status.to_ascii_lowercase();
     let healthy = matches!(normalized.as_str(), "mounted" | "healthy" | "swap");
     let color = if healthy {
@@ -43,7 +44,7 @@ fn stats_chip(
     filter: Filter,
     app: &Crabdash,
     cx: &mut Context<Crabdash>,
-) -> Stateful<Div> {
+) -> SurfaceControl {
     filter_chip(id, label, count, app.disks_table.filter == filter).on_click(cx.listener(
         move |this, _, _, cx| {
             this.disks_table.filter = filter;
@@ -201,7 +202,7 @@ fn tree_toggle_button(
 
     let disk_id = disk_id.to_string();
 
-    button
+    let button = button
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x343437)))
         .child(lucide_icon(
@@ -214,8 +215,22 @@ fn tree_toggle_button(
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_disk_row(&disk_id, cx);
-        }))
-        .into_any_element()
+        }));
+    controls::selected_icon_button(
+        button,
+        if expanded {
+            "Hide partitions"
+        } else {
+            "Show partitions"
+        },
+        if expanded {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        expanded,
+    )
+    .into_any_element()
 }
 
 fn disk_row(disk: &Disk, app: &Crabdash, cx: &mut Context<Crabdash>, show_id: bool) -> Div {
@@ -390,6 +405,9 @@ pub fn render(
                     < px(620.0 * app.preferences.interface_font_size
                         / crate::components::style::TEXT),
             )
+            // Resolve the wrapped search against the split's allocated width,
+            // rather than the header's intrinsic content measurement.
+            .w(panel_width)
             .into_any_element(),
         ),
         div()

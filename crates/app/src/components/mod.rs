@@ -1,7 +1,10 @@
 pub mod common;
 pub mod context_menu;
+pub(crate) mod contrast;
+pub(crate) mod drag_preview;
 pub mod right_click_menu;
 pub mod scroll_list;
+pub(crate) mod split_handle;
 pub(crate) mod style;
 pub(crate) mod table;
 pub mod terminal_input;

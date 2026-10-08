@@ -9,9 +9,9 @@ use std::{
 };
 use uuid::Uuid;
 
-// Version 4 adds System. Versions 1/2 migrate to a
+// Version 5 adds requested terminal drawer height; version 4 adds System. Versions 1/2 migrate to a
 // single pane; version 3 preserves splits. Loading never rewrites the file.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Workspace {
@@ -21,6 +21,8 @@ pub(crate) struct Workspace {
     pub sidebar_collapsed: bool,
     pub sidebar_width: f32,
     pub terminal_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_height: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +48,8 @@ struct SavedWorkspace {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     terminal_open: bool,
+    #[serde(default)]
+    terminal_height: Option<f32>,
 }
 
 impl TryFrom<SavedStore> for Store {
@@ -64,6 +68,7 @@ impl TryFrom<SavedStore> for Store {
                 sidebar_collapsed: workspace.sidebar_collapsed,
                 sidebar_width: workspace.sidebar_width,
                 terminal_open: workspace.terminal_open,
+                terminal_height: workspace.terminal_height,
             });
         }
         let store = Self {
@@ -89,6 +94,7 @@ impl Default for Store {
                 sidebar_collapsed: false,
                 sidebar_width: 240.0,
                 terminal_open: false,
+                terminal_height: None,
             }],
         }
     }
@@ -155,6 +161,12 @@ impl Store {
                 bail!("Invalid workspace sidebar size.");
             }
             workspace.layout.validate()?;
+            if workspace
+                .terminal_height
+                .is_some_and(|height| !crate::features::terminal::height::valid_request(height))
+            {
+                bail!("Invalid workspace terminal height.");
+            }
         }
         if !ids.contains(&self.active) {
             bail!("Active workspace is missing.");
@@ -214,6 +226,100 @@ mod tests {
         decoded.validate()?;
         assert_eq!(decoded.current().layout, store.current().layout);
         assert_eq!(decoded.active, store.active);
+        Ok(())
+    }
+
+    #[test]
+    fn requested_terminal_heights_survive_hidden_workspaces_and_save_as_clones() -> Result<()> {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let mut store = Store::default();
+        let original = store.active;
+        store.current_mut().terminal_height = Some(720.5);
+        // Save As clones the committed request even while the drawer is hidden.
+        let mut copy = store.current().clone();
+        copy.id = Uuid::new_v4();
+        copy.name = "Copy".into();
+        assert_eq!(copy.terminal_height, Some(720.5));
+        copy.terminal_height = Some(250.25);
+        store.active = copy.id;
+        store.workspaces.push(copy);
+        store.save_to(&path)?;
+        let mut loaded = Store::load_from(&path, 240.0)?;
+        assert_eq!(loaded.current().terminal_height, Some(250.25));
+        assert!(!loaded.current().terminal_open);
+        loaded.active = original;
+        assert_eq!(loaded.current().terminal_height, Some(720.5));
+        assert!(!loaded.current().terminal_open);
+        assert_eq!(loaded.version, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn version_four_preserves_layout_and_file_bytes_until_explicit_save() -> Result<()> {
+        use super::super::model::{Drop, Tab};
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        fs::create_dir_all(&fixture.0)?;
+        let mut source = Store::default();
+        source.current_mut().terminal_open = true;
+        assert!(
+            source
+                .current_mut()
+                .layout
+                .drop_tab(Tab::Services, 1, Drop::Right)
+        );
+        let mut legacy = serde_json::to_value(&source)?;
+        legacy["version"] = serde_json::json!(4);
+        legacy["workspaces"][0]
+            .as_object_mut()
+            .context("Workspace object")?
+            .remove("terminal_height");
+        let bytes = serde_json::to_vec_pretty(&legacy)?;
+        fs::write(&path, &bytes)?;
+        let loaded = Store::load_from(&path, 240.0)?;
+        assert_eq!(loaded.current().layout, source.current().layout);
+        assert!(loaded.current().terminal_open);
+        assert_eq!(loaded.current().terminal_height, None);
+        assert_eq!(fs::read(&path)?, bytes);
+        loaded.save_to(&path)?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?)?["version"],
+            5
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_terminal_requests_preserve_saved_file_and_failed_saves_retain_request() -> Result<()>
+    {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let mut store = Store::default();
+        store.current_mut().terminal_height = Some(400.5);
+        store.save_to(&path)?;
+        let bytes = fs::read(&path)?;
+        for height in [0.0, -1.0, 16_000.5, f32::NAN, f32::INFINITY] {
+            store.current_mut().terminal_height = Some(height);
+            assert!(store.save_to(&path).is_err());
+            assert_eq!(fs::read(&path)?, bytes);
+        }
+        for height in [1.0, 16_000.0] {
+            store.current_mut().terminal_height = Some(height);
+            store.validate()?;
+        }
+        store.current_mut().terminal_height = Some(600.25);
+        let blocked = fixture.0.join("file-instead-of-directory");
+        fs::write(&blocked, b"preserved")?;
+        assert!(store.save_to(&blocked.join("workspaces.json")).is_err());
+        assert_eq!(store.current().terminal_height, Some(600.25));
+        assert_eq!(fs::read(&path)?, bytes);
+        let mut malformed: serde_json::Value = serde_json::from_slice(&bytes)?;
+        malformed["workspaces"][0]["terminal_height"] = serde_json::json!(-1.0);
+        let corrupt = serde_json::to_vec(&malformed)?;
+        fs::write(&path, &corrupt)?;
+        assert!(Store::load_from(&path, 240.0).is_err());
+        assert_eq!(fs::read(&path)?, corrupt);
         Ok(())
     }
     #[test]
@@ -306,6 +412,7 @@ mod tests {
         let store = Store::load_from(&path, 240.0)?;
         assert_eq!(fs::read(&path)?, original);
         assert_eq!(store.version, VERSION);
+        assert_eq!(store.current().terminal_height, None);
         assert_eq!(store.active, id);
         assert_eq!(
             store
@@ -350,6 +457,7 @@ mod tests {
         let store = Store::load_from(&path, 240.0)?;
         assert_eq!(fs::read(&path)?, original);
         assert_eq!(store.version, VERSION);
+        assert_eq!(store.current().terminal_height, None);
         assert_eq!(
             store.current().layout.pane(1),
             Some((

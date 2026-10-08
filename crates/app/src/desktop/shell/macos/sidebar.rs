@@ -1,22 +1,24 @@
-//! AppKit owns sidebar typography, selection, materials, and scrolling.
+//! Native sidebar navigation on the dashboard’s opaque surface.
 use super::Command;
 use crate::app::Crabdash;
-use crate::features::machines::logos;
+use crate::features::machines::{logos, sidebar::palette};
 use machines::machine::{Machine, MachineKind};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained, runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSControlTextEditingDelegate, NSEvent,
-    NSImage, NSImageScaling, NSImageView, NSLayoutConstraint, NSMenu, NSMenuItem, NSScrollView,
+    NSAppearanceCustomization, NSAutoresizingMaskOptions, NSBackgroundStyle, NSBezelStyle,
+    NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSColorSpace,
+    NSControlTextEditingDelegate, NSEvent, NSFont, NSFontWeightMedium, NSImage, NSImageScaling,
+    NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem, NSScrollView,
     NSTableCellView, NSTableColumn, NSTableView, NSTableViewColumnAutoresizingStyle,
     NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
     NSUserInterfaceItemIdentification, NSView, NSViewController,
 };
 use objc2_foundation::{
-    NSArray, NSData, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect,
-    NSSize, NSString,
+    NSArray, NSData, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol,
+    NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
 };
 use smol::channel::Sender;
 use std::cell::{Cell, RefCell};
@@ -25,7 +27,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 enum Artwork {
-    Svg(&'static [u8]),
+    Svg(&'static [u8], u32),
     Symbol(&'static str),
 }
 
@@ -33,6 +35,8 @@ enum Artwork {
 struct Row {
     uuid: Uuid,
     name: String,
+    metadata: String,
+    connected: bool,
     tooltip: String,
     remote: bool,
     artwork: Artwork,
@@ -40,8 +44,7 @@ struct Row {
 
 impl Row {
     fn from_machine(machine: &Machine) -> Self {
-        let name = machine.system_info.machine_name.trim();
-        let name = if name.is_empty() { &machine.id } else { name };
+        let name = machine.display_name();
         let endpoint = machine.remote.as_ref().map_or_else(
             || "This machine".to_owned(),
             |remote| format!("{}@{}", remote.user, remote.host),
@@ -60,13 +63,23 @@ impl Row {
         Self {
             uuid: machine.uuid,
             name: name.to_owned(),
+            metadata: format!(
+                "{} · {}",
+                logos::platform_label(machine),
+                if machine.remote.is_some() {
+                    "SSH"
+                } else {
+                    "Local"
+                }
+            ),
+            connected: machine.connected(),
             tooltip: format!(
                 "{name} · {status}\n{endpoint}\n{release}{}",
                 machine.system_info.os_version.trim()
             ),
             remote: machine.remote.is_some(),
-            artwork: logos::machine_svg_bytes(machine)
-                .map(Artwork::Svg)
+            artwork: logos::machine_svg_artwork(machine)
+                .map(|(bytes, color)| Artwork::Svg(bytes, color))
                 .unwrap_or_else(|| {
                     Artwork::Symbol(match machine.kind {
                         MachineKind::Windows => "pc",
@@ -76,6 +89,141 @@ impl Row {
         }
     }
 }
+
+struct CellLabels {
+    selected: Cell<bool>,
+    artwork_tint: Cell<Option<u32>>,
+    metadata: Retained<NSTextField>,
+    status: Retained<NSImageView>,
+}
+
+define_class!(
+    // SAFETY: NSTableCellView has no additional subclassing requirements;
+    // AppKit owns the native row selection and supplies backgroundStyle changes.
+    #[unsafe(super = NSTableCellView)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = CellLabels]
+    struct MachineCell;
+    unsafe impl NSObjectProtocol for MachineCell {}
+    impl MachineCell {
+        #[unsafe(method(setBackgroundStyle:))]
+        fn background_style(&self, style: NSBackgroundStyle) {
+            // SAFETY: Forward AppKit's style before adapting selected foregrounds.
+            unsafe { let _: () = msg_send![super(self), setBackgroundStyle: style]; }
+            self.refresh_colors();
+        }
+    }
+);
+
+impl MachineCell {
+    fn refresh_colors(&self) {
+        let selected =
+            self.ivars().selected.get() || self.backgroundStyle() == NSBackgroundStyle::Emphasized;
+        let primary = if selected {
+            selection_text_color(
+                self,
+                self.backgroundStyle() == NSBackgroundStyle::Emphasized,
+            )
+        } else {
+            NSColor::labelColor()
+        };
+        // SAFETY: machine_cell installs the primary field and image view.
+        if let Some(text) = unsafe { self.textField() } {
+            text.setTextColor(Some(&primary));
+        }
+        let metadata = if selected {
+            primary.clone()
+        } else {
+            NSColor::secondaryLabelColor()
+        };
+        self.ivars().metadata.setTextColor(Some(&metadata));
+        if let Some(image) = unsafe { self.imageView() } {
+            let tint = if selected {
+                primary
+            } else {
+                self.ivars()
+                    .artwork_tint
+                    .get()
+                    .map_or_else(NSColor::labelColor, native_color)
+            };
+            image.setContentTintColor(Some(&tint));
+        }
+    }
+}
+
+fn native_color(rgb: u32) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(
+        f64::from((rgb >> 16) & 255) / 255.0,
+        f64::from((rgb >> 8) & 255) / 255.0,
+        f64::from(rgb & 255) / 255.0,
+        1.0,
+    )
+}
+
+fn selection_text_color(view: &NSView, emphasized: bool) -> Retained<NSColor> {
+    let result = RefCell::new(if emphasized {
+        NSColor::selectedControlTextColor()
+    } else {
+        NSColor::labelColor()
+    });
+    let resolve = block2::StackBlock::new(|| {
+        let background = if emphasized {
+            NSColor::selectedContentBackgroundColor()
+        } else {
+            NSColor::unemphasizedSelectedContentBackgroundColor()
+        };
+        let Some(background) = background.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+        else {
+            return;
+        };
+        let components = [
+            background.redComponent(),
+            background.greenComponent(),
+            background.blueComponent(),
+        ];
+        let alpha = background.alphaComponent();
+        if !alpha.is_finite() || !components.iter().all(|component| component.is_finite()) {
+            return;
+        }
+        let surface = crate::components::style::CONTENT;
+        let surface =
+            [surface >> 16, surface >> 8, surface].map(|channel| f64::from(channel & 255) / 255.0);
+        let alpha = alpha.clamp(0.0, 1.0);
+        let components = std::array::from_fn(|channel| {
+            components[channel].clamp(0.0, 1.0) * alpha + surface[channel] * (1.0 - alpha)
+        });
+        *result.borrow_mut() = native_color(palette::selection_text(components));
+    });
+    view.effectiveAppearance()
+        .performAsCurrentDrawingAppearance(&resolve);
+    result.into_inner()
+}
+
+define_class!(
+    // SAFETY: This ordinary NSView paints its full bounds with an opaque colour.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct SidebarSurface;
+    unsafe impl NSObjectProtocol for SidebarSurface {}
+    impl SidebarSurface {
+        #[unsafe(method(isOpaque))]
+        fn is_opaque(&self) -> bool { true }
+
+        #[unsafe(method(drawRect:))]
+        fn draw_surface(&self, _: NSRect) {
+            native_color(crate::components::style::CONTENT).setFill();
+            NSBezierPath::fillRect(self.bounds());
+            // The safe area starts below the toolbar. Keep its divider inside
+            // this surface, with no outline along the toolbar's left edge.
+            let content = self.safeAreaLayoutGuide().frame();
+            native_color(crate::components::style::BORDER).setFill();
+            NSBezierPath::fillRect(NSRect::new(
+                NSPoint::new(self.bounds().origin.x, content.origin.y + content.size.height - 1.0),
+                NSSize::new(self.bounds().size.width, 1.0),
+            ));
+        }
+    }
+);
 
 struct TableState {
     commands: Sender<Command>,
@@ -111,28 +259,49 @@ define_class!(
             !self.ivars().blocked.get() && self.row(row).is_some()
         }
 
+        #[unsafe(method(tableView:heightOfRow:))]
+        fn row_height(&self, _: &NSTableView, index: NSInteger) -> f64 {
+            if index == 0 { 36.0 } else { 60.0 }
+        }
+
         #[unsafe(method_id(tableView:viewForTableColumn:row:))]
         fn row_view(&self, table: &NSTableView, _: Option<&NSTableColumn>, index: NSInteger) -> Option<Retained<NSView>> {
             (|| {
-            let row = self.row(index);
-            if index != 0 && row.is_none() { return None; }
-            let cell = table_cell(table, index == 0, self.mtm());
-            // SAFETY: table_cell always installs this cell's text field.
-            if let Some(text) = unsafe { cell.textField() } {
-                text.setStringValue(&NSString::from_str(row.as_ref().map_or("Machines", |row| row.name.as_str())));
-            }
-            cell.setToolTip(row.as_ref().map(|row| NSString::from_str(&row.tooltip)).as_deref());
-            // SAFETY: table_cell installs an image view for machine cells only.
-            if let Some(image_view) = unsafe { cell.imageView() } {
-                let image = row.as_ref().and_then(|row| self.image(row.artwork));
-                image_view.setImage(image.as_deref());
-            }
-            Some(cell.into_super())
+                if index == 0 {
+                    let cell = group_cell(table, self.mtm());
+                    // SAFETY: group_cell retains its primary label as a subview.
+                    if let Some(text) = unsafe { cell.textField() } {
+                        text.setStringValue(&NSString::from_str(&format!("Machines · {}", self.ivars().rows.borrow().len())));
+                    }
+                    return Some(cell.into_super());
+                }
+                let row = self.row(index)?;
+                let cell = machine_cell(table, self.mtm());
+                // SAFETY: machine_cell installs and retains these standard cell fields.
+                if let Some(text) = unsafe { cell.textField() } {
+                    text.setStringValue(&NSString::from_str(&row.name));
+                }
+                cell.ivars().metadata.setStringValue(&NSString::from_str(&row.metadata));
+                cell.setToolTip(Some(&NSString::from_str(&row.tooltip)));
+                if let Some(image_view) = unsafe { cell.imageView() } {
+                    image_view.setImage(self.image(row.artwork).as_deref());
+                }
+                cell.ivars().artwork_tint.set(match row.artwork {
+                    Artwork::Svg(_, color) => Some(color),
+                    Artwork::Symbol(_) => None,
+                });
+                cell.ivars().selected.set(table.isRowSelected(index));
+                let status = if row.connected { NSColor::systemGreenColor() } else { NSColor::secondaryLabelColor() };
+                cell.ivars().status.setContentTintColor(Some(&status));
+                cell.ivars().status.setToolTip(Some(&NSString::from_str(if row.connected { "Connected" } else { "Disconnected" })));
+                cell.refresh_colors();
+                Some(cell.into_super().into_super())
             })()
         }
 
         #[unsafe(method(tableViewSelectionDidChange:))]
         fn selection_changed(&self, _: &NSNotification) {
+            self.refresh_cells();
             if self.ivars().synchronizing.get() || self.ivars().blocked.get() { return; }
             if let Some(row) = self.row(self.selectedRow()) {
                 let _ = self.ivars().commands.try_send(Command::SelectMachine(row.uuid));
@@ -149,7 +318,7 @@ define_class!(
             let row = self.row(self.rowAtPoint(point))?;
             self.ivars().context_uuid.set(Some(row.uuid));
             let menu = self.menu()?;
-            if let Some(delete) = menu.itemAtIndex(1) { delete.setEnabled(row.remote); }
+            if let Some(delete) = menu.itemAtIndex(2) { delete.setEnabled(row.remote); }
             Some(menu)
             })()
         }
@@ -171,6 +340,12 @@ define_class!(
                 let _ = self.ivars().commands.try_send(Command::DeleteMachine(row.uuid));
             }
         }
+        #[unsafe(method(renameMachine:))]
+        fn rename_machine(&self, _: Option<&NSObject>) {
+            if let Some(row) = self.context_row() {
+                let _ = self.ivars().commands.try_send(Command::RenameMachine(row.uuid));
+            }
+        }
     }
 );
 
@@ -186,6 +361,19 @@ impl SidebarTable {
         });
         // SAFETY: NSTableView's designated initializer initializes our subclass.
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+
+    fn refresh_cells(&self) {
+        let count = self.ivars().rows.borrow().len();
+        for index in 1..=count {
+            let row = index as NSInteger;
+            if let Some(view) = self.viewAtColumn_row_makeIfNecessary(0, row, false)
+                && let Ok(cell) = view.downcast::<MachineCell>()
+            {
+                cell.ivars().selected.set(self.isRowSelected(row));
+                cell.refresh_colors();
+            }
+        }
     }
 
     fn row(&self, index: NSInteger) -> Option<Row> {
@@ -213,7 +401,7 @@ impl SidebarTable {
             return image.clone();
         }
         let image = match artwork {
-            Artwork::Svg(bytes) => template_svg(bytes),
+            Artwork::Svg(bytes, _) => template_svg(bytes),
             Artwork::Symbol(symbol) => {
                 let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                     &NSString::from_str(symbol),
@@ -244,13 +432,22 @@ pub(super) struct Sidebar {
 impl Sidebar {
     pub(super) fn new(commands: Sender<Command>, mtm: MainThreadMarker) -> Self {
         let controller = NSViewController::new(mtm);
-        let view = NSView::new(mtm);
+        let allocated = SidebarSurface::alloc(mtm).set_ivars(());
+        // SAFETY: NSView's designated initializer initializes the opaque container.
+        let view: Retained<SidebarSurface> =
+            unsafe { msg_send![super(allocated), initWithFrame: NSRect::ZERO] };
+        view.setWantsLayer(true);
+        view.setClipsToBounds(true);
         controller.setView(&view);
 
         let table = SidebarTable::new(commands, mtm);
         table.setStyle(NSTableViewStyle::SourceList);
+        // Set after SourceList: AppKit then uses its normal native selection
+        // highlight, rather than the source-list material and blurred highlight.
+        table.setBackgroundColor(&native_color(crate::components::style::CONTENT));
         table.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         table.setHeaderView(None);
+        table.setIntercellSpacing(NSSize::new(0.0, 6.0));
         table.setAllowsMultipleSelection(false);
         table.setAllowsColumnSelection(false);
         table.setAllowsColumnReordering(false);
@@ -272,6 +469,7 @@ impl Sidebar {
         menu.setAutoenablesItems(false);
         for (title, action) in [
             ("Refresh", sel!(refreshMachine:)),
+            ("Rename…", sel!(renameMachine:)),
             ("Delete", sel!(deleteMachine:)),
         ] {
             // SAFETY: These actions are implemented above; the table outlives
@@ -294,7 +492,8 @@ impl Sidebar {
         }
 
         let scroll = NSScrollView::new(mtm);
-        scroll.setDrawsBackground(false);
+        scroll.setDrawsBackground(true);
+        scroll.setBackgroundColor(&native_color(crate::components::style::CONTENT));
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);
         scroll.setDocumentView(Some(&table));
@@ -302,8 +501,28 @@ impl Sidebar {
         view.addSubview(&scroll);
 
         let add = NSButton::new(mtm);
-        add.setTitle(&NSString::from_str("Add Machine…"));
-        add.setBezelStyle(NSBezelStyle::Push);
+        add.setTitle(&NSString::from_str("Add machine"));
+        add.setImage(
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str("plus"),
+                None,
+            )
+            .as_deref(),
+        );
+        add.setImagePosition(NSCellImagePosition::ImageLeft);
+        add.setToolTip(Some(&NSString::from_str("Add machine · ⌘N")));
+        let glass = NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(
+            NSOperatingSystemVersion {
+                majorVersion: 26,
+                minorVersion: 0,
+                patchVersion: 0,
+            },
+        );
+        add.setBezelStyle(if glass {
+            NSBezelStyle::Glass
+        } else {
+            NSBezelStyle::Push
+        });
         add.setTranslatesAutoresizingMaskIntoConstraints(false);
         // SAFETY: The retained table implements addMachine: and outlives the button.
         unsafe {
@@ -315,22 +534,23 @@ impl Sidebar {
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
             scroll
                 .leadingAnchor()
-                .constraintEqualToAnchor(&safe_area.leadingAnchor()),
+                .constraintEqualToAnchor_constant(&safe_area.leadingAnchor(), 8.0),
             scroll
                 .trailingAnchor()
-                .constraintEqualToAnchor(&safe_area.trailingAnchor()),
+                .constraintEqualToAnchor_constant(&safe_area.trailingAnchor(), -8.0),
             scroll
                 .topAnchor()
-                .constraintEqualToAnchor(&safe_area.topAnchor()),
+                .constraintEqualToAnchor_constant(&safe_area.topAnchor(), 1.0),
             scroll
                 .bottomAnchor()
-                .constraintEqualToAnchor_constant(&add.topAnchor(), -8.0),
+                .constraintEqualToAnchor_constant(&add.topAnchor(), -10.0),
             add.leadingAnchor()
-                .constraintEqualToAnchor_constant(&safe_area.leadingAnchor(), 12.0),
+                .constraintEqualToAnchor_constant(&safe_area.leadingAnchor(), 10.0),
             add.trailingAnchor()
-                .constraintEqualToAnchor_constant(&safe_area.trailingAnchor(), -12.0),
+                .constraintEqualToAnchor_constant(&safe_area.trailingAnchor(), -10.0),
             add.bottomAnchor()
-                .constraintEqualToAnchor_constant(&safe_area.bottomAnchor(), -12.0),
+                .constraintEqualToAnchor_constant(&safe_area.bottomAnchor(), -10.0),
+            add.heightAnchor().constraintEqualToConstant(36.0),
         ]));
         Self {
             controller,
@@ -384,84 +604,171 @@ impl Sidebar {
                 false,
             );
         }
+        // Accent and focus changes can leave backgroundStyle unchanged. Recolour
+        // existing visible cells without recreating rows or moving the selection.
+        self.table.refresh_cells();
         self.table.ivars().synchronizing.set(false);
     }
 }
 
-fn table_cell(
-    table: &NSTableView,
-    group: bool,
-    mtm: MainThreadMarker,
-) -> Retained<NSTableCellView> {
-    let identifier = NSString::from_str(if group { "group" } else { "machine" });
-    // SAFETY: These identifiers are assigned only to NSTableCellView instances
-    // created here; no nib or other cell class is registered with this table.
+fn label(mtm: MainThreadMarker) -> Retained<NSTextField> {
+    let text = NSTextField::labelWithString(&NSString::new(), mtm);
+    text.setTranslatesAutoresizingMaskIntoConstraints(false);
+    text.setMaximumNumberOfLines(1);
+    if let Some(cell) = text.cell() {
+        cell.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    }
+    text
+}
+
+fn group_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
+    let identifier = NSString::from_str("group");
+    // SAFETY: Only this factory assigns this identifier to NSTableCellView.
     if let Some(view) = unsafe { table.makeViewWithIdentifier_owner(&identifier, None) } {
         return unsafe { Retained::cast_unchecked(view) };
     }
     let cell = NSTableCellView::new(mtm);
     cell.setIdentifier(Some(&identifier));
-    let text = NSTextField::labelWithString(&NSString::new(), mtm);
-    text.setTranslatesAutoresizingMaskIntoConstraints(false);
+    let text = label(mtm);
+    text.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+    text.setTextColor(Some(&NSColor::secondaryLabelColor()));
     cell.addSubview(&text);
-    // SAFETY: The cell retains the text field as a subview.
+    // SAFETY: The native label is retained by the cell's subview hierarchy.
     unsafe {
         cell.setTextField(Some(&text));
     }
-    let mut constraints = vec![
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
         text.centerYAnchor()
             .constraintEqualToAnchor(&cell.centerYAnchor()),
+        text.leadingAnchor()
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 6.0),
         text.trailingAnchor()
-            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
-    ];
-    if group {
-        constraints.push(
-            text.leadingAnchor()
-                .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 4.0),
-        );
-    } else {
-        let image = NSImageView::new(mtm);
-        image.setTranslatesAutoresizingMaskIntoConstraints(false);
-        image.setImageScaling(NSImageScaling::ScaleProportionallyDown);
-        cell.addSubview(&image);
-        // SAFETY: The cell retains the image view as a subview.
-        unsafe {
-            cell.setImageView(Some(&image));
-        }
-        constraints.extend([
-            image
-                .leadingAnchor()
-                .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 4.0),
-            image
-                .centerYAnchor()
-                .constraintEqualToAnchor(&cell.centerYAnchor()),
-            image.widthAnchor().constraintEqualToConstant(16.0),
-            image.heightAnchor().constraintEqualToConstant(16.0),
-            text.leadingAnchor()
-                .constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0),
-        ]);
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -6.0),
+    ]));
+    cell
+}
+
+fn machine_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<MachineCell> {
+    let identifier = NSString::from_str("machine");
+    // SAFETY: Only this factory assigns this identifier to MachineCell instances.
+    if let Some(view) = unsafe { table.makeViewWithIdentifier_owner(&identifier, None) } {
+        return unsafe { Retained::cast_unchecked(view) };
     }
-    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
+    let metadata = label(mtm);
+    metadata.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+    metadata.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    let status = NSImageView::new(mtm);
+    status.setTranslatesAutoresizingMaskIntoConstraints(false);
+    status.setImage(
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("circle.fill"),
+            None,
+        )
+        .as_deref(),
+    );
+    let allocated = MachineCell::alloc(mtm).set_ivars(CellLabels {
+        metadata,
+        status,
+        selected: Cell::new(false),
+        artwork_tint: Cell::new(None),
+    });
+    // SAFETY: NSTableCellView's designated initializer initializes this subclass.
+    let cell: Retained<MachineCell> =
+        unsafe { msg_send![super(allocated), initWithFrame: NSRect::ZERO] };
+    cell.setIdentifier(Some(&identifier));
+    let text = label(mtm);
+    // SAFETY: AppKit exports the immutable medium system font weight.
+    text.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe {
+        NSFontWeightMedium
+    })));
+    text.setTextColor(Some(&NSColor::labelColor()));
+    cell.addSubview(&text);
+    cell.addSubview(&cell.ivars().metadata);
+    let region = NSView::new(mtm);
+    region.setTranslatesAutoresizingMaskIntoConstraints(false);
+    cell.addSubview(&region);
+    let image = NSImageView::new(mtm);
+    image.setTranslatesAutoresizingMaskIntoConstraints(false);
+    image.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+    region.addSubview(&image);
+    region.addSubview(&cell.ivars().status);
+    // SAFETY: Both standard cell fields are retained by their subview hierarchy.
+    unsafe {
+        cell.setTextField(Some(&text));
+        cell.setImageView(Some(&image));
+    }
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        region
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 10.0),
+        region
+            .centerYAnchor()
+            .constraintEqualToAnchor(&cell.centerYAnchor()),
+        region.widthAnchor().constraintEqualToConstant(32.0),
+        region.heightAnchor().constraintEqualToConstant(32.0),
+        image
+            .centerXAnchor()
+            .constraintEqualToAnchor(&region.centerXAnchor()),
+        image
+            .centerYAnchor()
+            .constraintEqualToAnchor(&region.centerYAnchor()),
+        image.widthAnchor().constraintEqualToConstant(20.0),
+        image.heightAnchor().constraintEqualToConstant(20.0),
+        cell.ivars()
+            .status
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&region.trailingAnchor(), 2.0),
+        cell.ivars()
+            .status
+            .bottomAnchor()
+            .constraintEqualToAnchor_constant(&region.bottomAnchor(), 2.0),
+        cell.ivars()
+            .status
+            .widthAnchor()
+            .constraintEqualToConstant(9.0),
+        cell.ivars()
+            .status
+            .heightAnchor()
+            .constraintEqualToConstant(9.0),
+        text.leadingAnchor()
+            .constraintEqualToAnchor_constant(&region.trailingAnchor(), 10.0),
+        text.trailingAnchor()
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -10.0),
+        text.centerYAnchor()
+            .constraintEqualToAnchor_constant(&cell.centerYAnchor(), -7.0),
+        cell.ivars()
+            .metadata
+            .leadingAnchor()
+            .constraintEqualToAnchor(&text.leadingAnchor()),
+        cell.ivars()
+            .metadata
+            .trailingAnchor()
+            .constraintEqualToAnchor(&text.trailingAnchor()),
+        cell.ivars()
+            .metadata
+            .topAnchor()
+            .constraintEqualToAnchor_constant(&text.bottomAnchor(), 2.0),
+    ]));
     cell
 }
 
 fn template_svg(bytes: &[u8]) -> Option<Retained<NSImage>> {
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(32, 32)?;
-    let scale = (32.0 / size.width()).min(32.0 / size.height());
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 64)?;
+    let scale = (64.0 / size.width()).min(64.0 / size.height());
     let transform = resvg::tiny_skia::Transform::from_row(
         scale,
         0.0,
         0.0,
         scale,
-        (32.0 - size.width() * scale) / 2.0,
-        (32.0 - size.height() * scale) / 2.0,
+        (64.0 - size.width() * scale) / 2.0,
+        (64.0 - size.height() * scale) / 2.0,
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let png = pixmap.encode_png().ok()?;
     let image = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&png))?;
-    image.setSize(NSSize::new(16.0, 16.0));
+    image.setSize(NSSize::new(32.0, 32.0));
     image.setTemplate(true);
     Some(image)
 }

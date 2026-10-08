@@ -4,33 +4,7 @@ use crate::{app::Crabdash, components::style, features::workspaces::model::Drop}
 use gpui::{prelude::*, *};
 use std::{cell::Cell, rc::Rc};
 
-fn target(bounds: Bounds<Pixels>, position: Point<Pixels>, center: usize) -> Option<Drop> {
-    if !bounds.contains(&position) {
-        return None;
-    }
-    let x = f32::from(position.x - bounds.origin.x);
-    let y = f32::from(position.y - bounds.origin.y);
-    let width = f32::from(bounds.size.width);
-    let height = f32::from(bounds.size.height);
-    let band = width.min(height) * 0.2;
-    let edges = [
-        (y, Drop::Top),
-        (width - x, Drop::Right),
-        (height - y, Drop::Bottom),
-        (x, Drop::Left),
-    ];
-    let mut nearest = edges[0];
-    for edge in edges.iter().skip(1) {
-        if edge.0 < nearest.0 {
-            nearest = *edge;
-        }
-    }
-    Some(if nearest.0 < band {
-        nearest.1
-    } else {
-        Drop::Tab(center)
-    })
-}
+use crate::layout::geometry::target;
 
 pub(super) fn body(
     app: &Crabdash,

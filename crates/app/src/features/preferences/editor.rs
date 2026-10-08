@@ -15,7 +15,7 @@ pub(crate) enum Section {
     System,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Field {
     Refresh,
     SystemRefresh,
@@ -177,6 +177,7 @@ pub(crate) struct Editor {
     pub mutation_error: Option<String>,
     pub scroll: ScrollHandle,
     pub picker: Option<Field>,
+    choices: std::cell::RefCell<std::collections::HashMap<Field, Vec<String>>>,
 }
 impl Editor {
     pub fn new(settings: &Preferences, cx: &mut Context<Crabdash>) -> Self {
@@ -190,6 +191,7 @@ impl Editor {
             mutation_error: None,
             scroll: ScrollHandle::new(),
             picker: None,
+            choices: Default::default(),
         }
     }
     fn input(&self, field: Field) -> Entity<TextField> {
@@ -250,7 +252,44 @@ impl Editor {
     }
 }
 
-fn field_row(editor: &Editor, field: Field, cx: &mut Context<Crabdash>) -> Div {
+fn choice_values(editor: &Editor, field: Field, cx: &mut Context<Crabdash>) -> Vec<String> {
+    if let Some(values) = editor.choices.borrow().get(&field) {
+        return values.clone();
+    }
+    let mut choices = if matches!(field, Field::Terminfo) {
+        vec![
+            "xterm-256color".to_owned(),
+            "xterm".to_owned(),
+            "vt100".to_owned(),
+            "xterm-ghostty".to_owned(),
+        ]
+    } else {
+        let mut names = cx.text_system().all_font_names();
+        names.push("JetBrainsMono Nerd Font".into());
+        names.sort();
+        names.dedup();
+        if matches!(field, Field::TerminalFont) {
+            names.retain(|name| {
+                let id = cx.text_system().resolve_font(&font(name.clone()));
+                match (
+                    cx.text_system().advance(id, px(13.0), 'i'),
+                    cx.text_system().advance(id, px(13.0), 'W'),
+                ) {
+                    (Ok(a), Ok(b)) => (f32::from(a.width) - f32::from(b.width)).abs() < 0.1,
+                    _ => false,
+                }
+            });
+        }
+        names
+    };
+    if matches!(field, Field::InterfaceFont) {
+        choices.insert(0, String::new());
+    }
+    editor.choices.borrow_mut().insert(field, choices.clone());
+    choices
+}
+
+fn field_row(_app: &Crabdash, editor: &Editor, field: Field, cx: &mut Context<Crabdash>) -> Div {
     let selectable = matches!(
         field,
         Field::TerminalFont | Field::InterfaceFont | Field::Terminfo
@@ -263,22 +302,40 @@ fn field_row(editor: &Editor, field: Field, cx: &mut Context<Crabdash>) -> Div {
         .gap(px(5.0))
         .child(div().flex_1().min_w_0().child(editor.input(field)));
     if selectable {
-        control = control.child(
-            button(
-                SharedString::from(format!("choose-{field:?}")),
-                Some(lucide_icons::Icon::ChevronDown),
-                None::<&str>,
-                false,
+        let chooser = button(
+            SharedString::from(format!("choose-{field:?}")),
+            Some(lucide_icons::Icon::ChevronDown),
+            None::<&str>,
+            false,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.preference_editor.picker = if this.preference_editor.picker == Some(field) {
+                None
+            } else {
+                Some(field)
+            };
+            cx.notify();
+        }));
+        #[cfg(target_os = "macos")]
+        let chooser = if _app.preferences.liquid_glass {
+            crate::desktop::controls::enabled(
+                crate::desktop::controls::choices(
+                    chooser,
+                    editor.input(field),
+                    choice_values(editor, field, cx),
+                    match field {
+                        Field::TerminalFont => "Choose a terminal font",
+                        Field::InterfaceFont => "Choose an interface font",
+                        Field::Terminfo => "Choose a terminal type",
+                        _ => field.label(),
+                    },
+                ),
+                !editor.busy,
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.preference_editor.picker = if this.preference_editor.picker == Some(field) {
-                    None
-                } else {
-                    Some(field)
-                };
-                cx.notify();
-            })),
-        );
+        } else {
+            chooser
+        };
+        control = control.child(chooser);
     }
     let mut result = div()
         .flex()
@@ -286,35 +343,7 @@ fn field_row(editor: &Editor, field: Field, cx: &mut Context<Crabdash>) -> Div {
         .gap(px(8.0))
         .child(row(field.label(), field.hint()).child(control));
     if editor.picker == Some(field) {
-        let mut choices = if matches!(field, Field::Terminfo) {
-            vec![
-                "xterm-256color".to_owned(),
-                "xterm".to_owned(),
-                "vt100".to_owned(),
-                "xterm-ghostty".to_owned(),
-            ]
-        } else {
-            let mut names = cx.text_system().all_font_names();
-            names.push("JetBrainsMono Nerd Font".into());
-            names.sort();
-            names.dedup();
-            if matches!(field, Field::TerminalFont) {
-                names.retain(|name| {
-                    let id = cx.text_system().resolve_font(&font(name.clone()));
-                    match (
-                        cx.text_system().advance(id, px(13.0), 'i'),
-                        cx.text_system().advance(id, px(13.0), 'W'),
-                    ) {
-                        (Ok(a), Ok(b)) => (f32::from(a.width) - f32::from(b.width)).abs() < 0.1,
-                        _ => false,
-                    }
-                });
-            }
-            names
-        };
-        if matches!(field, Field::InterfaceFont) {
-            choices.insert(0, String::new());
-        }
+        let choices = choice_values(editor, field, cx);
         result = result.child(
             div()
                 .id(SharedString::from(format!("choices-{field:?}")))
@@ -378,32 +407,37 @@ fn toggle_row(
     toggle: impl Fn(&mut Crabdash, &mut Context<Crabdash>) + 'static,
     cx: &mut Context<Crabdash>,
 ) -> Div {
-    row(label, hint).child(
-        div()
-            .id(id)
-            .w(px(38.0))
-            .h(px(22.0))
-            .flex_none()
-            .px(px(3.0))
-            .rounded_full()
-            .flex()
-            .items_center()
-            .bg(rgb(if enabled {
-                style::FOCUS_BORDER
-            } else {
-                style::CONTROL_SELECTED_BG
-            }))
-            .when(enabled, |this| this.justify_end())
-            .when(busy, |this| this.opacity(0.5))
-            .cursor_pointer()
-            .child(div().size(px(16.0)).rounded_full().bg(white()))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !busy {
-                    toggle(this, cx);
-                    cx.notify();
-                }
-            })),
-    )
+    row(label, hint).child(crate::desktop::controls::enabled(
+        crate::desktop::controls::toggle(
+            div()
+                .id(id)
+                .w(px(38.0))
+                .h(px(22.0))
+                .flex_none()
+                .px(px(3.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .bg(rgb(if enabled {
+                    style::FOCUS_BORDER
+                } else {
+                    style::CONTROL_SELECTED_BG
+                }))
+                .when(enabled, |this| this.justify_end())
+                .when(busy, |this| this.opacity(0.5))
+                .cursor_pointer()
+                .child(div().size(px(16.0)).rounded_full().bg(white()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !busy {
+                        toggle(this, cx);
+                        cx.notify();
+                    }
+                })),
+            label,
+            enabled,
+        ),
+        !busy,
+    ))
 }
 
 pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> impl IntoElement {
@@ -443,11 +477,11 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                     ));
             }
             body = body.child(toggle_row("auto-refresh-toggle", "Automatic refresh", "Update machine status and tables", editor.draft.auto_refresh, busy, |this, _| this.preference_editor.draft.auto_refresh ^= true, cx))
-                .child(field_row(editor, Field::Refresh, cx)).child(field_row(editor, Field::LogLines, cx))
+                .child(field_row(app, editor, Field::Refresh, cx)).child(field_row(app, editor, Field::LogLines, cx))
                 .child(div().text_size(gpui::rems(style::META / 16.0)).text_color(rgb(0x929292)).child("Errors stay visible until dismissed. Refresh manually with the refresh button or shortcut."));
         }
         Section::System => {
-            body=body.child(field_row(editor,Field::SystemRefresh,cx))
+            body=body.child(field_row(app, editor,Field::SystemRefresh,cx))
                 .child(div().text_size(gpui::rems(style::META / 16.0)).text_color(rgb(0x929292))
                     .child("Resources update while System is visible, independently of automatic table refresh. Longer intervals reduce sampling and rendering work."));
         }
@@ -460,19 +494,40 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                 Field::Scrollback,
                 Field::TerminalRows,
             ] {
-                body = body.child(field_row(editor, field, cx));
+                body = body.child(field_row(app, editor, field, cx));
             }
             body = body.child(toggle_row("true-color-toggle", "Advertise true colour", "Set COLORTERM=truecolor for new sessions when the host permits", editor.draft.true_color, busy, |this, _| this.preference_editor.draft.true_color ^= true, cx))
                 .child(div().text_size(gpui::rems(style::META / 16.0)).text_color(rgb(0x929292)).child("Fonts apply to terminal and logs immediately. Terminal type, colour advertisement, and scrollback apply to new sessions. Use xterm for older hosts; xterm-ghostty requires its terminfo on the host."));
         }
         Section::Interface => {
+            #[cfg(target_os = "macos")]
+            {
+                body = body.child(toggle_row(
+                    "liquid-glass-toggle",
+                    "Liquid Glass",
+                    "Use the native macOS sidebar and toolbar; off uses the shared interface",
+                    editor.draft.liquid_glass,
+                    busy,
+                    |this, _| this.preference_editor.draft.liquid_glass ^= true,
+                    cx,
+                ));
+            }
+            body = body.child(toggle_row(
+                "system-accent-toggle",
+                "Use system accent",
+                "Colour the focused tab, resource graphs and the shared sidebar",
+                editor.draft.use_system_accent,
+                busy,
+                |this, _| this.preference_editor.draft.use_system_accent ^= true,
+                cx,
+            ));
             for field in [
                 Field::InterfaceFont,
                 Field::InterfaceSize,
                 Field::SidebarWidth,
                 Field::TabWidth,
             ] {
-                body = body.child(field_row(editor, field, cx));
+                body = body.child(field_row(app, editor, field, cx));
             }
             body = body.child(toggle_row(
                 "always-show-shortcuts-toggle",
@@ -501,7 +556,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
         .justify_center()
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(
+        .child(crate::desktop::controls::modal(
             div()
                 .w(px(680.0))
                 .max_w_full()
@@ -532,10 +587,13 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                         ]
                         .into_iter()
                         .map(|(section, label)| {
-                            button(
-                                SharedString::from(format!("preferences-{label}")),
-                                None::<lucide_icons::Icon>,
-                                Some(label),
+                            crate::desktop::controls::selected(
+                                button(
+                                    SharedString::from(format!("preferences-{label}")),
+                                    None::<lucide_icons::Icon>,
+                                    Some(label),
+                                    editor.section == section,
+                                ),
                                 editor.section == section,
                             )
                             .on_click(cx.listener(
@@ -591,41 +649,38 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                 },
                             )),
                         )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(8.0))
-                                .child(
-                                    button(
-                                        "cancel-preferences",
-                                        None::<lucide_icons::Icon>,
-                                        Some("Cancel"),
-                                        false,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            if !this.preference_editor.busy {
-                                                this.preferences_open = false;
-                                                window.focus(&this.focus_handle);
-                                                cx.notify();
-                                            }
-                                        },
-                                    )),
+                        .child(crate::desktop::controls::action_group(
+                            div().flex().gap(px(8.0)),
+                            vec![
+                                button(
+                                    "cancel-preferences",
+                                    None::<lucide_icons::Icon>,
+                                    Some("Cancel"),
+                                    false,
                                 )
-                                .child(
-                                    button(
-                                        "save-preferences",
-                                        None::<lucide_icons::Icon>,
-                                        Some(if busy { "Saving…" } else { "Apply" }),
-                                        true,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| this.apply_preferences(window, cx),
-                                    )),
-                                ),
-                        ),
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        if !this.preference_editor.busy {
+                                            this.preferences_open = false;
+                                            window.focus(&this.focus_handle);
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                                crate::desktop::controls::primary(button(
+                                    "save-preferences",
+                                    None::<lucide_icons::Icon>,
+                                    Some(if busy { "Saving…" } else { "Apply" }),
+                                    true,
+                                ))
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.apply_preferences(window, cx),
+                                )),
+                            ],
+                        )),
                 ),
-        )
+            0.6,
+        ))
 }
 
 /// Native registration has its own result. It must remain visible beside

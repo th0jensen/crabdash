@@ -1,16 +1,33 @@
 use crate::components::terminal_input::{TerminalInput, TerminalInputEvent};
 use crate::{app::Crabdash, features::terminal};
 use gpui::*;
-use machines::terminal::{TerminalEvent, TerminalSize};
+use machines::terminal::TerminalEvent;
 
 impl Crabdash {
-    pub(crate) fn active_quake_terminal(&self) -> Option<&terminal::QuakeTerminal> {
-        self.quake_terminals.get(&self.selected_machine().uuid)
+    /// A store reload that retains the selected UUID must not refocus a shell.
+    pub(crate) fn reconcile_selected_terminal(
+        &mut self,
+        previous: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_machine().uuid == previous {
+            return;
+        }
+        self.focus_selected_terminal(window, cx);
     }
 
-    fn active_quake_terminal_mut(&mut self) -> Option<&mut terminal::QuakeTerminal> {
-        let machine_uuid = self.selected_machine().uuid;
-        self.quake_terminals.get_mut(&machine_uuid)
+    pub(crate) fn focus_selected_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quake_terminal_open {
+            self.open_quake_terminal(window, cx);
+        } else {
+            window.focus(&self.focus_handle);
+        }
+    }
+    pub(crate) fn active_quake_terminal(&self) -> Option<&terminal::QuakeTerminal> {
+        self.quake_terminals
+            .get(&self.selected_machine().uuid)?
+            .active()
     }
 
     pub(crate) fn set_quake_terminal_open(
@@ -37,116 +54,251 @@ impl Crabdash {
         self.persist_workspace(cx);
     }
 
-    fn quake_terminal_size(&self, window: &Window, cx: &App) -> TerminalSize {
+    fn quake_geometry(&self, window: &Window, cx: &App) -> terminal::geometry::Geometry {
         let (cell_width, cell_height) = terminal::cell_metrics(&self.preferences, cx);
-        let available_width = (window.viewport_size().width - px(20.0)).max(px(80.0));
-        let columns = (available_width / px(cell_width))
-            .floor()
-            .clamp(20.0, u16::MAX as f32) as u16;
-        let rows = terminal::quake_rows_for_height(
-            self.quake_height,
-            cell_height,
-            f32::from(window.rem_size()) * crate::components::style::BAR / 16.0,
+        let (width, height) = terminal::panes::viewport(window);
+        let scale = f32::from(window.rem_size()) / 16.0;
+        let titlebar = if crate::desktop::shell::is_native(self) {
+            0.0
+        } else {
+            crate::components::style::TITLE_BAR * scale
+        };
+        let reserve = (terminal::geometry::DASHBOARD_RESERVE * scale).max(
+            titlebar
+                + crate::content::minimum_visible_height(&self.workspaces.layout().root, scale),
         );
-        TerminalSize {
-            columns,
-            rows,
-            pixel_width: columns.saturating_mul(cell_width.ceil() as u16),
-            pixel_height: rows.saturating_mul(cell_height as u16),
-        }
+        terminal::geometry::Geometry::new(
+            width,
+            height,
+            f32::from(window.rem_size()) * crate::components::style::BAR / 16.0,
+            cell_width,
+            cell_height,
+        )
+        .with_dashboard_reserve(reserve)
     }
 
-    /// Snap the quake panel height to whole terminal rows and apply it,
-    /// resizing the Ghostty terminal and PTY when the row count changed.
+    fn quake_pane_sizing(
+        &self,
+        width: f32,
+        height: f32,
+        window: &Window,
+        cx: &App,
+    ) -> terminal::sizing::Sizing {
+        let (cell_width, cell_height) = terminal::cell_metrics(&self.preferences, cx);
+        terminal::geometry::Geometry::new(
+            width,
+            height,
+            f32::from(window.rem_size()) * crate::components::style::BAR / 16.0,
+            cell_width,
+            cell_height,
+        )
+        .pane_sizing(height, window.scale_factor())
+    }
+
+    fn quake_pane_metrics(&self, window: &Window, cx: &App) -> terminal::panes::Metrics {
+        terminal::panes::Metrics::new(
+            f32::from(window.rem_size()) / 16.0,
+            terminal::cell_metrics(&self.preferences, cx).1,
+        )
+    }
+
+    fn clamp_quake_height(&self, requested: f32, window: &Window, cx: &App) -> f32 {
+        let metrics = self.quake_pane_metrics(window, cx);
+        let node = self
+            .quake_terminals
+            .get(&self.selected_machine().uuid)
+            .map(|drawer| &drawer.model.layout.root);
+        terminal::panes::clamp_height(self.quake_geometry(window, cx), requested, node, metrics)
+    }
+
+    pub(super) fn terminal_neighbor(
+        &self,
+        direction: terminal::panes::Direction,
+        window: &Window,
+        cx: &App,
+    ) -> Option<uuid::Uuid> {
+        let drawer = self.quake_terminals.get(&self.selected_machine().uuid)?;
+        let metrics = self.quake_pane_metrics(window, cx);
+        let height = self.clamp_quake_height(self.requested_quake_height(window, cx), window, cx);
+        let rects = terminal::panes::rectangles(
+            &drawer.model.layout.root,
+            terminal::panes::viewport(window).0,
+            (height - terminal::geometry::PANEL_BORDER).max(0.0),
+            metrics,
+        );
+        terminal::panes::neighbor(&rects, drawer.model.layout.focused, direction)
+    }
+
+    /// Retain smooth logical pixels; only the emulation grid uses whole cells.
     pub(crate) fn set_quake_height(
         &mut self,
         height: Pixels,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let (_, cell_height) = terminal::cell_metrics(&self.preferences, cx);
-        let header_height = f32::from(window.rem_size()) * crate::components::style::BAR / 16.0;
-        let snapped = terminal::quake_height_for_rows(
-            terminal::quake_rows_for_height(height, cell_height, header_height),
-            cell_height,
-            header_height,
-        );
-        if self.quake_height == snapped {
+        let height = px(self.clamp_quake_height(f32::from(height), window, cx));
+        if let Some(draft) = &mut self.quake_resize {
+            // Dragging chooses the visible height, not off-window overshoot.
+            draft.height = f32::from(height);
+        }
+        if self.quake_height == height {
             return;
         }
-        self.quake_height = snapped;
+        self.quake_height = height;
         self.resize_quake_terminal(window, cx);
         cx.notify();
     }
 
-    pub(crate) fn resize_quake_terminal(&mut self, window: &Window, cx: &App) {
+    pub(crate) fn resize_quake_terminal(&mut self, window: &Window, cx: &mut App) {
+        // Window and font changes can reduce available space without a drag.
+        self.quake_height =
+            px(self.clamp_quake_height(self.requested_quake_height(window, cx), window, cx));
         if !self.quake_terminal_open {
             return;
         }
-
-        let (cell_width, cell_height) = terminal::cell_metrics(&self.preferences, cx);
-        let size = self.quake_terminal_size(window, cx);
-        let Some(quake) = self
-            .active_quake_terminal_mut()
-            .filter(|quake| quake.size != size)
-        else {
+        let machine = self.selected_machine().uuid;
+        let Some(drawer) = self.quake_terminals.get(&machine) else {
             return;
         };
-
-        if let Err(error) = quake.terminal.resize(
-            size.columns,
-            size.rows,
-            cell_width.ceil() as u32,
-            cell_height as u32,
-        ) {
-            quake.status = terminal::QuakeTerminalStatus::Failed;
-            tracing::warn!(%error, "Failed to resize Ghostty terminal");
-            return;
+        let visible = terminal::panes::visible(
+            &drawer.model.layout.root,
+            terminal::panes::viewport(window).0,
+            (f32::from(self.quake_height) - terminal::geometry::PANEL_BORDER).max(0.0),
+            self.quake_pane_metrics(window, cx),
+        );
+        for (session, width, height) in visible {
+            let sizing = self.quake_pane_sizing(width, height, window, cx);
+            let Some(quake) = self
+                .quake_terminals
+                .get_mut(&machine)
+                .and_then(|drawer| drawer.sessions.get_mut(&session))
+            else {
+                continue;
+            };
+            let (resize_emulator, resize_pty) = sizing.changes(quake.emulator_size, quake.size);
+            if resize_emulator {
+                if let Err(error) = quake.terminal.resize(
+                    sizing.emulator.columns,
+                    sizing.emulator.rows,
+                    sizing.emulator.cell_width,
+                    sizing.emulator.cell_height,
+                ) {
+                    quake.status = terminal::QuakeTerminalStatus::Failed;
+                    quake
+                        .input
+                        .update(cx, |input, cx| input.set_connected(false, cx));
+                    tracing::warn!(%error, "Failed to resize Ghostty terminal");
+                    continue;
+                }
+                quake.emulator_size = sizing.emulator;
+                if let Some(controller) = &quake.controller {
+                    for response in quake.terminal.take_pty_writes() {
+                        if let Err(error) = controller.write(response) {
+                            quake.status = terminal::QuakeTerminalStatus::Failed;
+                            quake
+                                .input
+                                .update(cx, |input, cx| input.set_connected(false, cx));
+                            tracing::warn!(%error, "Failed to send Ghostty resize response");
+                        }
+                    }
+                }
+            }
+            if resize_pty {
+                if let Some(controller) = quake.controller.as_ref()
+                    && let Err(error) = controller.resize(sizing.pty)
+                {
+                    quake.status = terminal::QuakeTerminalStatus::Failed;
+                    quake
+                        .input
+                        .update(cx, |input, cx| input.set_connected(false, cx));
+                    tracing::warn!(%error, "Failed to resize terminal PTY");
+                    continue;
+                }
+                quake.size = sizing.pty;
+            }
         }
-        if let Some(controller) = quake.controller.as_ref()
-            && let Err(error) = controller.resize(size)
-        {
-            quake.status = terminal::QuakeTerminalStatus::Failed;
-            tracing::warn!(%error, "Failed to resize terminal PTY");
-            return;
-        }
-        quake.size = size;
     }
 
     pub(crate) fn open_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quake_terminal_open = true;
-        let machine = self.selected_machine().clone();
-        let machine_uuid = machine.uuid;
-
-        if let Some(quake) = self.quake_terminals.get(&machine_uuid)
-            && matches!(
-                quake.status,
-                terminal::QuakeTerminalStatus::Connected
-                    | terminal::QuakeTerminalStatus::Connecting
-            )
-        {
+        if let Some(quake) = self.active_quake_terminal() {
             window.focus(&quake.input.focus_handle(cx));
             self.resize_quake_terminal(window, cx);
             cx.notify();
             return;
         }
 
-        if let Some(previous) = self.quake_terminals.remove(&machine_uuid)
-            && let Some(controller) = previous.controller
-        {
-            controller.shutdown().ok();
-        }
+        self.new_quake_terminal(window, cx);
+    }
 
+    pub(crate) fn new_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_quake_terminal(None, window, cx);
+    }
+
+    pub(super) fn split_quake_terminal(
+        &mut self,
+        edge: crate::layout::Drop,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_quake_terminal(Some(edge), window, cx);
+    }
+
+    fn create_quake_terminal(
+        &mut self,
+        edge: Option<crate::layout::Drop>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let machine = self.selected_machine().clone();
+        let machine_uuid = machine.uuid;
+        let session_uuid = uuid::Uuid::new_v4();
+        let candidate = match self.quake_terminals.get(&machine_uuid) {
+            Some(drawer) => drawer.model.with_session(session_uuid, edge),
+            None if edge.is_none() => Some(terminal::model::Model::new(session_uuid)),
+            None => None,
+        };
+        let Some(candidate) = candidate else {
+            return;
+        };
+        let height = terminal::panes::clamp_height(
+            self.quake_geometry(window, cx),
+            self.requested_quake_height(window, cx),
+            Some(&candidate.layout.root),
+            self.quake_pane_metrics(window, cx),
+        );
         let endpoint = machine
             .remote
             .as_ref()
             .map(|remote| format!("{}@{}", remote.user, remote.host))
-            .unwrap_or_else(|| "Local shell".to_string());
-        let size = self.quake_terminal_size(window, cx);
+            .unwrap_or_else(|| {
+                let key = if cfg!(windows) { "USERNAME" } else { "USER" };
+                let user = std::env::var(key)
+                    .ok()
+                    .filter(|user| !user.trim().is_empty())
+                    .unwrap_or_else(|| "local".to_string());
+                format!("{user}@{}", machine.system_info.machine_name)
+            });
+        let width = terminal::panes::viewport(window).0;
+        let body_height = (height - terminal::geometry::PANEL_BORDER).max(0.0);
+        let Some((_, width, pane_height)) = terminal::panes::visible(
+            &candidate.layout.root,
+            width,
+            body_height,
+            self.quake_pane_metrics(window, cx),
+        )
+        .into_iter()
+        .find(|(id, _, _)| *id == session_uuid) else {
+            return;
+        };
+        let sizing = self.quake_pane_sizing(width, pane_height, window, cx);
+        let size = sizing.pty;
         let terminal = match terminal::TerminalState::new_interactive(
             size.columns,
             size.rows,
             self.preferences.scrollback_lines,
+            sizing.emulator.cell_width,
+            sizing.emulator.cell_height,
         ) {
             Ok(terminal) => terminal,
             Err(error) => {
@@ -161,6 +313,7 @@ impl Crabdash {
             let Some(quake) = this
                 .quake_terminals
                 .get_mut(&machine_uuid)
+                .and_then(|drawer| drawer.sessions.get_mut(&session_uuid))
                 .filter(|quake| quake.input.entity_id() == input_id)
             else {
                 return;
@@ -168,6 +321,13 @@ impl Crabdash {
             let data = match event {
                 TerminalInputEvent::Input(bytes) => quake.terminal.prepare_input(bytes),
                 TerminalInputEvent::Paste(text) => quake.terminal.prepare_paste(text),
+                TerminalInputEvent::StartupOverflow => {
+                    let message = "Terminal startup input exceeded its limit and was discarded. Retype after connection.";
+                    quake.terminal.feed_string(format!("\r\n[crabdash] {message}\r\n"));
+                    this.set_status_error(message.to_owned());
+                    cx.notify();
+                    return;
+                }
                 TerminalInputEvent::Scroll(scroll) => {
                     quake.terminal.scroll(*scroll);
                     cx.notify();
@@ -192,20 +352,34 @@ impl Crabdash {
             }
             cx.notify();
         });
-        self.quake_terminals.insert(
-            machine_uuid,
-            terminal::QuakeTerminal {
-                machine_name: machine.system_info.machine_name.clone(),
-                endpoint,
-                terminal,
-                controller: None,
-                size,
-                status: terminal::QuakeTerminalStatus::Connecting,
-                input: input.clone(),
-                _input_events: input_events,
-            },
-        );
+        let session = terminal::QuakeTerminal {
+            endpoint,
+            custom_name: None,
+            rename: None,
+            terminal,
+            controller: None,
+            size,
+            emulator_size: sizing.emulator,
+            status: terminal::QuakeTerminalStatus::Connecting,
+            input: input.clone(),
+            _input_events: input_events,
+        };
+        if let Some(drawer) = self.quake_terminals.get_mut(&machine_uuid) {
+            drawer.model = candidate;
+            drawer.sessions.insert(session_uuid, session);
+        } else {
+            self.quake_terminals.insert(
+                machine_uuid,
+                terminal::Drawer {
+                    model: candidate,
+                    sessions: std::collections::HashMap::from([(session_uuid, session)]),
+                },
+            );
+        }
+        self.quake_terminal_open = true;
+        self.quake_height = px(height);
         window.focus(&input.focus_handle(cx));
+        self.resize_quake_terminal(window, cx);
         cx.notify();
 
         let options = self.preferences.terminal_options();
@@ -223,8 +397,9 @@ impl Crabdash {
                     Ok(session) => session,
                     Err(error) => {
                         this.update(&mut cx, move |this, cx| {
-                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) {
+                            if let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).and_then(|drawer| drawer.sessions.get_mut(&session_uuid)).filter(|quake| quake.input.entity_id() == input_id) {
                                 quake.status = terminal::QuakeTerminalStatus::Failed;
+                                quake.input.update(cx, |input, cx| input.set_connected(false, cx));
                                 quake.terminal.feed_string(format!(
                                     "\r\n[crabdash] Failed to open terminal: {error}\r\n"
                                 ));
@@ -240,13 +415,18 @@ impl Crabdash {
                 let events = session.events;
                 let accepted = this
                     .update(&mut cx, |this, cx| {
-                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) else {
+                        let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).and_then(|drawer| drawer.sessions.get_mut(&session_uuid)).filter(|quake| quake.input.entity_id() == input_id) else {
                             return false;
                         };
+                        if quake.status == terminal::QuakeTerminalStatus::Failed {
+                            quake.input.update(cx, |input, cx| input.set_connected(false, cx));
+                            return false;
+                        }
                         if quake.size != size
                             && let Err(error) = controller.resize(quake.size)
                         {
                             quake.status = terminal::QuakeTerminalStatus::Failed;
+                            quake.input.update(cx, |input, cx| input.set_connected(false, cx));
                             quake.terminal.feed_string(format!(
                                 "\r\n[crabdash] Failed to apply terminal size: {error}\r\n"
                             ));
@@ -255,8 +435,13 @@ impl Crabdash {
                             return false;
                         }
                         quake.controller = Some(controller.clone());
+                        for response in quake.terminal.take_pty_writes() {
+                            if let Err(error) = controller.write(response) {
+                                tracing::warn!(%error, "Failed to send pending Ghostty response");
+                            }
+                        }
                         quake.input.update(cx, |input, cx| {
-                            input.set_controller(Some(controller.clone()), cx);
+                            input.set_connected(true, cx);
                         });
                         quake.status = terminal::QuakeTerminalStatus::Connected;
                         cx.notify();
@@ -274,7 +459,7 @@ impl Crabdash {
                 while let Ok(event) = events.recv().await {
                     let should_continue = this
                         .update(&mut cx, |this, cx| {
-                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).filter(|quake| quake.input.entity_id() == input_id) else {
+                            let Some(quake) = this.quake_terminals.get_mut(&machine_uuid).and_then(|drawer| drawer.sessions.get_mut(&session_uuid)).filter(|quake| quake.input.entity_id() == input_id) else {
                                 return false;
                             };
 
@@ -285,6 +470,7 @@ impl Crabdash {
                                         if let Err(error) = controller.write(response) {
                                             quake.status =
                                                 terminal::QuakeTerminalStatus::Failed;
+                                            quake.input.update(cx, |input, cx| input.set_connected(false, cx));
                                             tracing::warn!(%error, "Failed to send Ghostty PTY response");
                                         }
                                     }
@@ -292,7 +478,7 @@ impl Crabdash {
                                 TerminalEvent::Exited(status) => {
                                     quake.controller = None;
                                     quake.input.update(cx, |input, cx| {
-                                        input.set_controller(None, cx);
+                                        input.set_connected(false, cx);
                                     });
                                     quake.status = terminal::QuakeTerminalStatus::Exited;
                                     quake.terminal.feed_string(format!(
@@ -305,7 +491,7 @@ impl Crabdash {
                                 TerminalEvent::Error(error) => {
                                     quake.controller = None;
                                     quake.input.update(cx, |input, cx| {
-                                        input.set_controller(None, cx);
+                                        input.set_connected(false, cx);
                                     });
                                     quake.status = terminal::QuakeTerminalStatus::Failed;
                                     quake.terminal.feed_string(format!(
@@ -329,7 +515,91 @@ impl Crabdash {
 
     pub(crate) fn close_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quake_terminal_open = false;
+        self.cancel_quake_resize();
         window.focus(&self.focus_handle);
         cx.notify();
+    }
+
+    pub(super) fn select_terminal_session(
+        &mut self,
+        machine: uuid::Uuid,
+        session: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_machine().uuid != machine || !self.quake_terminal_open {
+            return;
+        }
+        if let Some(drawer) = self.quake_terminals.get_mut(&machine) {
+            drawer.model.layout.select(session);
+            if let Some(session) = drawer.active() {
+                window.focus(&session.input.focus_handle(cx));
+            }
+        }
+        self.resize_quake_terminal(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn close_terminal_session(
+        &mut self,
+        machine: uuid::Uuid,
+        session: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_machine().uuid != machine {
+            return;
+        }
+        let Some(drawer) = self.quake_terminals.get_mut(&machine) else {
+            return;
+        };
+        if !drawer.sessions.contains_key(&session) {
+            return;
+        }
+        if drawer.sessions.len() == 1 {
+            if let Some(drawer) = self.quake_terminals.remove(&machine) {
+                drawer.shutdown();
+            }
+            self.set_quake_terminal_open(false, window, cx);
+            return;
+        }
+        if !drawer.model.remove(session) {
+            return;
+        }
+        if let Some(session) = drawer.sessions.remove(&session)
+            && let Some(controller) = session.controller
+            && let Err(error) = controller.shutdown()
+        {
+            tracing::debug!(%error, "Failed to close terminal session");
+        }
+        if let Some(session) = drawer.active() {
+            window.focus(&session.input.focus_handle(cx));
+        }
+        self.resize_quake_terminal(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn drop_terminal_tab(
+        &mut self,
+        machine: uuid::Uuid,
+        session: uuid::Uuid,
+        pane: u32,
+        drop: crate::layout::Drop,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_machine().uuid != machine || !self.quake_terminal_open {
+            return;
+        }
+        let Some(drawer) = self.quake_terminals.get_mut(&machine) else {
+            return;
+        };
+        if drawer.model.drop_tab(session, pane, drop) {
+            if let Some(session) = drawer.active() {
+                window.focus(&session.input.focus_handle(cx));
+            }
+            self.resize_quake_terminal(window, cx);
+            cx.notify();
+        }
     }
 }

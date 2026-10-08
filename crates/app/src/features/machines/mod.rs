@@ -1,8 +1,10 @@
 //! Machine selection, connection forms, and store updates.
 pub(crate) mod add_modal;
+mod authentication;
 mod controller;
 pub(crate) mod logos;
 mod model;
+pub(crate) mod rename;
 pub(crate) mod sidebar;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

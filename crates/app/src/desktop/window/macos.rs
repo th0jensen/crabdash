@@ -9,6 +9,9 @@ pub(super) fn configure(options: &mut WindowOptions) {
     }
 }
 pub(super) fn prepare(window: &mut Window, cx: &mut App) {
+    if let Some(native) = native_window(window) {
+        crate::desktop::appearance::prepare(&native);
+    }
     window.on_window_should_close(cx, crate::desktop::tray::should_close);
 }
 pub(super) fn register_lifecycle(_: &mut App) {}
@@ -37,8 +40,7 @@ pub(super) fn is_visible(window: &Window) -> Option<bool> {
 }
 pub(super) fn hide_to_tray(window: &mut Window) {
     if let Some(native) = native_window(window) {
-        // Hiding the application would also hide other dashboard
-        // windows. Keep backgrounding local to the window that was closed.
+        // Retain the dashboard and its sessions while hiding its native window.
         native.orderOut(None);
     } else {
         window.minimize_window();

@@ -38,7 +38,7 @@ impl Crabdash {
         let credentials_key = machine
             .remote
             .as_ref()
-            .filter(|remote| remote.auth.is_some())
+            .filter(|remote| super::authentication::needs_stored_secret(remote))
             .map(|remote| format!("com.thojensen.crabdash.ssh.{}@{}", remote.user, remote.host));
 
         self.machine_selection_generation = self.machine_selection_generation.wrapping_add(1);
@@ -79,12 +79,8 @@ impl Crabdash {
 
                 this.selected_machine = index;
                 this.refresh_services(cx);
-                if this.quake_terminal_open {
-                    this.open_quake_terminal(window, cx);
-                } else {
-                    window.focus(&this.focus_handle);
-                    cx.notify();
-                }
+                this.focus_selected_terminal(window, cx);
+                cx.notify();
             })
             .ok();
         })
@@ -231,12 +227,16 @@ impl Crabdash {
         .detach();
     }
 
-    pub(crate) fn delete_machine(&mut self, uuid: Uuid, cx: &mut Context<Self>) {
+    pub(crate) fn delete_machine(
+        &mut self,
+        uuid: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         tracing::debug!(%uuid, "delete_machine called");
-        cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
+        cx.spawn_in(window, async move |this: WeakEntity<Crabdash>, cx| {
             if let Err(error) = MachineStore::remove_machine(uuid).await {
-                this.update(&mut cx, |this, cx| {
+                this.update_in(cx, |this, _, cx| {
                     this.set_status_error(format!("Unable to delete machine: {error}"));
                     cx.notify();
                 })
@@ -245,15 +245,11 @@ impl Crabdash {
             }
             match load_store().await {
                 Ok(store) => {
-                    this.update(&mut cx, |this, cx| {
-                        if let Some(quake) = this.quake_terminals.remove(&uuid)
-                            && let Some(controller) = quake.controller
-                            && let Err(error) = controller.shutdown()
-                        {
-                            tracing::debug!(%error, "Failed to shut down deleted machine terminal");
+                    this.update_in(cx, |this, window, cx| {
+                        if let Some(drawer) = this.quake_terminals.remove(&uuid) {
+                            drawer.shutdown();
                         }
-                        this.machine_selection_generation =
-                            this.machine_selection_generation.wrapping_add(1);
+                        let previous = this.selected_machine().uuid;
                         this.replace_machine_store(store);
                         if this.docker_run_config.cancel_run_for(uuid) {
                             this.docker_run_modal_open = false;
@@ -279,12 +275,13 @@ impl Crabdash {
                         this.expanded_docker_logs.retain(|key, _| key.0 != uuid);
                         this.clear_status_message();
                         this.refresh_services(cx);
+                        this.reconcile_selected_terminal(previous, window, cx);
                         cx.notify();
                     })
                     .ok();
                 }
                 Err(error) => {
-                    this.update(&mut cx, |this, cx| {
+                    this.update_in(cx, |this, _, cx| {
                         this.set_status_error(format!(
                             "Unable to reload machines after delete: {error}"
                         ));
@@ -349,7 +346,7 @@ impl Crabdash {
             .update(cx, |field, cx| field.clear(cx));
     }
 
-    pub(crate) fn submit_add_machine(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn submit_add_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_machine_error = None;
 
         let host = self.remote_host_field.read(cx).text().trim().to_string();
@@ -414,13 +411,17 @@ impl Crabdash {
             }
         };
 
-        cx.spawn(
-            async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| -> Result<()> {
-                let mut cx = cx.clone();
+        let submitted = super::model::Selection {
+            uuid: self.selected_machine().uuid,
+            generation: self.machine_selection_generation,
+        };
+        cx.spawn_in(
+            window,
+            async move |this: WeakEntity<Crabdash>, cx| -> Result<()> {
                 let mut store = match load_store().await {
                     Ok(store) => store,
                     Err(error) => {
-                        this.update(&mut cx, move |this, cx| {
+                        this.update_in(cx, move |this, _, cx| {
                             this.set_status_error(format!("Unable to load machines: {error}"));
                             this.add_machine_error = Some(error);
                             cx.notify();
@@ -431,25 +432,39 @@ impl Crabdash {
                 };
                 match store.add_remote_machine(user, host, auth).await {
                     Ok(index) => {
-                        this.update(&mut cx, move |this, cx| {
+                        this.update_in(cx, move |this, window, cx| {
                             let added = store.machines[index].uuid;
-                            this.machine_selection_generation =
-                                this.machine_selection_generation.wrapping_add(1);
+                            let previous = this.selected_machine().uuid;
+                            let select_added =
+                                submitted.permits_added_selection(super::model::Selection {
+                                    uuid: previous,
+                                    generation: this.machine_selection_generation,
+                                });
                             this.replace_machine_store(store);
-                            if let Some(index) = this
-                                .machine_store
-                                .machines
-                                .iter()
-                                .position(|m| m.uuid == added)
+                            if select_added
+                                && let Some(index) = this
+                                    .machine_store
+                                    .machines
+                                    .iter()
+                                    .position(|m| m.uuid == added)
                             {
                                 this.selected_machine = index;
+                                this.machine_selection_generation =
+                                    this.machine_selection_generation.wrapping_add(1);
                             }
                             this.add_machine_modal_open = false;
                             this.clear_remote_machine_form(cx);
                             this.clear_status_message();
                             this.refresh_services(cx);
+                            this.reconcile_selected_terminal(previous, window, cx);
 
-                            if let Some(rc) = this.selected_machine().remote.as_ref() {
+                            if let Some(rc) = this
+                                .machine_store
+                                .machines
+                                .iter()
+                                .find(|machine| machine.uuid == added)
+                                .and_then(|machine| machine.remote.as_ref())
+                            {
                                 let (key, user, auth) = (
                                     format!("com.thojensen.crabdash.ssh.{}@{}", rc.user, rc.host),
                                     rc.user.clone(),
@@ -475,7 +490,7 @@ impl Crabdash {
                         Ok(())
                     }
                     Err(err) => {
-                        this.update(&mut cx, move |this, cx| {
+                        this.update_in(cx, move |this, _, cx| {
                             this.set_status_error(err.to_string());
                             this.add_machine_error = Some(err);
                             cx.notify();

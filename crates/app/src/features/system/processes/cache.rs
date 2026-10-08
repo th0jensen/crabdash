@@ -279,4 +279,46 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn owner_updates_reprepare_without_changing_retained_identity() -> anyhow::Result<()> {
+        let cache = RefCell::new(None);
+        let machine = Uuid::new_v4();
+        let mut earlier = process(7, "worker", "ALICE", None, None);
+        earlier.start_id = "earlier".into();
+        let mut later = earlier.clone();
+        later.start_id = "later".into();
+        let original = sample(Some(vec![later.clone(), earlier]));
+        let user_sort = sort(Column::User, Direction::Descending);
+        let retained = prepare(&cache, machine, &original, user_sort, "");
+        assert_eq!(
+            retained.row(0).map(|row| row.start_id.as_str()),
+            Some("earlier")
+        );
+        assert_eq!(
+            retained.row(1).map(|row| row.start_id.as_str()),
+            Some("later")
+        );
+        later.user = Some("bob".into());
+        let replacement = sample(Some(vec![later]));
+        let current = prepare(&cache, machine, &replacement, user_sort, "");
+        assert!(!Rc::ptr_eq(&retained, &current));
+        let row = current
+            .row(0)
+            .ok_or_else(|| anyhow::anyhow!("Current process"))?;
+        assert_eq!(
+            (row.pid, row.start_id.as_str(), row.user.as_deref()),
+            (7, "later", Some("bob"))
+        );
+        assert_eq!(
+            retained.row(0).and_then(|row| row.user.as_deref()),
+            Some("ALICE")
+        );
+        assert_eq!(
+            pids(&prepare(&cache, machine, &replacement, user_sort, " BOB ")),
+            [7]
+        );
+        assert!(pids(&prepare(&cache, machine, &replacement, user_sort, "alice")).is_empty());
+        Ok(())
+    }
 }

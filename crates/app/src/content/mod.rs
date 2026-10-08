@@ -1,6 +1,10 @@
 //! In-window pane composition; feature state stays scoped by unique domain tabs.
 mod docking;
+mod geometry;
+use geometry::minimum_extent;
+pub(crate) use geometry::minimum_visible_height;
 mod header;
+mod resize;
 
 use crate::app::{Crabdash, MainTab};
 use crate::components::style;
@@ -9,52 +13,12 @@ use crate::features::{
     workspaces::model::{Axis, Node},
 };
 use gpui::{prelude::*, *};
+use resize::usable_ratio;
 use std::{cell::Cell, rc::Rc};
-use uuid::Uuid;
 
-#[derive(Clone)]
-struct SplitResize {
-    id: u32,
-    owner: EntityId,
-    workspace: Uuid,
-    revision: Rc<Cell<u64>>,
-}
-impl Render for SplitResize {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
-}
-
-fn minimum_extent(node: &Node, axis: Axis, scale: f32) -> f32 {
-    match node {
-        Node::Pane { .. } => match axis {
-            Axis::Horizontal => 200.0 * scale + 24.0,
-            Axis::Vertical => 200.0 * scale + 12.0,
-        },
-        Node::Split {
-            axis: split_axis,
-            first,
-            second,
-            ..
-        } => {
-            let first = minimum_extent(first, axis, scale);
-            let second = minimum_extent(second, axis, scale);
-            if *split_axis == axis {
-                first + second + 1.0
-            } else {
-                first.max(second)
-            }
-        }
-    }
-}
-
-fn usable_ratio(ratio: f32, extent: f32, first_min: f32, second_min: f32) -> f32 {
-    let available = (extent - 1.0).max(0.0);
-    if available >= first_min + second_min {
-        ratio.clamp(first_min / available, 1.0 - second_min / available)
-    } else {
-        first_min / (first_min + second_min)
-    }
+#[cfg(test)]
+pub(crate) fn minimum_pane_extent(node: &Node, axis: Axis, scale: f32) -> f32 {
+    geometry::minimum_extent(node, axis, scale)
 }
 
 fn panel(
@@ -138,126 +102,87 @@ fn render_node(
             let second_height = if horizontal { height } else { second_extent };
             let first_panel = render_node(app, first, first_width, first_height, window, cx);
             let second_panel = render_node(app, second, second_width, second_height, window, cx);
-            let owner = cx.entity_id();
-            let workspace = app.workspaces.store.active;
-            let revision = app.workspaces.revision();
-            let entity = cx.entity().downgrade();
-            let divider = div()
-                .id(SharedString::from(format!("workspace-divider-{id}")))
-                .absolute()
-                .when(horizontal, |this| {
-                    this.left(-px(3.0))
-                        .right(-px(3.0))
-                        .top_0()
-                        .bottom_0()
-                        .cursor_col_resize()
-                })
-                .when(!horizontal, |this| {
-                    this.top(-px(3.0))
-                        .bottom(-px(3.0))
-                        .left_0()
-                        .right_0()
-                        .cursor_row_resize()
-                })
-                .on_drag(
-                    SplitResize {
-                        id,
-                        owner,
-                        workspace,
-                        revision: Rc::new(Cell::new(revision)),
-                    },
-                    move |drag, _, _, cx| {
-                        entity
-                            .update(cx, |app, cx| {
-                                // Mouse-down can persist a new focused pane
-                                // before the next frame replaces this payload.
-                                drag.revision.set(app.workspaces.revision());
-                                app.workspaces.drag_target = None;
-                                app.workspaces.resizing_split = Some(id);
-                                cx.notify();
-                            })
-                            .ok();
-                        cx.new(|_| drag.clone())
-                    },
-                );
-            div()
-                .id(SharedString::from(format!("workspace-split-{id}")))
-                .w(width)
-                .h(height)
-                .flex_none()
-                .min_w_0()
-                .min_h_0()
-                .flex()
-                .when(!horizontal, |this| this.flex_col())
-                .on_drag_move(
-                    cx.listener(move |app, event: &DragMoveEvent<SplitResize>, _, cx| {
-                        let drag = event.drag(cx);
-                        if drag.id != id
-                            || drag.owner != cx.entity_id()
-                            || drag.workspace != app.workspaces.store.active
-                            || drag.revision.get() != app.workspaces.revision()
-                            || app.workspaces.resizing_split != Some(id)
-                        {
-                            return;
-                        }
-                        app.workspaces.drag_target = None;
-                        let extent = if horizontal {
-                            event.bounds.size.width
-                        } else {
-                            event.bounds.size.height
-                        };
-                        let position = if horizontal {
-                            event.event.position.x - event.bounds.origin.x
-                        } else {
-                            event.event.position.y - event.bounds.origin.y
-                        };
-                        let fraction = f32::from(position - px(0.5)) / f32::from(extent - px(1.0));
-                        if fraction.is_finite() {
-                            let ratio =
-                                usable_ratio(fraction, f32::from(extent), first_min, second_min);
-                            if app.workspaces.layout_mut().set_ratio(id, ratio) {
-                                cx.notify();
+            let geometry = resize::Geometry {
+                axis: *axis,
+                first_min,
+                second_min,
+            };
+            let bounds = Rc::new(Cell::new(None));
+            let measure_bounds = bounds.clone();
+            let measure = canvas(
+                move |bounds, _, _| measure_bounds.set(Some(bounds)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0();
+            let divider = resize::divider(app, id, first_extent, geometry, bounds, cx);
+            resize::moves(
+                div()
+                    .id(SharedString::from(format!("workspace-split-{id}")))
+                    .w(width)
+                    .h(height)
+                    .flex_none()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex()
+                    .when(!horizontal, |this| this.flex_col())
+                    .relative()
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |app, _, _, cx| {
+                            if app
+                                .workspaces
+                                .split_resize_grab
+                                .is_some_and(|(anchor, _)| anchor == id)
+                            {
+                                app.workspaces.split_resize_grab = None;
                             }
-                        }
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |app, _, _, cx| {
-                        if app.workspaces.resizing_split == Some(id) {
-                            app.workspaces.resizing_split = None;
-                            app.persist_workspace(cx);
-                        }
-                    }),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(move |app, _, _, cx| {
-                        if app.workspaces.resizing_split == Some(id) {
-                            app.workspaces.resizing_split = None;
-                            app.persist_workspace(cx);
-                        }
-                    }),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .min_w_0()
-                        .min_h_0()
-                        .when(horizontal, |this| this.w(first_extent).h_full())
-                        .when(!horizontal, |this| this.h(first_extent).w_full())
-                        .child(first_panel),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .relative()
-                        .bg(rgb(style::BORDER))
-                        .when(horizontal, |this| this.w(px(1.0)).h_full())
-                        .when(!horizontal, |this| this.h(px(1.0)).w_full())
-                        .child(divider),
-                )
-                .child(div().flex_1().min_w_0().min_h_0().child(second_panel))
+                            if app.workspaces.resizing_split == Some(id) {
+                                app.workspaces.resizing_split = None;
+                                app.persist_workspace(cx);
+                            }
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(move |app, _, _, cx| {
+                            if app
+                                .workspaces
+                                .split_resize_grab
+                                .is_some_and(|(anchor, _)| anchor == id)
+                            {
+                                app.workspaces.split_resize_grab = None;
+                            }
+                            if app.workspaces.resizing_split == Some(id) {
+                                app.workspaces.resizing_split = None;
+                                app.persist_workspace(cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w_0()
+                            .min_h_0()
+                            .when(horizontal, |this| this.w(first_extent).h_full())
+                            .when(!horizontal, |this| this.h(first_extent).w_full())
+                            .child(first_panel),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .relative()
+                            .bg(rgb(style::BORDER))
+                            .when(horizontal, |this| this.w(px(1.0)).h_full())
+                            .when(!horizontal, |this| this.h(px(1.0)).w_full()),
+                    )
+                    .child(div().flex_1().min_w_0().min_h_0().child(second_panel))
+                    .child(divider)
+                    .child(measure),
+                id,
+                geometry,
+                cx,
+            )
         }
     }
 }
@@ -278,6 +203,12 @@ pub fn render(app: &Crabdash, window: &mut Window, cx: &mut Context<Crabdash>) -
             px(0.0)
         } else {
             px(f32::from(window.rem_size()) * style::TITLE_BAR / 16.0)
+        }
+        // Docking and scrolling use only the viewport above the visible drawer.
+        - if app.quake_terminal_open && app.active_quake_terminal().is_some() {
+            app.quake_height
+        } else {
+            px(0.0)
         })
     .max(px(0.0));
     div()

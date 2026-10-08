@@ -10,51 +10,30 @@ use std::{
     time::Duration,
 };
 
-const SCRIPT: &str = r#"
-$engines = @(); $memory = @(); $inventory = @(); $supported = $false; $inventory_available = $false
-try {
-    $class = Get-CimClass -ClassName Win32_PerfRawData_GPUPerformanceCounters_GPUEngine -ErrorAction Stop
-    $type = $class.CimClassProperties['UtilizationPercentage'].Qualifiers['CounterType'].Value
-    if ([uint64]$type -eq 542180608) {
-        $engines = @(Get-CimInstance -ClassName Win32_PerfRawData_GPUPerformanceCounters_GPUEngine -ErrorAction Stop | ForEach-Object {
-            if ($null -eq $_.UtilizationPercentage -or $null -eq $_.Timestamp_Sys100NS) { throw 'GPU engine counters unavailable' }
-            [pscustomobject]@{ id = [string]$_.Name; ticks = ([uint64]$_.UtilizationPercentage).ToString(); clock = ([uint64]$_.Timestamp_Sys100NS).ToString() }
-        })
-        $supported = $true
+const INVENTORY: &str = include_str!("windows/inventory.cs");
+const PROBE: &str = include_str!("windows/probe.ps1");
+
+fn script(discover: bool) -> String {
+    // Static source is a literal here-string, never interpolated target/user data.
+    if discover {
+        format!(
+            "$crabdash_gpu_discover = $true\n$crabdash_gpu_inventory = @'\n{INVENTORY}\n'@\n{PROBE}"
+        )
+    } else {
+        format!("$crabdash_gpu_discover = $false\n{PROBE}")
     }
-} catch { }
-try {
-    $memory = @(Get-CimInstance -ClassName Win32_PerfRawData_GPUPerformanceCounters_GPUAdapterMemory -ErrorAction Stop | ForEach-Object {
-        if ($null -eq $_.DedicatedUsage) { throw 'GPU memory counters unavailable' }
-        [pscustomobject]@{ id = [string]$_.Name; used = ([uint64]$_.DedicatedUsage).ToString() }
-    })
-} catch { }
-try {
-    $inventory = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | ForEach-Object {
-        [pscustomobject]@{ id = [string]$_.PNPDeviceID; name = [string]$_.Name; vendor = [string]$_.AdapterCompatibility; driver = [string]$_.DriverVersion }
-    })
-    $inventory_available = $true
-} catch { }
-[pscustomobject]@{ supported = $supported; inventory_available = $inventory_available; engines = $engines; memory = $memory; inventory = $inventory } | ConvertTo-Json -Depth 4 -Compress
-"#;
+}
 
 pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<GpuSample>> {
-    let first = parse(&machine.powershell(SCRIPT).await?)?;
-    if !first.supported {
-        ensure!(
-            first.inventory_available,
-            "GPU telemetry provider unavailable"
-        );
-        return Ok(inventory(first.inventory));
+    let first = parse(&machine.powershell(&script(false)).await?)?;
+    if first.supported {
+        machine.delay(Duration::from_secs(1)).await?;
     }
-    machine.delay(Duration::from_secs(1)).await?;
-    let second = parse(&machine.powershell(SCRIPT).await?)?;
-    if !second.supported {
-        ensure!(
-            second.inventory_available,
-            "GPU telemetry provider unavailable"
-        );
-        return Ok(inventory(second.inventory));
+    // Inventory is discovered once per sample, after the counter baseline. This
+    // retains hotplug handling without compiling the native helper twice.
+    let second = parse(&machine.powershell(&script(true)).await?)?;
+    if !first.supported || !second.supported {
+        return cook(&second, &second);
     }
     cook(&first, &second)
 }
@@ -77,7 +56,19 @@ struct Adapter {
     driver: String,
 }
 #[derive(Deserialize)]
+struct NativeAdapter {
+    id: String,
+    pnp_id: Option<String>,
+    name: Option<String>,
+    vendor: Option<String>,
+    capacity: Option<String>,
+}
+#[derive(Deserialize)]
 struct Snapshot {
+    #[serde(default)]
+    native_available: bool,
+    #[serde(default)]
+    adapters: Vec<NativeAdapter>,
     supported: bool,
     inventory_available: bool,
     engines: Vec<Engine>,
@@ -88,75 +79,111 @@ fn parse(output: &str) -> Result<Snapshot> {
     serde_json::from_str(output.trim_start_matches('\u{feff}'))
         .context("Invalid Windows GPU response")
 }
-// Never join Win32_VideoController to performance instances by enumeration order.
-// The provider does not expose that relation; PNP inventory remains a fallback.
-fn inventory(adapters: Vec<Adapter>) -> Vec<GpuSample> {
-    adapters
-        .into_iter()
-        .filter(|adapter| !adapter.id.is_empty())
-        .map(|adapter| GpuSample {
-            id: adapter.id,
-            name: adapter.name,
-            vendor: adapter.vendor,
-            driver: (!adapter.driver.is_empty()).then_some(adapter.driver),
-            busy_percent: None,
-            memory_used_bytes: None,
-            memory_total_bytes: None,
-            temperature_celsius: None,
-        })
-        .collect()
+// Both discovery and performance IDs normalize their numeric LUID/physical fields.
+// Names/order/PCI model IDs are never identity joins (identical cards are valid).
+fn discovered(snapshot: &Snapshot) -> Result<BTreeMap<String, GpuSample>> {
+    let mut values = BTreeMap::new();
+    let mut claimed = std::collections::HashSet::new();
+    for adapter in &snapshot.adapters {
+        let Some(id) = adapter_id(&adapter.id) else {
+            continue;
+        };
+        let descriptor = adapter.pnp_id.as_ref().and_then(|pnp| {
+            snapshot
+                .inventory
+                .iter()
+                .find(|item| item.id.eq_ignore_ascii_case(pnp))
+        });
+        if let Some(item) = descriptor {
+            claimed.insert(item.id.to_ascii_uppercase());
+        }
+        let mut gpu = empty(&id);
+        gpu.name = descriptor
+            .map(|item| item.name.as_str())
+            .filter(|name| !name.is_empty())
+            .or(adapter.name.as_deref().filter(|name| !name.is_empty()))
+            .map_or(gpu.name, str::to_owned);
+        gpu.vendor = descriptor
+            .map(|item| item.vendor.as_str())
+            .filter(|vendor| !vendor.is_empty())
+            .or(adapter
+                .vendor
+                .as_deref()
+                .filter(|vendor| !vendor.is_empty()))
+            .map_or(gpu.vendor, str::to_owned);
+        gpu.driver =
+            descriptor.and_then(|item| (!item.driver.is_empty()).then(|| item.driver.clone()));
+        gpu.memory_total_bytes = adapter
+            .capacity
+            .as_deref()
+            .map(str::parse::<u64>)
+            .transpose()
+            .context("Invalid Windows GPU capacity")?;
+        values.insert(id, gpu);
+    }
+    // Unmapped PNP devices remain visible, without attaching somebody else's counters.
+    for adapter in &snapshot.inventory {
+        if adapter.id.is_empty() || claimed.contains(&adapter.id.to_ascii_uppercase()) {
+            continue;
+        }
+        let mut gpu = empty(&adapter.id);
+        gpu.name = adapter.name.clone();
+        gpu.vendor = adapter.vendor.clone();
+        gpu.driver = (!adapter.driver.is_empty()).then(|| adapter.driver.clone());
+        values.insert(adapter.id.clone(), gpu);
+    }
+    Ok(values)
 }
-fn adapter_id(instance: &str) -> Option<&str> {
+fn adapter_id(instance: &str) -> Option<String> {
     let start = instance.find("luid_")?;
-    let tail = &instance[start..];
-    let physical = tail.find("_phys_")? + "_phys_".len();
-    let digits = tail[physical..]
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .count();
-    if digits == 0 {
+    let mut parts = instance[start..].split('_');
+    if parts.next()? != "luid" {
         return None;
     }
-    let id = &tail[..physical + digits];
-    let parts: Vec<_> = id.split('_').collect();
-    if parts.len() != 5
-        || parts[0] != "luid"
-        || parts[3] != "phys"
-        || !parts[1..3].iter().all(|part| {
-            part.strip_prefix("0x").is_some_and(|hex| {
-                !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
-        })
-    {
+    let high = u32::from_str_radix(parts.next()?.strip_prefix("0x")?, 16).ok()?;
+    let low = u32::from_str_radix(parts.next()?.strip_prefix("0x")?, 16).ok()?;
+    if parts.next()? != "phys" {
         return None;
     }
-    Some(id)
+    let physical = parts.next()?.parse::<u32>().ok()?;
+    Some(format!("luid_0x{high:x}_0x{low:x}_phys_{physical}"))
 }
-fn engine_id(instance: &str) -> Option<(&str, &str)> {
+fn engine_id(instance: &str) -> Option<(String, u32)> {
     let adapter = adapter_id(instance)?;
     let tail = instance.split_once("_eng_")?.1;
     let number = tail.split('_').next()?;
     if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    Some((adapter, number))
+    Some((adapter, number.parse().ok()?))
+}
+fn counter_key(instance: &str) -> Option<(String, String)> {
+    let adapter = adapter_id(instance)?;
+    let (process, _) = instance.split_once("luid_")?;
+    let (_, tail) = instance.split_once("_eng_")?;
+    let (number, suffix) = tail.split_once('_').map_or((tail, ""), |parts| parts);
+    let number = number.parse::<u32>().ok()?;
+    Some((adapter, format!("{process}eng_{number}_{suffix}")))
 }
 fn cook(first: &Snapshot, second: &Snapshot) -> Result<Vec<GpuSample>> {
     let old: HashMap<_, _> = first
         .engines
         .iter()
-        .map(|engine| (engine.id.as_str(), engine))
+        .filter_map(|engine| counter_key(&engine.id).map(|key| (key, engine)))
         .collect();
-    let mut adapters: BTreeMap<String, GpuSample> = BTreeMap::new();
-    let mut engines: HashMap<(String, String), f64> = HashMap::new();
+    let mut adapters = discovered(second)?;
+    let mut engines: HashMap<(String, u32), f64> = HashMap::new();
     for current in &second.engines {
         let Some((adapter, engine)) = engine_id(&current.id) else {
             continue;
         };
         adapters
-            .entry(adapter.into())
-            .or_insert_with(|| empty(adapter));
-        let Some(previous) = old.get(current.id.as_str()) else {
+            .entry(adapter.clone())
+            .or_insert_with(|| empty(&adapter));
+        let Some(key) = counter_key(&current.id) else {
+            continue;
+        };
+        let Some(previous) = old.get(&key) else {
             continue;
         };
         let ticks = current
@@ -168,8 +195,7 @@ fn cook(first: &Snapshot, second: &Snapshot) -> Result<Vec<GpuSample>> {
             .parse::<u64>()?
             .checked_sub(previous.clock.parse()?);
         if let Some((ticks, elapsed)) = ticks.zip(elapsed).filter(|(_, elapsed)| *elapsed > 0) {
-            *engines.entry((adapter.into(), engine.into())).or_default() +=
-                ticks as f64 / elapsed as f64 * 100.0;
+            *engines.entry((adapter, engine)).or_default() += ticks as f64 / elapsed as f64 * 100.0;
         }
     }
     for ((adapter, _), percent) in engines {
@@ -186,28 +212,14 @@ fn cook(first: &Snapshot, second: &Snapshot) -> Result<Vec<GpuSample>> {
             continue;
         };
         adapters
-            .entry(id.into())
-            .or_insert_with(|| empty(id))
+            .entry(id.clone())
+            .or_insert_with(|| empty(&id))
             .memory_used_bytes = Some(memory.used.parse().context("Invalid Windows GPU memory")?);
     }
-    if adapters.is_empty() {
-        // Inventory descriptors are Clone-free here so borrow-safe copying is explicit.
-        return Ok(second
-            .inventory
-            .iter()
-            .filter(|adapter| !adapter.id.is_empty())
-            .map(|adapter| GpuSample {
-                id: adapter.id.clone(),
-                name: adapter.name.clone(),
-                vendor: adapter.vendor.clone(),
-                driver: (!adapter.driver.is_empty()).then(|| adapter.driver.clone()),
-                busy_percent: None,
-                memory_used_bytes: None,
-                memory_total_bytes: None,
-                temperature_celsius: None,
-            })
-            .collect());
-    }
+    ensure!(
+        !adapters.is_empty() || second.inventory_available || second.native_available,
+        "GPU inventory and telemetry providers unavailable"
+    );
     Ok(adapters.into_values().collect())
 }
 fn empty(id: &str) -> GpuSample {
@@ -236,6 +248,8 @@ mod tests {
         Snapshot {
             supported: true,
             inventory_available: true,
+            native_available: false,
+            adapters: vec![],
             engines: names
                 .into_iter()
                 .zip(ticks)
@@ -275,19 +289,201 @@ mod tests {
         );
         assert!(adapter_id("luid_0x0_0xb_phys_文字").is_none());
         assert!(adapter_id("luid_not_hex_phys_0").is_none());
-        let values = inventory(vec![Adapter {
-            id: "PCI\\GPU".into(),
-            name: "Virtual adapter".into(),
-            vendor: "Virtio".into(),
-            driver: "1".into(),
-        }]);
+        let values = discovered(&Snapshot {
+            supported: false,
+            inventory_available: true,
+            native_available: false,
+            adapters: vec![],
+            engines: vec![],
+            memory: vec![],
+            inventory: vec![Adapter {
+                id: "PCI\\GPU".into(),
+                name: "Virtual adapter".into(),
+                vendor: "Virtio".into(),
+                driver: "1".into(),
+            }],
+        })?;
         assert_eq!(values.len(), 1);
-        assert!(values[0].busy_percent.is_none());
+        assert!(values.values().all(|gpu| gpu.busy_percent.is_none()));
         Ok(())
     }
     #[test]
     fn missing_or_null_gpu_timers_are_not_zero_counters() {
         assert!(parse(r#"{"supported":true,"inventory_available":true,"engines":[{"id":"pid_1_luid_0x0_0xa_phys_0_eng_0","clock":"100"}],"memory":[],"inventory":[]}"#).is_err());
         assert!(parse(r#"{"supported":true,"inventory_available":true,"engines":[{"id":"pid_1_luid_0x0_0xa_phys_0_eng_0","ticks":"100","clock":null}],"memory":[],"inventory":[]}"#).is_err());
+    }
+    fn no_counters() -> Snapshot {
+        Snapshot {
+            supported: false,
+            inventory_available: false,
+            native_available: false,
+            adapters: vec![],
+            engines: vec![],
+            memory: vec![],
+            inventory: vec![],
+        }
+    }
+    fn native(id: &str, pnp: Option<&str>, capacity: Option<&str>) -> NativeAdapter {
+        NativeAdapter {
+            id: id.into(),
+            pnp_id: pnp.map(str::to_owned),
+            name: None,
+            vendor: None,
+            capacity: capacity.map(str::to_owned),
+        }
+    }
+    fn descriptor(id: &str, name: &str) -> Adapter {
+        Adapter {
+            id: id.into(),
+            name: name.into(),
+            vendor: "NVIDIA".into(),
+            driver: "555".into(),
+        }
+    }
+    #[test]
+    fn exact_identity_keeps_idle_same_name_adapter_and_reordered_inventory() -> Result<()> {
+        let mut first = fixture([0; 4], 1000);
+        first.engines.truncate(3);
+        let mut second = fixture([200, 300, 400, 0], 2000);
+        second.engines.truncate(3);
+        second.memory.clear();
+        second.inventory = vec![
+            descriptor("PCI\\B", "Same GPU"),
+            descriptor("PCI\\A", "Same GPU"),
+        ];
+        second.adapters = vec![
+            native(
+                "luid_0x00000000_0x0000000A_phys_00",
+                Some("pci\\a"),
+                Some("8589934592"),
+            ),
+            native("luid_0x0_0xb_phys_0", Some("PCI\\B"), Some("17179869184")),
+        ];
+        let values = cook(&first, &second)?;
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].name, "Same GPU");
+        assert_eq!(values[1].name, "Same GPU");
+        assert_ne!(values[0].id, values[1].id);
+        assert_eq!(values[0].busy_percent, Some(50.0));
+        assert!(values[1].busy_percent.is_none());
+        assert_eq!(values[0].memory_total_bytes, Some(8_589_934_592));
+        assert_eq!(values[1].memory_total_bytes, Some(17_179_869_184));
+        assert!(
+            values
+                .iter()
+                .all(|gpu| gpu.driver.as_deref() == Some("555"))
+        );
+        Ok(())
+    }
+    #[test]
+    fn linked_physical_cards_have_independent_capacity_and_counters() -> Result<()> {
+        let mut first = fixture([0; 4], 1000);
+        first.engines.truncate(1);
+        let mut second = no_counters();
+        second.adapters = vec![
+            native(
+                "luid_0x0_0xa_phys_0",
+                Some("PCI\\A"),
+                Some("9007199254740993"),
+            ),
+            native("luid_0x0_0xa_phys_1", Some("PCI\\B"), None),
+        ];
+        second.inventory = vec![
+            descriptor("PCI\\B", "Card B"),
+            descriptor("PCI\\A", "Card A"),
+        ];
+        second.engines = vec![
+            Engine {
+                id: first.engines[0].id.clone(),
+                ticks: "250".into(),
+                clock: "2000".into(),
+            },
+            Engine {
+                id: "pid_1_luid_0x0_0xa_phys_1_eng_0_engtype_3D".into(),
+                ticks: "900".into(),
+                clock: "2000".into(),
+            },
+        ];
+        second.memory = vec![Memory {
+            id: "luid_0x0_0xa_phys_1".into(),
+            used: "777".into(),
+        }];
+        let values = cook(&first, &second)?;
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].name, "Card A");
+        assert_eq!(values[0].busy_percent, Some(25.0));
+        assert_eq!(values[0].memory_total_bytes, Some(9_007_199_254_740_993));
+        assert_eq!(values[1].name, "Card B");
+        assert!(values[1].busy_percent.is_none());
+        assert!(values[1].memory_total_bytes.is_none());
+        assert_eq!(values[1].memory_used_bytes, Some(777));
+        Ok(())
+    }
+    #[test]
+    fn unmapped_inventory_and_counter_devices_are_not_guessed_by_order() -> Result<()> {
+        let first = fixture([0; 4], 1000);
+        let mut second = fixture([100; 4], 2000);
+        second.inventory = vec![
+            descriptor("PCI\\A", "Card A"),
+            descriptor("PCI\\B", "Card B"),
+        ];
+        let values = cook(&first, &second)?;
+        assert_eq!(values.len(), 4);
+        let named = values
+            .iter()
+            .filter(|gpu| gpu.id.starts_with("PCI"))
+            .collect::<Vec<_>>();
+        assert_eq!(named.len(), 2);
+        assert!(
+            named
+                .iter()
+                .all(|gpu| gpu.busy_percent.is_none() && gpu.memory_used_bytes.is_none())
+        );
+        assert!(
+            values
+                .iter()
+                .filter(|gpu| gpu.id.starts_with("luid"))
+                .all(|gpu| gpu.name.starts_with("GPU luid") && gpu.driver.is_none())
+        );
+        Ok(())
+    }
+    #[test]
+    fn empty_success_differs_from_failed_inventory_even_with_supported_timers() -> Result<()> {
+        let mut snapshot = no_counters();
+        snapshot.supported = true;
+        assert!(cook(&snapshot, &snapshot).is_err());
+        snapshot.inventory_available = true;
+        assert!(cook(&snapshot, &snapshot)?.is_empty());
+        snapshot.inventory_available = false;
+        snapshot.native_available = true;
+        assert!(cook(&snapshot, &snapshot)?.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn normalized_counter_identity_survives_hex_padding_without_aliasing_phys() -> Result<()> {
+        let mut first = fixture([0; 4], 1000);
+        first.engines.truncate(1);
+        first.engines[0].id = "pid_1_luid_0x00000000_0x0000000A_phys_00_eng_00_engtype_3D".into();
+        let mut second = fixture([200; 4], 2000);
+        second.engines.truncate(1);
+        second.memory.clear();
+        assert_eq!(cook(&first, &second)?[0].busy_percent, Some(20.0));
+        assert_ne!(
+            adapter_id("luid_0x0_0xa_phys_0"),
+            adapter_id("luid_0x0_0xa_phys_1")
+        );
+        assert!(adapter_id("luid_0x100000000_0xa_phys_0").is_none());
+        Ok(())
+    }
+    #[test]
+    fn json_metadata_preserves_unicode_and_integer_precision() -> Result<()> {
+        let snapshot = parse(
+            r#"{"supported":false,"inventory_available":true,"native_available":true,"engines":[],"memory":[],"inventory":[{"id":"PCI\\A","name":"GPU \"名前\"\nLine","vendor":"Vendor","driver":"1"}],"adapters":[{"id":"luid_0x0_0xa_phys_0","pnp_id":"PCI\\A","name":null,"vendor":null,"capacity":"18446744073709551615"}]}"#,
+        )?;
+        let values = cook(&snapshot, &snapshot)?;
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].name, "GPU \"名前\"\nLine");
+        assert_eq!(values[0].memory_total_bytes, Some(u64::MAX));
+        Ok(())
     }
 }

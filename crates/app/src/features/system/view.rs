@@ -2,6 +2,8 @@
 use super::{
     HistoryPoint, MachineState, ScalarPoint,
     chart::{self, Series},
+    cores,
+    inventory::{self, Kind},
     sum_rates,
 };
 use crate::{
@@ -14,6 +16,39 @@ use crate::{
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use machines::resources::{GpuSample, ResourceUsage};
+
+struct Charts<'a, 'cx> {
+    machine: uuid::Uuid,
+    inspect: bool,
+    window: &'a mut Window,
+    cx: &'a mut Context<'cx, Crabdash>,
+}
+
+impl Charts<'_, '_> {
+    fn percent(&self, kind: &str, caption: String) -> chart::Settings {
+        chart::Settings {
+            id: format!("system-chart-{}-{kind}", self.machine).into(),
+            caption,
+            fixed_max: Some(100.0),
+            format_maximum: |value| format!("{value:.0}%"),
+            format_value: |value| format!("{value:.1}%"),
+            inspect: self.inspect,
+        }
+    }
+    fn rate(&self, kind: &str, caption: String) -> chart::Settings {
+        chart::Settings {
+            id: format!("system-chart-{}-{kind}", self.machine).into(),
+            caption,
+            fixed_max: None,
+            format_maximum: |value| rate(Some(value)),
+            format_value: |value| rate(Some(value)),
+            inspect: self.inspect,
+        }
+    }
+    fn render(&mut self, series: Vec<Series>, settings: chart::Settings) -> Div {
+        chart::render(series, settings, self.window, self.cx)
+    }
+}
 
 fn percent(value: Option<f64>) -> String {
     value
@@ -138,7 +173,7 @@ fn machine_fact(label: &str, value: String) -> Stateful<Div> {
         .id(SharedString::from(format!("system-machine-{label}")))
         .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
 }
-fn meter(value: f64) -> Div {
+pub(super) fn meter(value: f64, accent: Option<u32>) -> Div {
     div()
         .w_full()
         .h(px(3.0))
@@ -149,62 +184,34 @@ fn meter(value: f64) -> Div {
                 .h_full()
                 .w(relative(value.clamp(0.0, 100.0) as f32 / 100.0))
                 .rounded(px(2.0))
-                .bg(rgb(style::TAB_INDICATOR)),
+                .bg(rgb(accent.unwrap_or(style::TEXT_MUTED))),
         )
 }
-fn cpu_card(state: &MachineState, usage: &ResourceUsage) -> Div {
+fn cpu_card(
+    app: &Crabdash,
+    state: &MachineState,
+    usage: &ResourceUsage,
+    width: f32,
+    accent: Option<u32>,
+    charts: &mut Charts<'_, '_>,
+) -> Div {
     card()
         .child(heading(
             "CPU",
             percent(usage.cpu_percent),
             format!("{} logical processors", usage.logical_cpus),
         ))
-        .child(chart::render(
+        .child(charts.render(
             vec![history_series(
                 state,
                 |point| point.cpu,
                 None,
-                style::TEXT_PRIMARY,
+                accent.unwrap_or(style::TEXT_PRIMARY),
                 false,
             )],
-            Some(100.0),
+            charts.percent("cpu", "CPU".into()),
         ))
-        .when(!usage.cores.is_empty(), |this| {
-            this.child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(rems(10.0 / 16.0))
-                    .text_size(rems(style::META / 16.0))
-                    .children(usage.cores.iter().map(|core| {
-                        div()
-                            .w(rems(104.0 / 16.0))
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .justify_between()
-                                    .gap(px(4.0))
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .whitespace_nowrap()
-                                            .text_color(rgb(style::TEXT_MUTED))
-                                            .child(format!("CPU {}", core.name)),
-                                    )
-                                    .child(match core.percent {
-                                        Some(value) if value.is_finite() => percent(Some(value)),
-                                        _ => "—".into(),
-                                    }),
-                            )
-                            .child(meter(core.percent.unwrap_or(0.0)))
-                    })),
-            )
-        })
+        .child(cores::render(app, &usage.cores, width, accent, charts.cx))
         .child(fact("Uptime", uptime(usage.uptime_seconds)))
         .when_some(usage.load_average, |this, load| {
             this.child(fact(
@@ -213,7 +220,12 @@ fn cpu_card(state: &MachineState, usage: &ResourceUsage) -> Div {
             ))
         })
 }
-fn memory_card(state: &MachineState, usage: &ResourceUsage) -> Div {
+fn memory_card(
+    state: &MachineState,
+    usage: &ResourceUsage,
+    accent: Option<u32>,
+    charts: &mut Charts<'_, '_>,
+) -> Div {
     card()
         .child(heading(
             "Memory",
@@ -224,15 +236,15 @@ fn memory_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                 bytes(usage.memory.total_bytes)
             ),
         ))
-        .child(chart::render(
+        .child(charts.render(
             vec![history_series(
                 state,
                 |point| point.memory,
                 None,
-                style::TEXT_MUTED,
+                accent.unwrap_or(style::TEXT_MUTED),
                 false,
             )],
-            Some(100.0),
+            charts.percent("memory", "Memory".into()),
         ))
         .child(fact(
             if usage.memory.estimated {
@@ -287,7 +299,13 @@ fn io_row(
                 ),
         )
 }
-fn network_card(state: &MachineState, usage: &ResourceUsage) -> Div {
+fn network_card(
+    app: &Crabdash,
+    state: &MachineState,
+    usage: &ResourceUsage,
+    accent: Option<u32>,
+    charts: &mut Charts<'_, '_>,
+) -> Div {
     let Some(interfaces) = &usage.network else {
         return card().child(heading(
             "Network",
@@ -332,13 +350,13 @@ fn network_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                     .map(|interface| interface.sent_bytes_per_second),
             )),
         ))
-        .child(chart::render(
+        .child(charts.render(
             vec![
                 history_series(
                     state,
                     |point| point.network_rx,
                     Some("Receive"),
-                    style::TEXT_PRIMARY,
+                    accent.unwrap_or(style::TEXT_PRIMARY),
                     false,
                 ),
                 history_series(
@@ -349,19 +367,32 @@ fn network_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                     true,
                 ),
             ],
-            None,
+            charts.rate("network", "Network".into()),
         ))
-        .children(interfaces.iter().map(|interface| {
-            io_row(
-                &interface.id,
-                interface.received_bytes_per_second,
-                interface.sent_bytes_per_second,
-                "↓",
-                "↑",
-            )
-        }))
+        .child(inventory::render(
+            app,
+            Kind::Network,
+            app.selected_machine().uuid,
+            interfaces.len(),
+            interfaces.iter().map(|interface| {
+                io_row(
+                    &interface.id,
+                    interface.received_bytes_per_second,
+                    interface.sent_bytes_per_second,
+                    "↓",
+                    "↑",
+                )
+            }),
+            charts.cx,
+        ))
 }
-fn disk_card(state: &MachineState, usage: &ResourceUsage) -> Div {
+fn disk_card(
+    app: &Crabdash,
+    state: &MachineState,
+    usage: &ResourceUsage,
+    accent: Option<u32>,
+    charts: &mut Charts<'_, '_>,
+) -> Div {
     let Some(disks) = &usage.disks else {
         return card().child(heading(
             "Disk I/O",
@@ -402,13 +433,13 @@ fn disk_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                 disks.iter().map(|disk| disk.written_bytes_per_second),
             )),
         ))
-        .child(chart::render(
+        .child(charts.render(
             vec![
                 history_series(
                     state,
                     |point| point.disk_read,
                     Some("Read"),
-                    style::TEXT_PRIMARY,
+                    accent.unwrap_or(style::TEXT_PRIMARY),
                     false,
                 ),
                 history_series(
@@ -419,19 +450,31 @@ fn disk_card(state: &MachineState, usage: &ResourceUsage) -> Div {
                     true,
                 ),
             ],
-            None,
+            charts.rate("disk", "Disk I/O".into()),
         ))
-        .children(disks.iter().map(|disk| {
-            io_row(
-                &disk.id,
-                disk.read_bytes_per_second,
-                disk.written_bytes_per_second,
-                "Read",
-                "Write",
-            )
-        }))
+        .child(inventory::render(
+            app,
+            Kind::Disks,
+            app.selected_machine().uuid,
+            disks.len(),
+            disks.iter().map(|disk| {
+                io_row(
+                    &disk.id,
+                    disk.read_bytes_per_second,
+                    disk.written_bytes_per_second,
+                    "Read",
+                    "Write",
+                )
+            }),
+            charts.cx,
+        ))
 }
-fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
+fn gpu_card(
+    state: &MachineState,
+    gpu: &GpuSample,
+    accent: Option<u32>,
+    charts: &mut Charts<'_, '_>,
+) -> Div {
     let detail = [Some(gpu.vendor.as_str()), gpu.driver.as_deref()]
         .into_iter()
         .flatten()
@@ -457,11 +500,13 @@ fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
                 }),
         )
         .child(fact(
-            "GPU usage",
+            "Usage",
             gpu.busy_percent
                 .map_or_else(|| "Unavailable".into(), |value| percent(Some(value))),
         ))
-        .when_some(gpu.busy_percent, |this, value| this.child(meter(value)))
+        .when_some(gpu.busy_percent, |this, value| {
+            this.child(meter(value, accent))
+        })
         .when_some(
             state.gpu_history.get(&gpu.id).filter(|history| {
                 history
@@ -469,20 +514,30 @@ fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
                     .any(|point| point.value.is_some_and(|value| value.is_finite()))
             }),
             |this, history| {
-                this.child(chart::render(
+                this.child(charts.render(
                     vec![Series {
                         label: None,
                         samples: history.iter().copied().collect(),
-                        color: style::TEXT_PRIMARY,
+                        color: accent.unwrap_or(style::TEXT_PRIMARY),
                         dashed: false,
                     }],
-                    Some(100.0),
+                    charts.percent(
+                        &format!("gpu-{}", gpu.id),
+                        format!(
+                            "GPU · {}",
+                            if gpu.name.is_empty() {
+                                &gpu.id
+                            } else {
+                                &gpu.name
+                            }
+                        ),
+                    ),
                 ))
             },
         )
         .when_some(gpu.memory_used_bytes, |this, used| {
             this.child(fact(
-                "VRAM used",
+                "Memory used",
                 gpu.memory_total_bytes.map_or_else(
                     || bytes(used),
                     |total| format!("{} / {}", bytes(used), bytes(total)),
@@ -491,7 +546,7 @@ fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
         })
         .when(gpu.memory_used_bytes.is_none(), |this| {
             this.when_some(gpu.memory_total_bytes, |this, total| {
-                this.child(fact("VRAM", bytes(total)))
+                this.child(fact("Memory", bytes(total)))
             })
         })
         .when_some(gpu.temperature_celsius, |this, temperature| {
@@ -506,14 +561,14 @@ fn gpu_card(state: &MachineState, gpu: &GpuSample) -> Div {
                     div()
                         .text_size(rems(style::META / 16.0))
                         .text_color(rgb(style::TEXT_MUTED))
-                        .child("Utilization telemetry is unsupported by this adapter or driver."),
+                        .child("Telemetry unavailable for this sample."),
                 )
             },
         )
 }
 pub(crate) fn render(
     app: &Crabdash,
-    window: &Window,
+    window: &mut Window,
     cx: &mut Context<Crabdash>,
     pane_width: Pixels,
 ) -> Stateful<Div> {
@@ -526,6 +581,7 @@ pub(crate) fn render(
     } else {
         1
     };
+    let accent = crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx);
     let machine = app.selected_machine();
     let state = app.system.machines.get(&machine.uuid);
     let info = &machine.system_info;
@@ -548,18 +604,42 @@ pub(crate) fn render(
     if let Some(state) = state
         && let Some(usage) = &state.usage
     {
-        let mut cpu = cpu_card(state, usage).col_span(if columns == 3 { 2 } else { 1 });
-        let mut memory = memory_card(state, usage);
+        let inspect = !cx.has_active_drag()
+            && !app.preferences_open
+            && !app.add_machine_modal_open
+            && app.machine_rename.target.is_none()
+            && !app.docker_run_modal_open
+            && app.docker_removal.is_none()
+            && !app.workspaces.open
+            && app.open_menu.is_none();
+        let mut charts = Charts {
+            machine: machine.uuid,
+            inspect,
+            window,
+            cx,
+        };
+        let mut cpu = cpu_card(
+            app,
+            state,
+            usage,
+            cores::card_width(width, columns),
+            accent,
+            &mut charts,
+        )
+        .col_span(if columns == 3 { 2 } else { 1 });
+        let mut memory = memory_card(state, usage, accent, &mut charts);
         if columns > 1 {
             // Auto-height grid cards stretch only in this shared top row.
             cpu.style().align_self = Some(AlignSelf::Stretch);
-            memory.style().align_self = Some(AlignSelf::Stretch);
+            if !(usage.cores.len() > 8 && app.system.cores.expanded(machine.uuid)) {
+                memory.style().align_self = Some(AlignSelf::Stretch);
+            }
         }
         mosaic = mosaic
             .child(cpu)
             .child(memory)
-            .child(network_card(state, usage))
-            .child(disk_card(state, usage));
+            .child(network_card(app, state, usage, accent, &mut charts))
+            .child(disk_card(app, state, usage, accent, &mut charts));
         let machine = card()
             .child(heading("Machine", String::new(), String::new()))
             .child(machine_fact("Name", info.machine_name.clone()))
@@ -567,7 +647,10 @@ pub(crate) fn render(
             .child(machine_fact("Kernel", info.os_version.clone()))
             .child(machine_fact("Architecture", info.arch.clone()));
         let graphics: Vec<Div> = match &usage.gpus {
-            Some(gpus) if !gpus.is_empty() => gpus.iter().map(|gpu| gpu_card(state, gpu)).collect(),
+            Some(gpus) if !gpus.is_empty() => gpus
+                .iter()
+                .map(|gpu| gpu_card(state, gpu, accent, &mut charts))
+                .collect(),
             Some(_) => vec![card().child(heading(
                 "Graphics",
                 "Unavailable".into(),
@@ -576,7 +659,7 @@ pub(crate) fn render(
             None => vec![card().child(heading(
                 "Graphics",
                 "Unavailable".into(),
-                "GPU probing is unsupported on this machine.".into(),
+                "GPU information is unavailable for this sample.".into(),
             ))],
         };
         if columns == 3 {

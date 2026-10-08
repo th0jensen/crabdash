@@ -68,6 +68,11 @@ impl MachineStore {
             self.machines.iter().all(|machine| ids.insert(machine.uuid)),
             "The machine store contains duplicate identifiers"
         );
+        for machine in &self.machines {
+            if let Some(alias) = &machine.alias {
+                crate::machine::validated_display_name(alias)?;
+            }
+        }
         Ok(())
     }
 
@@ -104,6 +109,26 @@ impl MachineStore {
     /// and connection configuration written by other operations.
     pub async fn update_system_info(uuid: Uuid, info: SystemInfo, kind: MachineKind) -> Result<()> {
         Self::update_system_info_at(&machines_file_path()?, uuid, info, kind).await
+    }
+
+    /// Rename only the display alias in the latest store, including localhost.
+    pub async fn rename_machine(uuid: Uuid, name: &str) -> Result<()> {
+        Self::rename_at(&machines_file_path()?, uuid, name).await
+    }
+
+    async fn rename_at(path: &Path, uuid: Uuid, name: &str) -> Result<()> {
+        let alias = crate::machine::validated_display_name(name)?;
+        Self::mutate(path, move |store| {
+            let machine = store
+                .machines
+                .iter_mut()
+                .find(|machine| machine.uuid == uuid)
+                .ok_or_else(|| anyhow!("The machine being renamed was removed"))?;
+            machine.alias = Some(alias);
+            Ok(())
+        })
+        .await?;
+        Ok(())
     }
 
     async fn update_system_info_at(
@@ -401,6 +426,85 @@ mod tests {
             assert!(matches!(current.machines[0].kind, MachineKind::Linux));
             assert_eq!(current.machines[0].docker_path.as_deref(), Some(cli_path));
             assert_eq!(current.machines[0].id, store.machines[0].id);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn rename_survives_concurrent_refresh_and_preserves_connection_identity() -> Result<()> {
+        smol::block_on(async {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            let mut store = MachineStore::load_from(&path).await?;
+            let local = store.machines[0].uuid;
+            let mut remote = machine("operator@example.invalid");
+            let mut connection = crate::remote_connection::RemoteConnection::default();
+            connection.user = "operator".into();
+            connection.host = "example.invalid".into();
+            remote.remote = Some(connection);
+            let uuid = remote.uuid;
+            store.create_at(&path, remote).await?;
+            let mut before = serde_json::to_value(&store.machines[1])?;
+            MachineStore::rename_at(&path, uuid, "  Office server  ").await?;
+            let reloaded = MachineStore::load_from(&path).await?;
+            before["alias"] = serde_json::json!("Office server");
+            assert_eq!(serde_json::to_value(&reloaded.machines[1])?, before);
+            let info = SystemInfo {
+                machine_name: "changed hostname".into(),
+                os_version: "Linux 7.2".into(),
+                arch: "aarch64".into(),
+                distribution: None,
+            };
+            let (rename, refresh) = smol::future::zip(
+                MachineStore::rename_at(&path, local, "My computer"),
+                MachineStore::update_system_info_at(&path, local, info.clone(), MachineKind::Linux),
+            )
+            .await;
+            rename?;
+            refresh?;
+            let current = MachineStore::load_from(&path).await?;
+            assert_eq!(current.machines[0].display_name(), "My computer");
+            assert_eq!(current.machines[0].id, "localhost");
+            assert!(current.machines[0].remote.is_none());
+            assert_eq!(current.machines[0].system_info, info);
+            assert_eq!(current.machines[1].display_name(), "Office server");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn rename_follows_uuid_after_reordering_and_rejects_deleted_or_invalid_targets() -> Result<()> {
+        smol::block_on(async {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            let mut store = MachineStore::load_from(&path).await?;
+            let original = store.machines[0].uuid;
+            store.create_at(&path, machine("second")).await?;
+            store.machines.reverse();
+            store.save_unlocked(&path).await?;
+            MachineStore::rename_at(&path, original, "Renamed local").await?;
+            let current = MachineStore::load_from(&path).await?;
+            assert_eq!(current.machines[0].id, "second");
+            assert!(current.machines[0].alias.is_none());
+            assert_eq!(current.machines[1].uuid, original);
+            assert_eq!(current.machines[1].display_name(), "Renamed local");
+            let before = fs::read(&path).await?;
+            for name in [" ", "bad\nname"] {
+                assert!(
+                    MachineStore::rename_at(&path, original, name)
+                        .await
+                        .is_err()
+                );
+                assert_eq!(fs::read(&path).await?, before);
+            }
+            MachineStore::remove_at(&path, original).await?;
+            let before = fs::read(&path).await?;
+            assert!(
+                MachineStore::rename_at(&path, original, "Deleted")
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fs::read(&path).await?, before);
             Ok(())
         })
     }

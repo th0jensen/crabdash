@@ -2,7 +2,9 @@
 mod chart;
 mod clock;
 mod controller;
+mod cores;
 mod history;
+mod inventory;
 #[cfg(test)]
 use history::HISTORY_LIMIT;
 use history::{HistoryPoint, ScalarPoint, append};
@@ -508,6 +510,8 @@ pub(crate) struct State {
     requests: Requests,
     clock: clock::SamplingClock,
     pub machines: HashMap<Uuid, MachineState>,
+    inventory: inventory::State,
+    cores: cores::State,
     visible_machine: Option<Uuid>,
     status: status::Tracker,
     pub processes: Option<processes::State>,
@@ -547,6 +551,8 @@ impl State {
     pub(crate) fn remove(&mut self, uuid: Uuid) {
         self.requests.forget(&uuid);
         self.machines.remove(&uuid);
+        self.inventory.remove(uuid);
+        self.cores.remove(uuid);
         if self.visible_machine == Some(uuid) {
             self.visible_machine = None;
         }

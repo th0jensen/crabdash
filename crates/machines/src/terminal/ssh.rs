@@ -106,16 +106,8 @@ async fn run_remote_terminal(
                             }
                             break;
                         }
-                        if let Err(error) = tokio::io::AsyncWriteExt::flush(&mut channel).await {
-                            if events
-                                .send(TerminalEvent::Error(format!("SSH terminal flush failed: {error}")))
-                                .await
-                                .is_err()
-                            {
-                                tracing::debug!("Terminal event receiver closed after SSH flush failure");
-                            }
-                            break;
-                        }
+                        // ssh2's flush discards received output; completed
+                        // writes need no flush and stdin stays open for typing.
                     }
                     Ok(TerminalCommand::Resize(size)) => {
                         if let Err(error) = channel
@@ -175,3 +167,6 @@ async fn run_remote_terminal(
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests;

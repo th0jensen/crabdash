@@ -85,6 +85,7 @@ pub struct Crabdash {
     pub(crate) sidebar_width: Pixels,
     pub(crate) status_message: Option<String>,
     pub(crate) add_machine_modal_open: bool,
+    pub(crate) machine_rename: features::machines::rename::Editor,
     pub(crate) preferences_open: bool,
     pub(crate) preferences: crate::features::preferences::Preferences,
     pub(crate) preference_editor: preferences::Editor,
@@ -102,9 +103,11 @@ pub struct Crabdash {
     pub(crate) logs_open_services: HashSet<(Uuid, String)>,
     pub(crate) docker_scroll_handle: ScrollHandle,
     pub(crate) disks_scroll_handle: ScrollHandle,
-    pub(crate) quake_terminals: HashMap<Uuid, features::terminal::QuakeTerminal>,
+    pub(crate) quake_terminals: HashMap<Uuid, features::terminal::Drawer>,
     pub(crate) quake_terminal_open: bool,
     pub(crate) quake_height: Pixels,
+    pub(crate) quake_resize_anchor: Option<(Pixels, Pixels)>,
+    pub(crate) quake_resize: Option<features::terminal::height::Draft>,
     pub(crate) docker_run_config: DockerRunConfig,
     pub(crate) docker_run_modal_open: bool,
     pub(crate) docker_removal: Option<features::docker::DockerRemoval>,
@@ -212,6 +215,7 @@ impl Crabdash {
             sidebar_width,
             status_message,
             add_machine_modal_open: false,
+            machine_rename: features::machines::rename::Editor::new(cx),
             preferences_open: false,
             preferences: settings.clone(),
             preference_editor,
@@ -231,11 +235,14 @@ impl Crabdash {
             disks_scroll_handle: ScrollHandle::new(),
             quake_terminals: HashMap::default(),
             quake_terminal_open: false,
-            quake_height: px(crate::components::style::BAR * settings.interface_font_size
-                / crate::components::style::TEXT
-                + 26.0
-                + f32::from(settings.terminal_rows)
-                    * (settings.terminal_font_size * settings.terminal_line_height).ceil()),
+            quake_resize_anchor: None,
+            quake_resize: None,
+            quake_height: features::terminal::quake_height_for_rows(
+                settings.terminal_rows,
+                (settings.terminal_font_size * settings.terminal_line_height).ceil(),
+                crate::components::style::BAR * settings.interface_font_size
+                    / crate::components::style::TEXT,
+            ),
             docker_run_config: DockerRunConfig::new(cx),
             docker_run_modal_open: false,
             docker_removal: None,
@@ -254,12 +261,8 @@ impl Crabdash {
         };
         app.start_update_loop(cx);
         cx.on_release(|app, _| {
-            for terminal in app.quake_terminals.values() {
-                if let Some(controller) = &terminal.controller
-                    && let Err(error) = controller.shutdown()
-                {
-                    tracing::debug!(%error, "Failed to shut down a released dashboard terminal");
-                }
+            for drawer in app.quake_terminals.values() {
+                drawer.shutdown();
             }
         })
         .detach();
@@ -272,7 +275,9 @@ impl Crabdash {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.add_machine_modal_open {
+        if self.machine_rename.target.is_some() {
+            self.save_machine_rename(window, cx);
+        } else if self.add_machine_modal_open {
             self.submit_add_machine(window, cx);
         } else if self.workspaces.open
             && self.workspaces.rename.is_some()
@@ -297,8 +302,13 @@ impl Crabdash {
         cx: &mut Context<Self>,
     ) {
         if cx.stop_active_drag(window) {
+            let terminal_resized = self.settle_quake_resize(cx.entity_id());
             self.workspaces.drag_target = None;
-            if self.workspaces.resizing_split.take().is_some() {
+            self.quake_resize_anchor = None;
+            for drawer in self.quake_terminals.values_mut() {
+                drawer.cancel_drag();
+            }
+            if self.workspaces.resizing_split.take().is_some() || terminal_resized {
                 // A divider changes the current ratio as it moves. Finish
                 // that resize on Escape; tab drags have no pending mutation.
                 self.persist_workspace(cx);
@@ -318,6 +328,9 @@ impl Crabdash {
             }
             self.preferences_open = false;
         } else if self.docker_removal.take().is_some() {
+        } else if self.machine_rename.target.is_some() {
+            self.close_machine_rename(window, cx);
+            return;
         } else if self.add_machine_modal_open {
             self.close_add_machine_modal(window, cx);
             return;
@@ -342,6 +355,9 @@ impl Render for Crabdash {
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
         ));
         self.apply_workspace_runtime(window, cx);
+        self.reconcile_quake_resize(window, cx);
+        self.reconcile_terminal_rename(window, cx);
+        self.reconcile_terminal_selection(window, cx);
         #[cfg(target_os = "macos")]
         self.synchronize_native_shell(window, cx);
         self.prepare_visible_domains(cx);
@@ -356,6 +372,18 @@ impl Render for Crabdash {
             })
             .text_size(gpui::rems(crate::components::style::TEXT / 16.0))
             .track_focus(&self.focus_handle)
+            .map(|root| features::terminal::decorate(root, self, window, cx))
+            .map(|root| features::terminal::height::decorate(root, self, cx))
+            .capture_action(cx.listener(
+                |this, _: &crate::components::terminal_input::TerminalEscape, window, cx| {
+                    if cx.has_active_drag() {
+                        this.dismiss_modal_action(&DismissModal, window, cx);
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                },
+            ))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && cx.has_active_drag() {
                     this.dismiss_modal_action(&DismissModal, window, cx);
@@ -396,7 +424,9 @@ impl Render for Crabdash {
                     Some(0)
                 };
                 this.menu_item = 0;
-                window.focus(&this.focus_handle);
+                if window.focused(cx).is_none() {
+                    window.focus(&this.focus_handle);
+                }
                 cx.notify();
             }))
             .on_modifiers_changed(cx.listener(|_, _: &ModifiersChangedEvent, _, cx| {
@@ -494,6 +524,9 @@ impl Render for Crabdash {
             .when(self.add_machine_modal_open, |this| {
                 this.child(modal::render(self, cx))
             })
+            .when(self.machine_rename.target.is_some(), |this| {
+                this.child(features::machines::rename::render(self, cx))
+            })
             .when(self.docker_run_modal_open, |this| {
                 this.child(features::docker::run_modal::render(self, window, cx))
             })
@@ -501,12 +534,20 @@ impl Render for Crabdash {
                 this.child(features::docker::remove_modal::render(self, cx))
             });
         #[cfg(target_os = "macos")]
-        let root = root.when(
-            crate::desktop::shell::is_native(self)
-                && self.workspaces.open
-                && !crate::desktop::shell::macos_popup_blocked(self),
-            |this| this.child(features::workspaces::native_popup(self, window, cx)),
-        );
+        let root = root
+            .when(crate::desktop::shell::is_native(self), |this| {
+                this.child(crate::desktop::appearance::toolbar_separator())
+            })
+            .when(
+                crate::desktop::shell::is_native(self) && !self.sidebar_collapsed,
+                |this| this.child(crate::desktop::appearance::sidebar_separator()),
+            )
+            .when(
+                crate::desktop::shell::is_native(self)
+                    && self.workspaces.open
+                    && !crate::desktop::shell::macos_popup_blocked(self),
+                |this| this.child(features::workspaces::native_popup(self, window, cx)),
+            );
         crate::desktop::appearance::frame(root, window)
     }
 }

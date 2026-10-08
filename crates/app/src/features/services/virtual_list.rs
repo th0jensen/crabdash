@@ -11,6 +11,7 @@ pub(super) struct Metrics {
     pub interface_font: String,
     pub interface_size: u32,
     pub log_line_height: u32,
+    pub action_width: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -315,6 +316,10 @@ mod tests {
             },
             Metrics {
                 log_line_height: 24.0_f32.to_bits(),
+                ..Metrics::default()
+            },
+            Metrics {
+                action_width: 120.0_f32.to_bits(),
                 ..Metrics::default()
             },
         ] {

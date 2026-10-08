@@ -1,8 +1,9 @@
 use crate::app::Crabdash;
 use crate::components::{
-    common::{clipped_text, control_tooltip, lucide_icon, surface_button},
+    common::{clipped_text, control_tooltip, lucide_icon, surface_button, surface_icon_button},
     style,
 };
+use crate::desktop::controls;
 use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 
@@ -184,6 +185,57 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .rename
                 .as_ref()
                 .is_some_and(|draft| draft.id == id);
+            let mut actions = Vec::new();
+            if editing {
+                actions.push(
+                    surface_icon_button(
+                        SharedString::from(format!("save-workspace-name-{id}")),
+                        Icon::Check,
+                        "Save workspace name",
+                    )
+                    .tooltip(|_, cx| control_tooltip("Save workspace name", cx))
+                    .when(read_only, disabled)
+                    .when(!read_only, |this| {
+                        this.on_click(cx.listener(|app, _, window, cx| {
+                            app.finish_workspace_name(window, cx);
+                            cx.stop_propagation();
+                        }))
+                    }),
+                );
+            } else {
+                actions.push(
+                    surface_icon_button(
+                        SharedString::from(format!("rename-workspace-{id}")),
+                        Icon::Pencil,
+                        "Rename workspace",
+                    )
+                    .tooltip(|_, cx| control_tooltip("Rename workspace", cx))
+                    .when(read_only, disabled)
+                    .when(!read_only, |this| {
+                        this.on_click(cx.listener(move |app, _, window, cx| {
+                            app.rename_workspace(id, window, cx);
+                            cx.stop_propagation();
+                        }))
+                    }),
+                );
+                if app.workspaces.store.workspaces.len() > 1 {
+                    actions.push(
+                        surface_icon_button(
+                            SharedString::from(format!("remove-workspace-{id}")),
+                            Icon::Trash2,
+                            "Delete saved workspace",
+                        )
+                        .tooltip(|_, cx| control_tooltip("Delete saved workspace", cx))
+                        .when(read_only, disabled)
+                        .when(!read_only, |this| {
+                            this.on_click(cx.listener(move |app, _, window, cx| {
+                                app.remove_workspace(id, window, cx);
+                                cx.stop_propagation();
+                            }))
+                        }),
+                    );
+                }
+            }
             div()
                 .id(SharedString::from(format!("workspace-{id}")))
                 .w_full()
@@ -215,59 +267,14 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .when(!editing, |this| {
                     this.child(clipped_text(workspace.name.clone()).flex_1())
                 })
-                .when(editing, |this| {
-                    this.child(
-                        surface_button(
-                            SharedString::from(format!("save-workspace-name-{id}")),
-                            Some(Icon::Check),
-                            None,
-                        )
-                        .when(read_only, disabled)
-                        .when(!read_only, |this| {
-                            this.on_click(cx.listener(|app, _, window, cx| {
-                                app.finish_workspace_name(window, cx);
-                                cx.stop_propagation();
-                            }))
-                        }),
-                    )
-                })
-                .when(!editing, |this| {
-                    this.child(
-                        surface_button(
-                            SharedString::from(format!("rename-workspace-{id}")),
-                            Some(Icon::Pencil),
-                            None,
-                        )
-                        .tooltip(|_, cx| control_tooltip("Rename workspace", cx))
-                        .when(read_only, disabled)
-                        .when(!read_only, |this| {
-                            this.on_click(cx.listener(move |app, _, window, cx| {
-                                app.rename_workspace(id, window, cx);
-                                cx.stop_propagation();
-                            }))
-                        }),
-                    )
-                })
-                .when(
-                    !editing && app.workspaces.store.workspaces.len() > 1,
-                    |this| {
-                        this.child(
-                            surface_button(
-                                SharedString::from(format!("remove-workspace-{id}")),
-                                Some(Icon::Trash2),
-                                None,
-                            )
-                            .tooltip(|_, cx| control_tooltip("Delete saved workspace", cx))
-                            .when(read_only, disabled)
-                            .when(!read_only, |this| {
-                                this.on_click(cx.listener(move |app, _, window, cx| {
-                                    app.remove_workspace(id, window, cx);
-                                    cx.stop_propagation();
-                                }))
-                            }),
-                        )
-                    },
-                )
+                .child(controls::action_group(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(rems(6.0 / 16.0)),
+                    actions,
+                ))
                 .on_click(cx.listener(move |app, _, window, cx| {
                     if editing {
                         return;
@@ -309,16 +316,16 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
                 .justify_between()
                 .child(div().font_weight(FontWeight::SEMIBOLD).child("Workspaces"))
                 .child(
-                    surface_button("workspace-close", Some(Icon::X), None).on_click(cx.listener(
-                        |app, _, window, cx| {
+                    surface_icon_button("workspace-close", Icon::X, "Close workspaces")
+                        .tooltip(|_, cx| control_tooltip("Close workspaces", cx))
+                        .on_click(cx.listener(|app, _, window, cx| {
                             app.workspaces.open = false;
                             app.workspaces.rename = None;
                             app.workspaces.rename_error = None;
                             app.workspaces.pending_rename_focus = true;
                             app.apply_workspace_runtime(window, cx);
                             cx.notify();
-                        },
-                    )),
+                        })),
                 ),
         )
         .child(
@@ -388,8 +395,10 @@ fn popup(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> Statefu
         )
 }
 
-fn disabled(control: Stateful<Div>) -> Stateful<Div> {
-    control
+fn disabled(
+    control: crate::desktop::controls::SurfaceControl,
+) -> crate::desktop::controls::SurfaceControl {
+    let control = control
         .cursor_default()
         .text_color(rgb(style::TEXT_MUTED))
         .opacity(0.5)
@@ -397,5 +406,6 @@ fn disabled(control: Stateful<Div>) -> Stateful<Div> {
             this.bg(rgb(style::SURFACE))
                 .text_color(rgb(style::TEXT_MUTED))
         })
-        .on_click(|_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.stop_propagation());
+    crate::desktop::controls::enabled(control, false)
 }

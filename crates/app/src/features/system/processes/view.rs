@@ -1,6 +1,6 @@
 //! The full sampled process inventory has one virtualized, responsive browser.
 use super::super::view::{bytes, card, heading};
-use super::Column;
+use super::{Column, user_name};
 use crate::{
     app::Crabdash,
     components::{
@@ -39,7 +39,7 @@ fn process_heading(
     }))
 }
 fn process_identity(process: &ProcessUsage) -> Stateful<Div> {
-    let tooltip = process.user.as_ref().map_or_else(
+    let tooltip = user_name(process).map_or_else(
         || format!("Name: {}", process.name),
         |user| format!("Name: {}\nUser: {user}", process.name),
     );
@@ -52,7 +52,57 @@ fn process_identity(process: &ProcessUsage) -> Stateful<Div> {
         .min_w_0()
         .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
 }
-fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
+fn process_user(process: &ProcessUsage) -> Stateful<Div> {
+    let user = user_name(process).unwrap_or("—").to_string();
+    let tooltip = user_name(process)
+        .map_or("User unavailable", |user| user)
+        .to_string();
+    clipped_text(user)
+        .id(SharedString::from(format!(
+            "process-user-{}-{}",
+            process.pid, process.start_id
+        )))
+        .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
+}
+fn process_value(process: &ProcessUsage, field: &str, value: String) -> Stateful<Div> {
+    let tooltip = value.clone();
+    clipped_text(value)
+        .id(SharedString::from(format!(
+            "process-{field}-{}-{}",
+            process.pid, process.start_id
+        )))
+        .tooltip(move |_, cx| control_tooltip(tooltip.clone(), cx))
+}
+
+#[derive(Clone, Copy)]
+struct CompactColumns {
+    pid: f32,
+    memory: f32,
+    gap: f32,
+    inset: f32,
+}
+
+impl CompactColumns {
+    fn for_width(width: f32) -> Self {
+        if width < 320.0 {
+            Self {
+                pid: 44.0,
+                memory: 80.0,
+                gap: 4.0,
+                inset: 6.0,
+            }
+        } else {
+            Self {
+                pid: 88.0,
+                memory: 88.0,
+                gap: 8.0,
+                inset: 12.0,
+            }
+        }
+    }
+}
+
+fn process_row(process: &ProcessUsage, compact: bool, columns: CompactColumns) -> Stateful<Div> {
     let cpu = process
         .cpu_percent
         .filter(|value| value.is_finite())
@@ -74,7 +124,7 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
             div()
                 .w_full()
                 .min_w_0()
-                .px(px(12.0))
+                .px(px(columns.inset))
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
@@ -83,7 +133,7 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
                         .w_full()
                         .min_w_0()
                         .flex()
-                        .gap(px(8.0))
+                        .gap(px(columns.gap))
                         .child(process_identity(process))
                         .child(
                             fixed_column(64.0)
@@ -100,15 +150,23 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
                         .text_size(rems(style::META / 16.0))
                         .text_color(rgb(style::TEXT_MUTED))
                         .child(
-                            div()
-                                .flex_none()
+                            fixed_column(columns.pid)
+                                .flex_shrink()
                                 .whitespace_nowrap()
-                                .child(format!("PID {}", process.pid)),
+                                .child(process_value(process, "pid", process.pid.to_string())),
+                        )
+                        .gap(px(columns.gap))
+                        .child(
+                            process_user(process)
+                                .w(rems(64.0 / 16.0))
+                                .flex_auto()
+                                .min_w_0(),
                         )
                         .child(
-                            fixed_column(88.0)
+                            fixed_column(columns.memory)
+                                .flex_shrink()
                                 .whitespace_nowrap()
-                                .child(clipped_text(memory)),
+                                .child(process_value(process, "memory", memory)),
                         ),
                 )
         } else {
@@ -118,9 +176,10 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
                     fixed_column(88.0)
                         .whitespace_nowrap()
                         .text_color(rgb(style::TEXT_MUTED))
-                        .child(clipped_text(process.pid.to_string())),
+                        .child(process_value(process, "pid", process.pid.to_string())),
                 )
                 .child(process_identity(process))
+                .child(fixed_column(96.0).child(process_user(process)))
                 .child(
                     fixed_column(64.0)
                         .whitespace_nowrap()
@@ -129,7 +188,7 @@ fn process_row(process: &ProcessUsage, compact: bool) -> Stateful<Div> {
                 .child(
                     fixed_column(88.0)
                         .whitespace_nowrap()
-                        .child(clipped_text(memory)),
+                        .child(process_value(process, "memory", memory)),
                 )
         })
 }
@@ -190,10 +249,7 @@ pub(crate) fn render(
         })
         .child(state.search.render().w_full().min_w_0());
     if count == 0 {
-        let fields = if processes
-            .iter()
-            .any(|process| process.user.as_ref().is_some_and(|user| !user.is_empty()))
-        {
+        let fields = if processes.iter().any(|process| user_name(process).is_some()) {
             "name, PID, or user"
         } else {
             "name or PID"
@@ -242,13 +298,16 @@ pub(crate) fn render(
                 }),
         );
     }
-    let compact = width < 460.0;
+    let compact = width < 600.0;
+    let columns = CompactColumns::for_width(width);
     let heading_row = if compact {
         div()
             .flex()
             .flex_col()
             .child(
                 table::table_heading()
+                    .px(px(columns.inset))
+                    .gap(px(columns.gap))
                     .child(div().flex_1().min_w_0().child(process_heading(
                         app,
                         Column::Name,
@@ -259,18 +318,31 @@ pub(crate) fn render(
             )
             .child(
                 table::table_heading()
-                    .child(div().flex_1().min_w_0().child(process_heading(
-                        app,
-                        Column::Pid,
-                        "PID",
-                        cx,
-                    )))
-                    .child(fixed_column(88.0).child(process_heading(
-                        app,
-                        Column::Memory,
-                        "Memory",
-                        cx,
-                    ))),
+                    .px(px(columns.inset))
+                    .gap(px(columns.gap))
+                    .child(
+                        fixed_column(columns.pid).flex_shrink().child(
+                            process_heading(app, Column::Pid, "PID", cx)
+                                .when(width < 320.0, |this| this.gap(px(2.0))),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .w(rems(64.0 / 16.0))
+                            .flex_auto()
+                            .min_w_0()
+                            .child(process_heading(app, Column::User, "User", cx)),
+                    )
+                    .child(
+                        fixed_column(columns.memory)
+                            .flex_shrink()
+                            .child(process_heading(
+                                app,
+                                Column::Memory,
+                                if width < 320.0 { "RAM" } else { "Memory" },
+                                cx,
+                            )),
+                    ),
             )
     } else {
         table::table_heading()
@@ -281,6 +353,7 @@ pub(crate) fn render(
                     .min_w_0()
                     .child(process_heading(app, Column::Name, "Name", cx)),
             )
+            .child(fixed_column(96.0).child(process_heading(app, Column::User, "User", cx)))
             .child(fixed_column(64.0).child(process_heading(app, Column::Cpu, "CPU", cx)))
             .child(fixed_column(88.0).child(process_heading(app, Column::Memory, "Memory", cx)))
     };
@@ -288,7 +361,7 @@ pub(crate) fn render(
     let list = uniform_list("system-process-list", count, move |range, _, _| {
         range
             .filter_map(|index| prepared.row(index))
-            .map(|process| process_row(process, compact))
+            .map(|process| process_row(process, compact, columns))
             .collect::<Vec<_>>()
     })
     .size_full()

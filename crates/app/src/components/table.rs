@@ -236,8 +236,8 @@ pub(crate) fn filter_chip(
     label: &str,
     count: usize,
     active: bool,
-) -> Stateful<Div> {
-    div()
+) -> crate::desktop::controls::SurfaceControl {
+    let fallback = div()
         .id(id)
         .h(rems(style::CONTROL / 16.0))
         .flex_none()
@@ -277,19 +277,46 @@ pub(crate) fn filter_chip(
                     style::TEXT_PRIMARY
                 }))
                 .child(count.to_string()),
-        )
+        );
+    crate::desktop::controls::selected_button(fallback, format!("{label} {count}"), None, active)
 }
 
-pub(crate) fn status_label(label: impl Into<SharedString>, color: Rgba) -> Div {
-    div()
+pub(crate) fn status_label(
+    label: impl Into<SharedString>,
+    color: Rgba,
+) -> crate::desktop::controls::StatusControl {
+    let label = label.into();
+    let semantic = [style::SUCCESS, style::WARNING, style::DANGER]
+        .into_iter()
+        .any(|state| color == rgb(state));
+    let tint = Rgba {
+        a: color.a * style::STATE_TINT_ALPHA,
+        ..color
+    };
+    let foreground = if semantic {
+        rgb(crate::components::contrast::tinted_text(
+            [f64::from(color.r), f64::from(color.g), f64::from(color.b)],
+            f64::from(tint.a),
+            style::SURFACE,
+        ))
+    } else {
+        color
+    };
+    let fallback = div()
         .flex()
         .items_center()
         .justify_center()
         .gap(px(5.0))
         .text_size(rems(style::META / 16.0))
-        .text_color(color)
-        .child(div().size(px(5.0)).rounded_full().bg(color))
-        .child(label.into())
+        .text_color(foreground)
+        .when(semantic, |pill| {
+            pill.bg(tint).rounded_full().px(px(8.0)).py(px(4.0))
+        })
+        .when(!semantic, |pill| {
+            pill.child(div().size(px(5.0)).rounded_full().bg(color))
+        })
+        .child(label.clone());
+    crate::desktop::controls::status(fallback, label, color, semantic)
 }
 
 pub(crate) struct Search {
@@ -317,7 +344,9 @@ impl Search {
         cx: &mut Context<crate::app::Crabdash>,
     ) -> Self {
         let field = cx.new(|cx| {
-            crate::components::text_field::TextField::new("", placeholder, 0, cx).compact()
+            crate::components::text_field::TextField::new("", placeholder, 0, cx)
+                .compact()
+                .native_search()
         });
         let mut previous_query = String::new();
         let changes = cx.observe(&field, move |this, field, cx| {

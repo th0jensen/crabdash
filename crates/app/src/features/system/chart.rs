@@ -1,8 +1,12 @@
 //! Resource histories use elapsed capture time, including gaps in sampling.
+mod hover;
 use super::ScalarPoint;
-use crate::components::style;
+use crate::components::{common::clipped_text, style};
 use gpui::{prelude::*, *};
-use std::time::{Duration, Instant};
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 pub(super) struct Series {
     pub label: Option<&'static str>,
@@ -40,6 +44,31 @@ fn elapsed_label(duration: Duration) -> String {
     }
 }
 
+fn known_value(sample: &ScalarPoint) -> Option<f64> {
+    sample
+        .value
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn scale_maximum(series: &[Series], fixed_max: Option<f64>) -> Option<f64> {
+    fixed_max
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            series
+                .iter()
+                .flat_map(|series| &series.samples)
+                .filter_map(known_value)
+                .reduce(f64::max)
+                // A floor gives known idle history a usable plotting range.
+                // It is an axis limit, never a reported measurement or peak.
+                .map(|value| value.max(1.0))
+        })
+}
+
+fn scale_label(maximum: f64, format_maximum: fn(f64) -> String) -> String {
+    format!("0–{}", format_maximum(maximum))
+}
+
 fn projected_segments(
     samples: &[ScalarPoint],
     start: Instant,
@@ -48,7 +77,7 @@ fn projected_segments(
 ) -> impl Iterator<Item = (Point<f32>, Point<f32>)> + '_ {
     let mut previous: Option<(Instant, Point<f32>)> = None;
     samples.iter().filter_map(move |sample| {
-        let Some(value) = sample.value.filter(|value| value.is_finite()) else {
+        let Some(value) = known_value(sample) else {
             previous = None;
             return None;
         };
@@ -109,7 +138,29 @@ fn swatch(color: u32, dashed: bool) -> impl IntoElement {
     .flex_none()
 }
 
-pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
+pub(super) struct Settings {
+    pub id: SharedString,
+    pub caption: String,
+    pub fixed_max: Option<f64>,
+    pub format_maximum: fn(f64) -> String,
+    pub format_value: fn(f64) -> String,
+    pub inspect: bool,
+}
+
+pub(super) fn render(
+    series: Vec<Series>,
+    settings: Settings,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let Settings {
+        id,
+        caption,
+        fixed_max,
+        format_maximum,
+        format_value,
+        inspect,
+    } = settings;
     let start = series
         .iter()
         .flat_map(|series| &series.samples)
@@ -121,16 +172,15 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
         .map(|sample| sample.captured_at)
         .max();
     let range = start.zip(end).filter(|(start, end)| end > start);
-    let maximum = fixed_max
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| {
-            series
-                .iter()
-                .flat_map(|series| &series.samples)
-                .filter_map(|sample| sample.value)
-                .filter(|value| value.is_finite())
-                .fold(1.0_f64, f64::max)
-        });
+    let maximum = scale_maximum(&series, fixed_max);
+    let has_known_values = series
+        .iter()
+        .flat_map(|series| &series.samples)
+        .any(|sample| known_value(sample).is_some());
+    let footer_range = range.filter(|_| has_known_values);
+    let scale_text = footer_range
+        .and(maximum)
+        .map(|maximum| scale_label(maximum, format_maximum));
     let legend = div()
         .w_full()
         .min_w_0()
@@ -148,16 +198,23 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
             })
         }));
     let has_legend = series.iter().any(|series| series.label.is_some());
+    let data = Rc::new(hover::Dataset {
+        series,
+        caption,
+        format: format_value,
+    });
+    let readout = hover::state(id.clone(), data.clone(), inspect, window, cx);
+    let measure = readout.clone();
     let plot = canvas(
-        |_, _, _| (),
+        move |bounds, window, cx| hover::measure(&measure, bounds, inspect, window, cx),
         move |bounds, _, window, _| {
             if !paint_is_visible(bounds, window.content_mask().bounds) {
                 return;
             }
-            let Some((start, end)) = range else {
+            let Some(((start, end), maximum)) = range.zip(maximum) else {
                 return;
             };
-            for series in &series {
+            for series in &data.series {
                 let mut path = PathBuilder::stroke(px(1.5));
                 let position = |value: Point<f32>| {
                     point(
@@ -177,6 +234,7 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
     .w_full()
     .h(rems(56.0 / 16.0))
     .flex_none();
+    let plot = hover::inspect(plot, id, readout, inspect, cx);
     div()
         .w_full()
         .min_w_0()
@@ -191,19 +249,27 @@ pub(super) fn render(series: Vec<Series>, fixed_max: Option<f64>) -> Div {
         .child(
             div()
                 .w_full()
+                .min_w_0()
                 .flex()
                 .justify_between()
-                .when_some(range, |this, (start, end)| {
+                .gap(rems(8.0 / 16.0))
+                .when_some(footer_range, |this, (start, end)| {
                     this.child(elapsed_label(end.saturating_duration_since(start)))
+                        .when_some(scale_text, |this, scale| this.child(clipped_text(scale)))
                         .child("Latest")
                 })
-                .when(range.is_none(), |this| this.child("Collecting history…")),
+                .when(footer_range.is_none(), |this| {
+                    this.child("Collecting history…")
+                }),
         )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ScalarPoint, elapsed_label, fraction, paint_is_visible, projected_segments};
+    use super::{
+        ScalarPoint, Series, elapsed_label, fraction, paint_is_visible, projected_segments,
+        scale_label, scale_maximum,
+    };
     use gpui::{Bounds, point, px, size};
     use std::time::{Duration, Instant};
 
@@ -229,7 +295,7 @@ mod tests {
             captured_at: start + Duration::from_secs(seconds),
             value,
         };
-        for missing in [None, Some(f64::NAN), Some(f64::INFINITY)] {
+        for missing in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0)] {
             let samples = [
                 sample(0, Some(0.0)),
                 sample(1, missing),
@@ -249,6 +315,97 @@ mod tests {
         assert_eq!(segments[1].0.y, 0.2);
         assert_eq!(segments[1].1.x, 1.0);
         assert_eq!(projected_segments(&samples, start, start, 100.0).count(), 0);
+    }
+
+    fn series(values: &[Option<f64>]) -> Series {
+        let start = Instant::now();
+        Series {
+            label: None,
+            samples: values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| ScalarPoint {
+                    captured_at: start + Duration::from_secs(index as u64),
+                    value: *value,
+                })
+                .collect(),
+            color: 0,
+            dashed: false,
+        }
+    }
+
+    #[test]
+    fn autoscale_uses_known_values_from_both_series_and_retains_idle_floor() {
+        assert_eq!(
+            scale_maximum(&[series(&[Some(10.0)]), series(&[Some(95.6)])], None),
+            Some(95.6)
+        );
+        assert_eq!(
+            scale_maximum(&[series(&[Some(95.6)]), series(&[Some(10.0)])], None),
+            Some(95.6)
+        );
+        assert_eq!(
+            scale_maximum(&[series(&[Some(0.0), Some(0.0)])], None),
+            Some(1.0)
+        );
+        assert_eq!(scale_maximum(&[series(&[Some(0.5)])], None), Some(1.0));
+        assert_eq!(scale_maximum(&[], None), None);
+        assert_eq!(
+            scale_maximum(
+                &[series(&[
+                    None,
+                    Some(f64::NAN),
+                    Some(f64::INFINITY),
+                    Some(-10.0)
+                ])],
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            scale_maximum(&[series(&[Some(-100.0), Some(42.0)])], None),
+            Some(42.0)
+        );
+    }
+
+    #[test]
+    fn fixed_scale_is_known_independently_but_invalid_limits_use_autoscale() {
+        assert_eq!(scale_maximum(&[], Some(100.0)), Some(100.0));
+        assert_eq!(
+            scale_maximum(&[series(&[Some(150.0)])], Some(100.0)),
+            Some(100.0)
+        );
+        for maximum in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(scale_maximum(&[], Some(maximum)), None);
+            assert_eq!(
+                scale_maximum(&[series(&[Some(42.0)])], Some(maximum)),
+                Some(42.0)
+            );
+        }
+        assert_eq!(scale_label(100.0, |value| format!("{value:.0}%")), "0–100%");
+    }
+
+    #[test]
+    fn axis_label_and_projection_share_the_selected_maximum() -> anyhow::Result<()> {
+        let history = series(&[Some(0.0), Some(24.0), Some(96.0)]);
+        let histories = [history];
+        let maximum = scale_maximum(&histories, None)
+            .ok_or_else(|| anyhow::anyhow!("Known history must have a scale"))?;
+        assert_eq!(
+            scale_label(maximum, |value| format!("{value:.1} B/s")),
+            "0–96.0 B/s"
+        );
+        let samples = &histories[0].samples;
+        let segments: Vec<_> = projected_segments(
+            samples,
+            samples[0].captured_at,
+            samples[2].captured_at,
+            maximum,
+        )
+        .collect();
+        assert_eq!(segments[0].1.y, 0.25);
+        assert_eq!(segments[1].1.y, 1.0);
+        Ok(())
     }
 
     #[test]

@@ -20,8 +20,33 @@ printf '\n[swap]\n'; /usr/sbin/sysctl -n vm.swapusage 2>/dev/null || true
 
 pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
+    // Read counters beside the request timestamp, before top's one-second interval.
+    // An SSH target must never receive counters from the desktop host.
+    #[cfg(target_os = "macos")]
+    let native_cpu = if machine.is_local() {
+        match super::macos_native::sample_cpu() {
+            Ok(cpu) => Some(cpu),
+            Err(error) => {
+                tracing::warn!(%error, "Native macOS CPU sampling unavailable; using top aggregate");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
     let mut sample = parse(&output)?;
+    #[cfg(target_os = "macos")]
+    if let Some(cpu) = native_cpu {
+        if matches!(&cpu, CpuSample::Counters { cores, .. } if cores.len() == sample.logical_cpus) {
+            sample.cpu = cpu;
+        } else {
+            tracing::warn!(
+                logical_cpus = sample.logical_cpus,
+                "Native macOS CPU topology changed; using top aggregate"
+            );
+        }
+    }
     sample.processes = super::processes::macos::sample(machine).await.ok();
     sample.network = super::network::macos::sample(machine).await.ok();
     sample.disks = super::disks::macos::sample(machine).await.ok();

@@ -26,6 +26,12 @@ impl<'a> ResourceCollector<'a> {
         Ok(())
     }
 
+    /// The transport, rather than a display name or platform, identifies local sampling.
+    #[cfg(target_os = "macos")]
+    pub fn is_local(&self) -> bool {
+        self.machine.remote.is_none()
+    }
+
     pub async fn run(&mut self, program: &str, args: &Args) -> Result<Output> {
         self.check_budget()?;
         let result = self.machine.run_until(program, args, self.deadline).await;
@@ -52,6 +58,28 @@ impl<'a> ResourceCollector<'a> {
         )
         .await;
         self.check_budget()
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+    use crate::remote_connection::RemoteConnection;
+
+    #[test]
+    fn local_native_sampling_requires_no_remote_transport() {
+        let mut local = Machine::default();
+        local.id = "remote-looking@hostname".into();
+        assert!(ResourceCollector::new(&mut local).is_local());
+
+        let mut remote = Machine {
+            // Even a disconnected SSH connection to localhost is remote.
+            id: "localhost".into(),
+            remote: Some(RemoteConnection::default()),
+            ..Default::default()
+        };
+        assert!(!remote.connected());
+        assert!(!ResourceCollector::new(&mut remote).is_local());
     }
 }
 

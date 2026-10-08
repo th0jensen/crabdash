@@ -1,14 +1,13 @@
-// Windows resource and GPUI release shader compilation require a native
-// Windows build host with the Windows SDK. The manual Windows workflow supplies it.
+// Resource compilation follows the Windows target, including cross-host GNU builds.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/icons/AppIcon.ico");
-    #[cfg(target_os = "windows")]
-    embed_windows_icon()?;
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_windows_icon()?;
+    }
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 fn embed_windows_icon() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, fs, path::PathBuf};
     let icon = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -78,6 +78,7 @@ pub(crate) struct State {
     pending_rename_focus: bool,
     pub drag_target: Option<(u32, model::Drop)>,
     pub resizing_split: Option<u32>,
+    pub(crate) split_resize_grab: Option<(u32, gpui::Pixels)>,
     pub tab_reveal: Option<(Tab, u64)>,
     pub name: Entity<TextField>,
     pub scroll: ScrollHandle,
@@ -126,6 +127,7 @@ impl State {
             pending_rename_focus: false,
             drag_target: None,
             resizing_split: None,
+            split_resize_grab: None,
             tab_reveal: None,
             name: cx.new(|cx| TextField::new("", "Workspace name", 1, cx).compact()),
             scroll: ScrollHandle::new(),
@@ -157,8 +159,10 @@ impl Crabdash {
             return;
         }
         self.workspaces.apply_runtime = true;
+        self.cancel_quake_resize();
         self.workspaces.drag_target = None;
         self.workspaces.resizing_split = None;
+        self.workspaces.split_resize_grab = None;
         self.workspaces.store = shared.store.clone();
         self.workspaces.revision = shared.revision;
         self.workspaces.read_only = shared.read_only;
@@ -198,7 +202,12 @@ impl Crabdash {
         self.sidebar_width = gpui::px(workspace.sidebar_width);
         self.active_tab = workspace.layout.active().into();
         if desired != self.quake_terminal_open {
-            self.set_quake_terminal_open(desired, window, cx);
+            // Replaying a loaded layout must not rewrite a migrated file.
+            if desired {
+                self.open_quake_terminal(window, cx);
+            } else {
+                self.close_quake_terminal(window, cx);
+            }
         }
     }
 
@@ -235,6 +244,7 @@ impl Crabdash {
     }
 
     pub(crate) fn persist_workspace(&mut self, cx: &mut Context<Self>) {
+        self.settle_quake_resize(cx.entity_id());
         if self.workspaces.read_only {
             cx.notify();
             return;
@@ -316,6 +326,7 @@ impl Crabdash {
         self.sync_workspace_store(cx);
         self.workspaces.drag_target = None;
         self.workspaces.resizing_split = None;
+        self.workspaces.split_resize_grab = None;
         if self
             .workspaces
             .layout_mut()
@@ -345,6 +356,7 @@ impl Crabdash {
         self.persist_workspace(cx);
         self.workspaces.drag_target = None;
         self.workspaces.resizing_split = None;
+        self.workspaces.split_resize_grab = None;
         self.workspaces.store.active = id;
         let workspace = self.workspaces.store.current();
         self.sidebar_collapsed = workspace.sidebar_collapsed;
@@ -356,7 +368,11 @@ impl Crabdash {
         self.workspaces.rename = None;
         self.workspaces.rename_error = None;
         if self.quake_terminal_open != terminal_open {
-            self.set_quake_terminal_open(terminal_open, window, cx);
+            if terminal_open {
+                self.open_quake_terminal(window, cx);
+            } else {
+                self.close_quake_terminal(window, cx);
+            }
         }
         // Render refreshes newly visible domains after applying this layout.
         self.persist_workspace(cx);
@@ -406,9 +422,10 @@ impl Crabdash {
             return;
         };
         let name = workspace.name.clone();
-        self.workspaces
-            .name
-            .update(cx, |field, cx| field.set_text(&name, cx));
+        self.workspaces.name.update(cx, |field, cx| {
+            field.set_text(&name, cx);
+            field.select_all_text(cx);
+        });
         self.workspaces.rename = Some(rename::Draft {
             id,
             original_name: name,

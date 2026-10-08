@@ -1,5 +1,6 @@
 use super::{DockerRemoval, table::Column};
 use crate::components::{common::control_tooltip, style};
+use crate::desktop::controls::{self, StatusControl, SurfaceControl};
 use capitalize::Capitalize;
 use gpui::prelude::*;
 use gpui::*;
@@ -23,7 +24,7 @@ use services::docker::{DockerAction, DockerFilter};
 
 const DOCKER_ACTIONS_WIDTH: f32 = style::CONTROL * 5.0 + 16.0;
 
-fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> Div {
+fn status_badge(container: &Container, pending_action: Option<DockerAction>) -> StatusControl {
     let label = pending_action
         .map(|action| action.pending_label())
         .unwrap_or(&container.status);
@@ -48,7 +49,7 @@ fn stats_chip(
     active: bool,
     filter: DockerFilter,
     cx: &mut Context<Crabdash>,
-) -> Stateful<Div> {
+) -> SurfaceControl {
     filter_chip(id, label, value.parse().unwrap_or(0), active).on_click(cx.listener(
         move |this, _, _, cx| {
             this.docker_table.filter = filter;
@@ -65,7 +66,7 @@ fn action_button(
     container: &Container,
     action: DockerAction,
     disabled: bool,
-) -> impl IntoElement {
+) -> SurfaceControl {
     let id = container.id.clone();
     let disabled = disabled || !action.allowed_for(container);
     let button = div()
@@ -88,7 +89,7 @@ fn action_button(
         })
         .tooltip(move |_, cx| control_tooltip(action.label(), cx))
         .child(lucide_icon(action.icon(), style::ICON));
-    if disabled {
+    let button = if disabled {
         button.cursor_default()
     } else {
         button
@@ -122,7 +123,11 @@ fn action_button(
                     this.execute_docker_action(machine_uuid, id.clone(), action, cx);
                 }
             }))
-    }
+    };
+    controls::enabled(
+        controls::icon_button(button, action.label(), action.icon()),
+        !disabled,
+    )
 }
 
 fn logs_button(
@@ -130,7 +135,7 @@ fn logs_button(
     machine_uuid: Uuid,
     container: &Container,
     logs_open: bool,
-) -> impl IntoElement {
+) -> SurfaceControl {
     let id = container.id.clone();
     let log_key = (machine_uuid, id.clone());
     let button_id = SharedString::from(format!("logs-container-{id}"));
@@ -140,7 +145,7 @@ fn logs_button(
         rgba(0x00000000)
     };
 
-    div()
+    let button = div()
         .id(button_id)
         .h(gpui::rems(style::CONTROL / 16.0))
         .w(gpui::rems(style::CONTROL / 16.0))
@@ -156,7 +161,8 @@ fn logs_button(
         .child(lucide_icon(Icon::FileText, style::ICON))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_docker_logs(log_key.clone(), cx);
-        }))
+        }));
+    controls::selected_icon_button(button, "Show / hide logs", Icon::FileText, logs_open)
 }
 
 fn container_row_card(
@@ -166,6 +172,8 @@ fn container_row_card(
     logs_open: bool,
     show_id: bool,
     compact: bool,
+    actions_width: Pixels,
+    disclosure_width: Option<Pixels>,
 ) -> impl IntoElement {
     let pending_action = app
         .pending_docker_actions
@@ -175,40 +183,124 @@ fn container_row_card(
 
     let detail_key = (app.selected_machine().uuid, container.id.clone());
     let details_open = app.docker_details.is_open(&detail_key);
-    let identity = div().flex_1().min_w_0().child(
-        div()
+    let identity_button = div()
+        .id(SharedString::from(format!(
+            "details-container-{}",
+            container.id
+        )))
+        .w_full()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(rems(4.0 / 16.0))
+        .text_color(rgb(style::TEXT_PRIMARY))
+        .cursor_pointer()
+        .hover(|this| this.text_color(rgb(style::TEXT_SELECTED)))
+        .tooltip(|_, cx| control_tooltip("Container details", cx))
+        .child(lucide_icon(
+            if details_open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            style::ICON,
+        ))
+        .child(
+            clipped_text(container.name.clone())
+                .flex_1()
+                .min_w_0()
+                .text_size(rems(style::TEXT / 16.0)),
+        )
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_docker_details(detail_key.clone(), cx);
+        }));
+    let mut identity = div()
+        .id(SharedString::from(format!(
+            "container-identity-{}",
+            container.id
+        )))
+        .flex_1()
+        .min_w_0()
+        .child(controls::selected_button(
+            identity_button,
+            container.name.clone(),
+            Some(if details_open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            }),
+            details_open,
+        ));
+    if let Some(disclosure_width) = disclosure_width {
+        let disclosure_key = (app.selected_machine().uuid, container.id.clone());
+        let title_key = disclosure_key.clone();
+        let disclosure_icon = if details_open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        };
+        // Keep the joined arrow/title group at the same leading edge; the
+        // stock title can shrink without moving neighboring action columns.
+        identity = div()
             .id(SharedString::from(format!(
-                "details-container-{}",
+                "container-identity-{}",
                 container.id
             )))
-            .w_full()
+            .flex_1()
             .min_w_0()
             .flex()
             .items_center()
-            .gap(rems(4.0 / 16.0))
-            .text_color(rgb(style::TEXT_PRIMARY))
-            .cursor_pointer()
-            .hover(|this| this.text_color(rgb(style::TEXT_SELECTED)))
-            .tooltip(|_, cx| control_tooltip("Container details", cx))
-            .child(lucide_icon(
-                if details_open {
-                    Icon::ChevronDown
-                } else {
-                    Icon::ChevronRight
-                },
-                style::ICON,
-            ))
-            .child(
-                clipped_text(container.name.clone())
-                    .flex_1()
+            .justify_start()
+            .child(controls::action_group(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
                     .min_w_0()
-                    .text_size(rems(style::TEXT / 16.0)),
-            )
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_docker_details(detail_key.clone(), cx);
-            })),
-    );
+                    .max_w_full(),
+                vec![
+                    controls::icon_button(
+                        div()
+                            .id(SharedString::from(format!(
+                                "container-disclosure-{}",
+                                container.id
+                            )))
+                            .w(disclosure_width)
+                            .flex_none()
+                            .min_h(rems(style::CONTROL / 16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(lucide_icon(disclosure_icon, style::ICON))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_docker_details(disclosure_key.clone(), cx)
+                            })),
+                        "Container details",
+                        disclosure_icon,
+                    ),
+                    controls::leading_identity(
+                        div()
+                            .id(SharedString::from(format!(
+                                "container-title-{}",
+                                container.id
+                            )))
+                            .flex_shrink()
+                            .min_w_0()
+                            .min_h(rems(style::CONTROL / 16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(clipped_text(container.name.clone()).w_full())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_docker_details(title_key.clone(), cx)
+                            })),
+                        container.name.clone().into(),
+                        details_open,
+                    ),
+                ],
+            ));
+    }
     let detail = show_id.then(|| {
         fixed_column(160.0)
             .child(
@@ -220,53 +312,57 @@ fn container_row_card(
             .into_any_element()
     });
     let actions = div()
-        .w(gpui::rems(DOCKER_ACTIONS_WIDTH / 16.0))
+        .w(actions_width)
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .gap(px(4.0))
-        .child(logs_button(
-            cx,
-            app.selected_machine().uuid,
-            container,
-            logs_open,
-        ))
-        .child(action_button(
-            cx,
-            app.selected_machine().uuid,
-            container,
-            if container.is_active_status() {
-                DockerAction::Stop
-            } else {
-                DockerAction::Start
-            },
-            actions_disabled,
-        ))
-        .child(action_button(
-            cx,
-            app.selected_machine().uuid,
-            container,
-            DockerAction::Restart,
-            actions_disabled,
-        ))
-        .child(action_button(
-            cx,
-            app.selected_machine().uuid,
-            container,
-            if container.is_paused() {
-                DockerAction::Unpause
-            } else {
-                DockerAction::Pause
-            },
-            actions_disabled,
-        ))
-        .child(action_button(
-            cx,
-            app.selected_machine().uuid,
-            container,
-            DockerAction::Remove { force: false },
-            actions_disabled,
+        .child(controls::action_group(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0)),
+            vec![
+                logs_button(cx, app.selected_machine().uuid, container, logs_open),
+                action_button(
+                    cx,
+                    app.selected_machine().uuid,
+                    container,
+                    if container.is_active_status() {
+                        DockerAction::Stop
+                    } else {
+                        DockerAction::Start
+                    },
+                    actions_disabled,
+                ),
+                action_button(
+                    cx,
+                    app.selected_machine().uuid,
+                    container,
+                    DockerAction::Restart,
+                    actions_disabled,
+                ),
+                action_button(
+                    cx,
+                    app.selected_machine().uuid,
+                    container,
+                    if container.is_paused() {
+                        DockerAction::Unpause
+                    } else {
+                        DockerAction::Pause
+                    },
+                    actions_disabled,
+                ),
+                action_button(
+                    cx,
+                    app.selected_machine().uuid,
+                    container,
+                    DockerAction::Remove { force: false },
+                    actions_disabled,
+                ),
+            ],
         ));
     responsive_row(
         compact,
@@ -292,6 +388,8 @@ fn container_row(
     container: &Container,
     show_id: bool,
     compact: bool,
+    actions_width: Pixels,
+    disclosure_width: Option<Pixels>,
 ) -> Div {
     let container_id = container.id.clone();
     let log_key = (app.selected_machine().uuid, container_id.clone());
@@ -304,7 +402,14 @@ fn container_row(
         .flex()
         .flex_col()
         .child(container_row_card(
-            app, cx, container, logs_open, show_id, compact,
+            app,
+            cx,
+            container,
+            logs_open,
+            show_id,
+            compact,
+            actions_width,
+            disclosure_width,
         ))
         .when(app.docker_details.is_open(&log_key), |d| {
             d.child(super::details::render(app, &log_key, compact, cx))
@@ -318,7 +423,13 @@ fn container_row(
         })
 }
 
-fn table_header(show_id: bool, compact: bool, app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
+fn table_header(
+    show_id: bool,
+    compact: bool,
+    actions_width: Pixels,
+    app: &Crabdash,
+    cx: &mut Context<Crabdash>,
+) -> Div {
     table_heading()
         .child(
             div()
@@ -359,7 +470,10 @@ fn table_header(show_id: bool, compact: bool, app: &Crabdash, cx: &mut Context<C
         })
         .when(!compact, |this| {
             this.child(
-                fixed_column(DOCKER_ACTIONS_WIDTH)
+                div()
+                    .w(actions_width)
+                    .flex_none()
+                    .min_w_0()
                     .text_center()
                     .child("Actions"),
             )
@@ -431,10 +545,32 @@ fn not_installed(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
 
 pub fn render(
     app: &Crabdash,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Crabdash>,
     panel_width: Pixels,
 ) -> Div {
+    let actions_width = controls::action_group_width(
+        DOCKER_ACTIONS_WIDTH,
+        &[
+            &[Icon::FileText],
+            &[Icon::Play, Icon::Square],
+            &[Icon::RefreshCw],
+            &[Icon::Pause, Icon::Play],
+            &[Icon::Trash2],
+        ],
+        app.preferences.liquid_glass,
+        window,
+        cx,
+    );
+    let disclosure_width = controls::stock_active(app.preferences.liquid_glass).then(|| {
+        controls::action_group_width(
+            style::CONTROL,
+            &[&[Icon::ChevronRight, Icon::ChevronDown]],
+            app.preferences.liquid_glass,
+            window,
+            cx,
+        )
+    });
     let compact = panel_width
         < px(400.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let show_id = panel_width
@@ -543,12 +679,18 @@ pub fn render(
             .when(!visible_services.is_empty(), |this| {
                 this.child(
                     table_card()
-                        .child(table_header(show_id, compact, app, cx))
-                        .children(
-                            visible_services
-                                .iter()
-                                .map(|service| container_row(app, cx, service, show_id, compact)),
-                        ),
+                        .child(table_header(show_id, compact, actions_width, app, cx))
+                        .children(visible_services.iter().map(|service| {
+                            container_row(
+                                app,
+                                cx,
+                                service,
+                                show_id,
+                                compact,
+                                actions_width,
+                                disclosure_width,
+                            )
+                        })),
                 )
             }),
         cx,

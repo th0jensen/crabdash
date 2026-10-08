@@ -129,9 +129,70 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{TerminalEvent, TerminalSize, local::open_local_terminal};
+
+    /// The harness has no terminal emulator. Remember an incomplete cursor
+    /// query between PTY reads and answer only the exact shell cursor request.
+    #[derive(Default)]
+    struct CursorQueries {
+        matched: usize,
+    }
+    impl CursorQueries {
+        fn read(&mut self, bytes: &[u8]) -> usize {
+            const QUERY: &[u8] = b"\x1b[6n";
+            let mut queries = 0;
+            for &byte in bytes {
+                if byte == QUERY[self.matched] {
+                    self.matched += 1;
+                    if self.matched == QUERY.len() {
+                        queries += 1;
+                        self.matched = 0;
+                    }
+                } else {
+                    self.matched = usize::from(byte == QUERY[0]);
+                }
+            }
+            queries
+        }
+    }
+
+    #[test]
+    fn cursor_query_survives_every_read_boundary() {
+        let query = b"\x1b[6n";
+        for boundary in 0..=query.len() {
+            let mut parser = CursorQueries::default();
+            let first = parser.read(&query[..boundary]);
+            assert_eq!(first, usize::from(boundary == query.len()));
+            assert_eq!(first + parser.read(&query[boundary..]), 1);
+        }
+        let mut parser = CursorQueries::default();
+        for byte in &query[..query.len() - 1] {
+            assert_eq!(parser.read(&[*byte]), 0);
+        }
+        assert_eq!(parser.read(b"n"), 1);
+    }
+
+    #[test]
+    fn cursor_query_handles_multiple_queries_and_restarted_escape() {
+        let mut parser = CursorQueries::default();
+        assert_eq!(parser.read(b"prompt\x1b\x1b[6n\x1b[6n\x1b["), 2);
+        assert_eq!(parser.read(b"6n"), 1);
+        assert_eq!(parser.read(b""), 0);
+    }
+
+    #[test]
+    fn cursor_query_does_not_answer_plain_text_or_other_csi_sequences() {
+        let mut parser = CursorQueries::default();
+        assert_eq!(
+            parser.read(b"[6n\\x1b[6n\x1b[?6n\x1b[16n\x1b[6m\x1b[6;1n\x1b6n"),
+            0
+        );
+        assert_eq!(parser.read(b"\x1b["), 0);
+        assert_eq!(parser.read(b"x6n"), 0);
+        assert_eq!(parser.read(b"\x1b[6n"), 1);
+    }
 
     #[test]
     fn local_terminal_streams_stdin_and_stdout() -> anyhow::Result<()> {
@@ -161,19 +222,42 @@ mod tests {
             let command = b"Write-Output 'crabdash-terminal-ok'; Write-Output ('crabdash-env=' + $env:TERM + ':' + $env:COLORTERM); exit\r".to_vec();
             session.controller.write(command)?;
 
+            #[cfg(target_os = "windows")]
+            let timeout = Duration::from_secs(30);
+            #[cfg(not(target_os = "windows"))]
+            let timeout = Duration::from_secs(5);
+            let deadline = Instant::now() + timeout;
+            #[cfg(target_os = "windows")]
+            let mut cursor_queries = CursorQueries::default();
             let mut output = Vec::new();
             loop {
+                let timeout_message = "timed out waiting for terminal output";
+                // A stream of ready output must not indefinitely postpone an
+                // expired output timeout by winning the race below.
+                anyhow::ensure!(Instant::now() < deadline, "{timeout_message}");
                 let event = smol::future::race(
                     async { session.events.recv().await.map_err(anyhow::Error::from) },
                     async {
-                        smol::Timer::after(Duration::from_secs(5)).await;
-                        Err(anyhow::anyhow!("timed out waiting for terminal output"))
+                        smol::Timer::at(deadline).await;
+                        Err(anyhow::anyhow!("{timeout_message}"))
                     },
                 )
                 .await?;
 
                 match event {
-                    TerminalEvent::Output(bytes) => output.extend(bytes),
+                    TerminalEvent::Output(bytes) => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let queries = cursor_queries.read(&bytes);
+                            for _ in 0..queries {
+                                session.controller.write(b"\x1b[1;1R".to_vec())?;
+                            }
+                            // Standard ConPTY creation does not inherit a
+                            // console cursor. Shell queries remain untouched
+                            // by the transport; emulate the UI's replies here.
+                        }
+                        output.extend(bytes);
+                    }
                     TerminalEvent::Exited(_) => break,
                     TerminalEvent::Error(error) => return Err(anyhow::anyhow!(error)),
                 }

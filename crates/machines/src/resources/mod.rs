@@ -4,6 +4,8 @@ mod disks;
 mod gpu;
 mod linux;
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_native;
 mod model;
 mod network;
 mod processes;

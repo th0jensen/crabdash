@@ -5,9 +5,9 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent,
     Pixels, Point, Style, UTF16Selection, Window, actions, div, prelude::*, relative,
 };
-use machines::terminal::TerminalController;
 
 use super::text_field::FieldPaste;
+mod startup;
 
 actions!(
     crabdash_terminal_input,
@@ -46,6 +46,7 @@ pub struct TerminalBytes {
 pub enum TerminalInputEvent {
     Input(Vec<u8>),
     Paste(String),
+    StartupOverflow,
     Scroll(libghostty_vt::terminal::ScrollViewport),
     Page(isize),
 }
@@ -54,7 +55,7 @@ impl EventEmitter<TerminalInputEvent> for TerminalInput {}
 
 pub struct TerminalInput {
     focus_handle: FocusHandle,
-    controller: Option<TerminalController>,
+    startup: startup::Queue,
     marked_text: Option<String>,
 }
 
@@ -62,24 +63,49 @@ impl TerminalInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
-            controller: None,
+            startup: startup::Queue::new(),
             marked_text: None,
         }
     }
 
-    pub fn set_controller(
-        &mut self,
-        controller: Option<TerminalController>,
-        cx: &mut Context<Self>,
-    ) {
-        self.controller = controller;
-        cx.notify();
+    pub fn set_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
+        let changed = if connected {
+            if self.startup.overflowed() {
+                self.marked_text = None;
+            }
+            for input in self.startup.connect() {
+                Self::emit_input(input, cx);
+            }
+            true
+        } else {
+            let changed = self.startup.disconnect();
+            self.marked_text.take().is_some() || changed
+        };
+        if changed {
+            cx.notify();
+        }
     }
 
-    fn write(&self, bytes: impl Into<Vec<u8>>, cx: &mut Context<Self>) {
-        if self.controller.is_some() {
-            cx.emit(TerminalInputEvent::Input(bytes.into()));
+    fn emit_input(input: startup::Input, cx: &mut Context<Self>) {
+        match input {
+            startup::Input::Bytes(bytes) => cx.emit(TerminalInputEvent::Input(bytes)),
+            startup::Input::Paste(text) => cx.emit(TerminalInputEvent::Paste(text)),
         }
+    }
+
+    fn submit(&mut self, input: startup::Input, cx: &mut Context<Self>) {
+        match self.startup.submit(input) {
+            startup::Submission::Send(input) => Self::emit_input(input, cx),
+            startup::Submission::Overflow => {
+                self.marked_text = None;
+                cx.emit(TerminalInputEvent::StartupOverflow);
+            }
+            startup::Submission::Pending | startup::Submission::Discard => {}
+        }
+    }
+
+    fn write(&mut self, bytes: impl Into<Vec<u8>>, cx: &mut Context<Self>) {
+        self.submit(startup::Input::Bytes(bytes.into()), cx);
     }
 
     fn bytes(&mut self, action: &TerminalBytes, _: &mut Window, cx: &mut Context<Self>) {
@@ -181,11 +207,8 @@ impl TerminalInput {
     }
 
     fn paste(&mut self, _: &FieldPaste, _: &mut Window, cx: &mut Context<Self>) {
-        if self.controller.is_none() {
-            return;
-        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            cx.emit(TerminalInputEvent::Paste(text));
+            self.submit(startup::Input::Paste(text), cx);
         }
     }
 

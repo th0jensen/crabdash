@@ -6,6 +6,7 @@ pub mod content;
 pub mod desktop;
 pub mod features;
 mod fonts;
+pub(crate) mod layout;
 pub use app::Crabdash;
 pub(crate) use desktop::about::show_about_dialog;
 pub use fonts::{

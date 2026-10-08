@@ -20,6 +20,8 @@ pub struct Preferences {
     pub true_color: bool,
     pub scrollback_lines: u32,
     pub terminal_rows: u16,
+    pub liquid_glass: bool,
+    pub use_system_accent: bool,
     pub interface_font: String,
     pub interface_font_size: f32,
     pub sidebar_width: f32,
@@ -44,6 +46,8 @@ impl Default for Preferences {
             true_color: true,
             scrollback_lines: 5000,
             terminal_rows: 16,
+            liquid_glass: true,
+            use_system_accent: true,
             interface_font: String::new(),
             interface_font_size: 14.0,
             sidebar_width: 240.0,
@@ -167,6 +171,8 @@ mod tests {
         let settings: Preferences =
             serde_json::from_str(r#"{"start_minimised":true,"refresh_seconds":15}"#)?;
         assert!(settings.start_minimised);
+        assert!(settings.liquid_glass);
+        assert!(settings.use_system_accent);
         assert_eq!(settings.terminal_type, "xterm-256color");
         assert_eq!(settings.terminal_font, "JetBrainsMono Nerd Font");
         assert_eq!(settings.refresh_seconds, 15);
@@ -179,6 +185,22 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn macos_appearance_options_are_independent_and_survive_saving() -> Result<()> {
+        for glass in [false, true] {
+            for accent in [false, true] {
+                let settings: Preferences = serde_json::from_str(&format!(
+                    r#"{{"liquid_glass":{glass},"use_system_accent":{accent}}}"#
+                ))?;
+                let restored: Preferences =
+                    serde_json::from_slice(&serde_json::to_vec(&settings)?)?;
+                assert_eq!(restored.liquid_glass, glass);
+                assert_eq!(restored.use_system_accent, accent);
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn invalid_settings_do_not_reach_the_renderer_or_shell() {
         let mut settings = Preferences::default();

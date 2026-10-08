@@ -13,102 +13,10 @@ use utils::{
     output::Output,
 };
 
-const DOCKER_PATHS: &[&str] = &[
-    "/opt/homebrew/bin/docker",
-    "/usr/local/bin/docker",
-    "/usr/bin/docker",
-];
+mod discovery;
 
-fn executable(path: &std::path::Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(target_os = "windows")]
-    {
-        windows_executable_name(path)
-    }
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_executable_name(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-}
-
-fn resolve_local_docker(cached: Option<&str>) -> Option<String> {
-    #[cfg(target_os = "windows")]
-    let named = cached.into_iter();
-    #[cfg(not(target_os = "windows"))]
-    let named = cached.into_iter().chain(DOCKER_PATHS.iter().copied());
-    let name = if cfg!(target_os = "windows") {
-        "docker.exe"
-    } else {
-        "docker"
-    };
-    let search = std::env::var_os("PATH").into_iter().flat_map(|path| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join(name))
-            .collect::<Vec<_>>()
-    });
-    #[cfg(target_os = "windows")]
-    let defaults = [
-        ("ProgramFiles", "Docker/Docker/resources/bin/docker.exe"),
-        (
-            "LOCALAPPDATA",
-            "Programs/DockerDesktop/resources/bin/docker.exe",
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(variable, path)| {
-        std::env::var_os(variable).map(|directory| std::path::PathBuf::from(directory).join(path))
-    });
-    #[cfg(not(target_os = "windows"))]
-    let defaults = dirs::home_dir()
-        .into_iter()
-        .map(|home| home.join(".docker/bin/docker"));
-    resolve_executable(
-        named
-            .map(std::path::PathBuf::from)
-            .chain(search)
-            .chain(defaults),
-    )
-}
-
-fn resolve_executable(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Option<String> {
-    paths
-        .into_iter()
-        .find(|path| executable(path))
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
-fn windows_discovery_script(cached: Option<&str>) -> Result<String> {
-    let cached = powershell::literal(cached.unwrap_or_default())?;
-    Ok(format!(
-        r#"
-        $candidates = @({cached})
-        if ($env:ProgramFiles) {{ $candidates += Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe' }}
-        if ($env:LOCALAPPDATA) {{ $candidates += Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe' }}
-        foreach ($candidate in $candidates) {{
-            if ($candidate -and [System.IO.Path]::GetExtension($candidate) -ieq '.exe' -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {{
-                [Console]::Out.Write([System.IO.Path]::GetFullPath($candidate))
-                exit 0
-            }}
-        }}
-        $command = Get-Command -Name 'docker.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($command) {{ [Console]::Out.Write($command.Source) }}
-        exit 0
-    "#
-    ))
-}
+#[cfg(all(test, unix))]
+use discovery::unix::resolve_executable;
 
 fn posix_command(docker: &str, args: &Args) -> Args {
     let mut command = args!["-c", "exec \"$0\" \"$@\"", docker];
@@ -130,68 +38,9 @@ async fn run_docker(machine: &mut Machine, docker: &str, args: &Args) -> Result<
     }
 }
 
-#[cfg(test)]
-mod windows_discovery_tests {
-    use super::*;
-
-    #[test]
-    fn windows_cached_cli_names_require_an_executable_extension() {
-        for path in ["docker.exe", "DOCKER.EXE", "Docker.ExE"] {
-            assert!(windows_executable_name(std::path::Path::new(path)));
-        }
-        for path in [
-            "docker",
-            "docker.cmd",
-            "docker.ps1",
-            "docker.exe.txt",
-            "/usr/bin/docker",
-        ] {
-            assert!(!windows_executable_name(std::path::Path::new(path)));
-        }
-    }
-
-    #[test]
-    fn cached_windows_paths_are_data_and_missing_cli_is_successful_discovery() -> Result<()> {
-        let cached = "C:\\user's ‘folder’\\docker.exe";
-        let script = windows_discovery_script(Some(cached))?;
-        assert!(script.contains(&format!(
-            "$candidates = @({})",
-            powershell::literal(cached)?
-        )));
-        assert!(script.contains("Test-Path -LiteralPath $candidate -PathType Leaf"));
-        assert!(script.contains("-CommandType Application"));
-        assert!(script.trim_end().ends_with("exit 0"));
-        assert!(windows_discovery_script(None)?.contains("$candidates = @('')"));
-        assert!(windows_discovery_script(Some("bad\0path")).is_err());
-        Ok(())
-    }
-}
-
 impl Docker for Machine {
     async fn find_docker(&mut self) -> Result<String> {
-        let path = if self.remote.is_some() && matches!(self.kind, MachineKind::Windows) {
-            let script = windows_discovery_script(self.docker_path.as_deref())?;
-            let path = String::from(powershell::run(self, &script).await?);
-            (!path.is_empty()).then_some(path)
-        } else if self.remote.is_some() {
-            // Probe without failing the shell: missing Docker is ordinary state,
-            // while an SSH failure remains a transport error.
-            let mut args = args![
-                "-c",
-                r#"for path in "$@" "$HOME/.docker/bin/docker"; do if [ -f "$path" ] && [ -x "$path" ]; then printf '%s' "$path"; exit; fi; done; command -v docker || true"#,
-                "crabdash-docker"
-            ];
-            if let Some(cached) = &self.docker_path {
-                args.push(cached.clone());
-            }
-            args.0
-                .extend(DOCKER_PATHS.iter().map(|path| (*path).to_owned()));
-            let output = self.run("sh", &args).await?;
-            let path = String::from(output).trim().to_owned();
-            (!path.is_empty()).then_some(path)
-        } else {
-            resolve_local_docker(self.docker_path.as_deref())
-        };
+        let path = discovery::find(self).await?;
         let path = path.ok_or(DockerNotInstalled)?;
         if self.docker_path.as_ref() != Some(&path) {
             self.docker_path = Some(path.clone());
@@ -422,7 +271,10 @@ esac
         let error = smol::block_on(fixture.machine.inspect_container(INSPECT_ID))
             .err()
             .ok_or_else(|| anyhow::anyhow!("Expected Docker error"))?;
-        assert!(error.to_string().contains("No such container"));
+        assert!(
+            error.to_string().contains("No such container"),
+            "Unexpected Docker error: {error:#}"
+        );
         assert!(!error.is::<DockerNotInstalled>());
         Ok(())
     }

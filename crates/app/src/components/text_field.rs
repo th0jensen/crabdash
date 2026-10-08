@@ -43,6 +43,8 @@ pub struct TextField {
     horizontal_scroll: Pixels,
     is_selecting: bool,
     compact: bool,
+    native_search: bool,
+    native_model_revision: u64,
 }
 
 impl TextField {
@@ -65,11 +67,18 @@ impl TextField {
             horizontal_scroll: px(0.0),
             is_selecting: false,
             compact: false,
+            native_search: false,
+            native_model_revision: 0,
         }
     }
 
     pub(crate) fn compact(mut self) -> Self {
         self.compact = true;
+        self
+    }
+
+    pub(crate) fn native_search(mut self) -> Self {
+        self.native_search = true;
         self
     }
 
@@ -82,6 +91,26 @@ impl TextField {
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.native_model_revision = self.native_model_revision.wrapping_add(1);
+        self.set_content(text, cx);
+    }
+
+    pub(crate) fn select_all_text(&mut self, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+        self.select_to(self.content.len(), cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn native_model_revision(&self) -> u64 {
+        self.native_model_revision
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_native_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.set_content(text, cx);
+    }
+
+    fn set_content(&mut self, text: &str, cx: &mut Context<Self>) {
         self.content = single_line(text).into();
         let end = self.content.len();
         self.selected_range = end..end;
@@ -115,8 +144,7 @@ impl TextField {
     }
 
     fn select_all(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_all_text(cx);
     }
 
     fn home(&mut self, _: &FieldHome, _: &mut Window, cx: &mut Context<Self>) {
@@ -661,6 +689,53 @@ impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_handle(cx).is_focused(window);
 
+        let field = div()
+            .id("text-field-input")
+            .key_context("CrabdashTextField")
+            .track_focus(&self.focus_handle(cx))
+            .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::copy))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .h(gpui::rems(
+                if self.compact { style::CONTROL } else { 36.0 } / 16.0,
+            ))
+            .px(px(10.0))
+            .flex()
+            .items_center()
+            .bg(rgb(style::SURFACE))
+            .border_1()
+            .border_color(if focused {
+                rgb(style::FOCUS_BORDER)
+            } else {
+                rgb(style::BORDER)
+            })
+            .rounded(px(if self.compact {
+                style::CARD_RADIUS
+            } else {
+                style::RADIUS
+            }))
+            .line_height(gpui::rems(18.0 / 16.0))
+            .text_size(gpui::rems(style::TEXT / 16.0))
+            .child(TextFieldElement { input: cx.entity() });
+        let field = if self.native_search {
+            crate::desktop::controls::search(field, cx.entity(), self.placeholder.clone())
+        } else {
+            field.into_any_element()
+        };
         div()
             .w_full()
             .flex()
@@ -674,49 +749,7 @@ impl Render for TextField {
                         .child(self.label.clone()),
                 )
             })
-            .child(
-                div()
-                    .key_context("CrabdashTextField")
-                    .track_focus(&self.focus_handle(cx))
-                    .cursor(CursorStyle::IBeam)
-                    .on_action(cx.listener(Self::backspace))
-                    .on_action(cx.listener(Self::delete))
-                    .on_action(cx.listener(Self::left))
-                    .on_action(cx.listener(Self::right))
-                    .on_action(cx.listener(Self::select_left))
-                    .on_action(cx.listener(Self::select_right))
-                    .on_action(cx.listener(Self::select_all))
-                    .on_action(cx.listener(Self::home))
-                    .on_action(cx.listener(Self::end))
-                    .on_action(cx.listener(Self::paste))
-                    .on_action(cx.listener(Self::cut))
-                    .on_action(cx.listener(Self::copy))
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_move(cx.listener(Self::on_mouse_move))
-                    .h(gpui::rems(
-                        if self.compact { style::CONTROL } else { 36.0 } / 16.0,
-                    ))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .bg(rgb(style::SURFACE))
-                    .border_1()
-                    .border_color(if focused {
-                        rgb(style::FOCUS_BORDER)
-                    } else {
-                        rgb(style::BORDER)
-                    })
-                    .rounded(px(if self.compact {
-                        style::CARD_RADIUS
-                    } else {
-                        style::RADIUS
-                    }))
-                    .line_height(gpui::rems(18.0 / 16.0))
-                    .text_size(gpui::rems(style::TEXT / 16.0))
-                    .child(TextFieldElement { input: cx.entity() }),
-            )
+            .child(field)
     }
 }
 

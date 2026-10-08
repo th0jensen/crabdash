@@ -1,4 +1,5 @@
 use super::{Entry, Key};
+use crate::desktop::controls;
 use crate::{
     app::Crabdash,
     components::{
@@ -50,7 +51,7 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
                         .child("Container details · snapshot"),
                 )
                 .when(!loading, |header| {
-                    header.child(
+                    header.child(controls::icon_button(
                         div()
                             .id(SharedString::from(format!(
                                 "{}-{}-details-refresh",
@@ -73,7 +74,9 @@ pub(crate) fn render(app: &Crabdash, key: &Key, compact: bool, cx: &mut Context<
                             .on_click(cx.listener(move |app, _, _, cx| {
                                 app.refresh_docker_details(refresh_key.clone(), cx)
                             })),
-                    )
+                        "Refresh container details",
+                        Icon::RefreshCw,
+                    ))
                 }),
         );
     if !target_valid {
@@ -223,7 +226,7 @@ fn copy_row(label: &'static str, value: &str, compact: bool, id: String) -> Div 
                 .when(!compact, |label| label.w(rems(80.0 / 16.0)))
                 .child(label),
         )
-        .child(
+        .child(controls::button(
             div()
                 .id(SharedString::from(id))
                 .flex_1()
@@ -244,7 +247,9 @@ fn copy_row(label: &'static str, value: &str, compact: bool, id: String) -> Div 
                 .on_click(move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                 }),
-        )
+            value.to_string(),
+            Some(Icon::Copy),
+        ))
 }
 
 fn restart_policy(policy: &ContainerRestartPolicy) -> String {

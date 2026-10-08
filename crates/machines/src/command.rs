@@ -1,7 +1,10 @@
 //! Command ownership and cancellation. Only resource collection opts into a
 //! deadline; ordinary actions retain their existing unbounded transport.
 use anyhow::{Context as _, Result, anyhow, bail};
-use smol::{io::AsyncReadExt as _, process::Command};
+use smol::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    process::Command,
+};
 use std::{
     future::Future,
     pin::Pin,
@@ -56,42 +59,84 @@ pub(crate) async fn run(program: &str, args: &Args) -> Result<Output> {
 }
 
 pub(crate) async fn run_until(program: &str, args: &Args, deadline: Instant) -> Result<Output> {
+    run_with_stdin_until(program, args, None, deadline).await
+}
+
+pub(crate) async fn run_with_input_until(
+    program: &str,
+    args: &Args,
+    input: &[u8],
+    deadline: Instant,
+) -> Result<Output> {
+    run_with_stdin_until(program, args, Some(input), deadline).await
+}
+
+async fn run_with_stdin_until(
+    program: &str,
+    args: &Args,
+    input: Option<&[u8]>,
+    deadline: Instant,
+) -> Result<Output> {
     check_deadline(deadline)?;
     let mut child = local_command(program, args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Also covers external cancellation of the whole collection future.
         // async-process's default reap_on_drop keeps abandoned waits owned.
         .kill_on_drop(true)
         .spawn()?;
+    let stdin = if input.is_some() {
+        Some(child.stdin.take().context("Missing command stdin pipe")?)
+    } else {
+        None
+    };
     let mut stdout = child.stdout.take().context("Missing command stdout pipe")?;
     let mut stderr = child.stderr.take().context("Missing command stderr pipe")?;
     let result = smol::future::race(
         async {
-            let ((stdout, stderr), status) = smol::future::zip(
+            let (written, ((stdout, stderr), status)) = smol::future::zip(
+                async {
+                    if let (Some(bytes), Some(mut stdin)) = (input, stdin) {
+                        stdin.write_all(bytes).await?;
+                        stdin.flush().await?;
+                        // EOF lets noninteractive script loaders execute their
+                        // complete input, without closing either output pipe.
+                        drop(stdin);
+                    }
+                    Ok::<_, std::io::Error>(())
+                },
                 smol::future::zip(
-                    async {
-                        let mut bytes = Vec::new();
-                        stdout.read_to_end(&mut bytes).await?;
-                        Ok::<_, std::io::Error>(bytes)
-                    },
-                    async {
-                        let mut bytes = Vec::new();
-                        stderr.read_to_end(&mut bytes).await?;
-                        Ok::<_, std::io::Error>(bytes)
-                    },
+                    smol::future::zip(
+                        async {
+                            let mut bytes = Vec::new();
+                            stdout.read_to_end(&mut bytes).await?;
+                            Ok::<_, std::io::Error>(bytes)
+                        },
+                        async {
+                            let mut bytes = Vec::new();
+                            stderr.read_to_end(&mut bytes).await?;
+                            Ok::<_, std::io::Error>(bytes)
+                        },
+                    ),
+                    child.status(),
                 ),
-                child.status(),
             )
             .await;
-            Some((|| {
-                Ok::<_, std::io::Error>(std::process::Output {
-                    status: status?,
-                    stdout: stdout?,
-                    stderr: stderr?,
-                })
-            })())
+            Some((
+                written,
+                (|| {
+                    Ok::<_, std::io::Error>(std::process::Output {
+                        status: status?,
+                        stdout: stdout?,
+                        stderr: stderr?,
+                    })
+                })(),
+            ))
         },
         async {
             smol::Timer::at(deadline).await;
@@ -100,9 +145,13 @@ pub(crate) async fn run_until(program: &str, args: &Args, deadline: Instant) -> 
     )
     .await;
     match result {
-        Some(result) => {
+        Some((written, result)) => {
             check_deadline(deadline)?;
-            output(program, args, result?)
+            // Prefer the child's diagnostic on failure; a broken input pipe
+            // is often just a consequence of its early exit.
+            let output = output(program, args, result?)?;
+            written.context("Unable to write command input")?;
+            Ok(output)
         }
         None => {
             // Kill only the direct child we own; this makes no promise about
@@ -271,6 +320,85 @@ mod tests {
                     .is_err()
             );
             assert!(!fixture.0.exists());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn input_and_both_output_pipes_progress_together_and_deliver_eof() -> Result<()> {
+        smol::block_on(async {
+            let input = "雪 ‘literal’\n".repeat(30_000).into_bytes();
+            let script = "import sys; sys.stdout.buffer.write(b'o'*200000); sys.stdout.flush(); sys.stderr.buffer.write(b'e'*200000); sys.stderr.flush(); sys.stdout.buffer.write(sys.stdin.buffer.read())";
+            let output = run_with_input_until(
+                "python3",
+                &args!["-c", script],
+                &input,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await?;
+            assert_eq!(output.as_ref()[..200_000], vec![b'o'; 200_000]);
+            assert_eq!(&output.as_ref()[200_000..], input);
+            let output = run_with_input_until(
+                "sh",
+                &args!["-c", "cat; printf eof"],
+                &[],
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await?;
+            assert_eq!(output.as_ref(), b"eof");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn input_backpressure_cannot_outlive_its_deadline_or_cancellation() -> Result<()> {
+        smol::block_on(async {
+            let input = vec![b'x'; 512 * 1024];
+            let fixture = Fixture::new();
+            let result = run_with_input_until(
+                "sh",
+                &fixture.args(),
+                &input,
+                Instant::now() + Duration::from_millis(700),
+            )
+            .await;
+            assert!(result.is_err());
+            assert_reaped(fixture.wait_for_pid().await?).await?;
+
+            let cancelled = Fixture::new();
+            let args = cancelled.args();
+            let pid = smol::future::race(
+                async {
+                    run_with_input_until(
+                        "sh",
+                        &args,
+                        &input,
+                        Instant::now() + Duration::from_secs(10),
+                    )
+                    .await?;
+                    bail!("Input fixture unexpectedly completed")
+                },
+                cancelled.wait_for_pid(),
+            )
+            .await?;
+            assert_reaped(pid).await
+        })
+    }
+
+    #[test]
+    fn early_failure_with_large_input_preserves_the_child_diagnostic() -> Result<()> {
+        smol::block_on(async {
+            let result = run_with_input_until(
+                "sh",
+                &args!["-c", "printf denied >&2; exit 7"],
+                &vec![b'x'; 512 * 1024],
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await;
+            assert_eq!(
+                result.err().map(|error| error.to_string()),
+                Some("denied".into())
+            );
             Ok(())
         })
     }

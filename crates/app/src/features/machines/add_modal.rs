@@ -6,15 +6,16 @@ use lucide_icons::Icon;
 
 use crate::app::Crabdash;
 use crate::components::common::{button, lucide_icon};
+use crate::desktop::controls;
 
 fn auth_mode_button(
     app: &Crabdash,
     mode: AddMachineAuthMode,
     cx: &mut Context<Crabdash>,
-) -> Stateful<Div> {
+) -> controls::SurfaceControl {
     let selected = app.add_machine_auth_mode == mode;
 
-    div()
+    let button = div()
         .id(SharedString::from(format!("auth-mode-{}", mode.label())))
         .h(gpui::rems(style::CONTROL / 16.0))
         .px(px(10.0))
@@ -44,7 +45,8 @@ fn auth_mode_button(
         .child(mode.label())
         .on_click(cx.listener(move |this, _, _, cx| {
             this.set_add_machine_auth_mode(mode, cx);
-        }))
+        }));
+    controls::selected_button(button, mode.label(), None, selected)
 }
 
 fn auth_field(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
@@ -61,15 +63,42 @@ fn auth_field(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         )
         .child(
             div()
-                .flex()
-                .gap(px(8.0))
-                .child(auth_mode_button(app, AddMachineAuthMode::None, cx))
-                .child(auth_mode_button(app, AddMachineAuthMode::Password, cx))
-                .child(auth_mode_button(app, AddMachineAuthMode::AuthKey, cx)),
+                .id("add-machine-auth-actions")
+                .child(controls::action_group(
+                    div().flex().gap(px(8.0)),
+                    vec![
+                        auth_mode_button(app, AddMachineAuthMode::None, cx),
+                        auth_mode_button(app, AddMachineAuthMode::Password, cx),
+                        auth_mode_button(app, AddMachineAuthMode::AuthKey, cx),
+                    ],
+                )),
         )
 }
 
 pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
+    let actions = div()
+        .id("add-machine-actions")
+        .child(controls::action_group(
+            div().flex().items_center().gap(px(10.0)),
+            vec![
+                button("cancel-add-machine", Some(Icon::X), Some("Cancel"), false).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.close_add_machine_modal(window, cx);
+                    }),
+                ),
+                controls::primary(
+                    button(
+                        "submit-add-machine",
+                        Some(Icon::Plus),
+                        Some("Add Machine"),
+                        true,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.submit_add_machine(window, cx);
+                    })),
+                ),
+            ],
+        ));
     div()
         .absolute()
         .top_0()
@@ -99,7 +128,7 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                         .flex()
                         .justify_around()
                         .child(
-                            div()
+                            controls::modal(div()
                                 .w(px(440.0))
                                 .bg(rgb(0x1C1C1E))
                                 .border_1()
@@ -201,23 +230,8 @@ pub fn render(app: &Crabdash, cx: &mut Context<Crabdash>) -> impl IntoElement {
                                         .border_color(rgb(0x2F2F31))
                                         .flex()
                                         .justify_end()
-                                        .gap(px(10.0))
-                                        .child(
-                                            button("cancel-add-machine", Some(Icon::X), Some("Cancel"), false).on_click(
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.close_add_machine_modal(window, cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            button("submit-add-machine", Some(Icon::Plus), Some("Add Machine"), true)
-                                                .on_click(cx.listener(
-                                                    |this, _, window, cx| {
-                                                        this.submit_add_machine(window, cx);
-                                                    },
-                                                )),
-                                        ),
-                                ),
+                                        .child(actions),
+                                ), 153.0 / 255.0),
                         ),
                 ),
         )

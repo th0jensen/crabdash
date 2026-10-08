@@ -47,11 +47,17 @@ impl Fixture {
     }
 
     fn sample(&self) -> Result<String> {
-        let script = SCRIPT.replacen("drm=/sys/class/drm", "drm=$1", 1);
+        let script = SCRIPT.replacen("drm=/sys/class/drm", "drm=$1", 1).replacen(
+            "wsl_nvidia=/usr/lib/wsl/lib/nvidia-smi",
+            "wsl_nvidia=$2",
+            1,
+        );
         let output = Command::new("/bin/sh")
             .args(["-eu", "-c", &script, "gpu-fixture"])
             .arg(self.0.join("drm"))
+            .arg(self.0.join("wsl 'nvidia-smi'"))
             .env("PATH", self.0.join("bin"))
+            .env("GPU_CALLS", self.0.join("calls"))
             .output()?;
         ensure!(
             output.status.success(),
@@ -61,12 +67,136 @@ impl Fixture {
         ensure!(output.stderr.is_empty(), "GPU script emitted diagnostics");
         String::from_utf8(output.stdout).context("GPU script returned invalid UTF-8")
     }
+
+    fn tool(&self, projected: bool, script: &str) -> Result<()> {
+        let path = if projected {
+            self.0.join("wsl 'nvidia-smi'")
+        } else {
+            self.0.join("bin/nvidia-smi")
+        };
+        fs::write(&path, script)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn path_provider_precedes_projected_wsl_tool_and_keeps_optional_na_metrics() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.tool(false, "#!/bin/sh\nprintf 'PATH\\n' >> \"$GPU_CALLS\"\nprintf '00000000:01:00.0, Path GPU, N/A, N/A, 8192, N/A\\n'\n")?;
+    fixture.tool(true, "#!/bin/sh\nprintf 'WSL\\n' >> \"$GPU_CALLS\"\nprintf '00000000:02:00.0, WSL GPU, 10, 10, 8192, 40\\n'\n")?;
+    let output = fixture.sample()?;
+    assert_eq!(fs::read_to_string(fixture.0.join("calls"))?, "PATH\n");
+    let cards = parse(
+        "STATUS\tunavailable",
+        Some(crate::resources::section(&output, "nvidia")?),
+    )
+    .context("PATH GPU")?;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "Path GPU");
+    assert_eq!(cards[0].busy_percent, None);
+    assert_eq!(cards[0].memory_used_bytes, None);
+    assert_eq!(cards[0].temperature_celsius, None);
+    assert_eq!(cards[0].memory_total_bytes, Some(8192 * 1024 * 1024));
+    Ok(())
+}
+
+#[test]
+fn projected_wsl_path_is_quoted_and_unsupported_telemetry_retains_inventory() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fs::remove_file(fixture.0.join("bin/nvidia-smi"))?;
+    fixture.tool(true, r#"#!/bin/sh
+case "$1" in
+    --query-gpu=pci.bus_id,name,*) printf 'full\n' >> "$GPU_CALLS"; exit 1;;
+    --query-gpu=pci.bus_id,name) printf 'inventory\n' >> "$GPU_CALLS"; printf '00000000:01:00.0, NVIDIA 雪\n00000000:02:00.0, NVIDIA 雪\nN/A, Missing identity\ninvalid, Malformed identity\n';;
+    *) exit 2;;
+esac
+"#)?;
+    let output = fixture.sample()?;
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("calls"))?,
+        "full\ninventory\n"
+    );
+    let nvidia = crate::resources::section(&output, "nvidia")?;
+    let cards = parse("STATUS\tunavailable", Some(nvidia)).context("WSL inventory")?;
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[0].id, "0000:01:00.0");
+    assert_eq!(cards[0].name, "NVIDIA 雪");
+    assert_eq!(cards[1].name, "NVIDIA 雪");
+    assert_ne!(cards[0].id, cards[1].id);
+    assert!(cards.iter().all(|card| card.busy_percent.is_none()
+        && card.memory_used_bytes.is_none()
+        && card.memory_total_bytes.is_none()
+        && card.temperature_celsius.is_none()));
+    let merged = parse("DRM\t/sys/devices/0000:01:00.0\t0000:01:00.0\tnvidia\t0x10de\t0x1234\t13\t1024\t4096\t45000", Some(nvidia)).context("Merged inventory")?;
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].name, "NVIDIA 雪");
+    assert_eq!(merged[0].busy_percent, Some(13.0));
+    assert_eq!(merged[0].memory_used_bytes, Some(1024));
+    Ok(())
+}
+
+#[test]
+fn absent_nonexecutable_or_failing_projected_provider_is_unavailable() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fs::remove_file(fixture.0.join("bin/nvidia-smi"))?;
+    for mode in [None, Some(0o600), Some(0o700)] {
+        if let Some(mode) = mode {
+            fixture.tool(true, "#!/bin/sh\nexit 1\n")?;
+            fs::set_permissions(
+                fixture.0.join("wsl 'nvidia-smi'"),
+                fs::Permissions::from_mode(mode),
+            )?;
+        }
+        let output = fixture.sample()?;
+        assert!(
+            parse(
+                "STATUS\tunavailable",
+                Some(crate::resources::section(&output, "nvidia")?)
+            )
+            .is_none()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn telemetry_and_inventory_attempts_share_one_deadline() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fs::remove_file(fixture.0.join("bin/nvidia-smi"))?;
+    fixture.tool(true, r#"#!/bin/sh
+case "$1" in
+    --query-gpu=pci.bus_id,name,*) printf 'full\n' >> "$GPU_CALLS"; /bin/sleep 1.25; exit 1;;
+    --query-gpu=pci.bus_id,name) printf 'inventory\n' >> "$GPU_CALLS"; /bin/sleep 1.25; printf '00000000:01:00.0, Too late\n';;
+    *) exit 2;;
+esac
+"#)?;
+    let started = std::time::Instant::now();
+    let output = fixture.sample()?;
+    // Two independent two-second queries would return the inventory at 2.5s.
+    // The shared deadline terminates the second attempt without publishing it.
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("calls"))?,
+        "full\ninventory\n"
+    );
+    assert!(
+        parse(
+            "STATUS\tunavailable",
+            Some(crate::resources::section(&output, "nvidia")?)
+        )
+        .is_none()
+    );
+    ensure!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "NVIDIA queries exceeded their bounded timeout"
+    );
+    Ok(())
 }
 
 #[test]

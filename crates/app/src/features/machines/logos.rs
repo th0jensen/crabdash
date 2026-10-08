@@ -1,4 +1,4 @@
-//! Bundled distro artwork and sidebar presentation, shared by Linux and macOS.
+//! Bundled operating-system artwork and sidebar presentation on every platform.
 use crate::components::common::{lucide_icon, machine_icon};
 use gpui::{prelude::*, *};
 use machines::machine::{Machine, MachineKind};
@@ -44,6 +44,7 @@ const LOGOS: &[Logo] = &[
     logo!("rocky-linux", "Rocky Linux", 0x70D2AB),
     logo!("tux", "Linux", 0xD8E0E9),
     logo!("ubuntu", "Ubuntu", 0xF69C75),
+    logo!("windows", "Windows", 0x86B9F6),
     logo!("zorin", "Zorin OS", 0x80BCF5),
 ];
 
@@ -56,9 +57,9 @@ fn distro_logo(id: &str) -> Option<&'static Logo> {
         "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "sled" => "opensuse",
         id => id,
     };
-    LOGOS
-        .iter()
-        .find(|logo| logo.slug == slug && logo.slug != "apple" && logo.slug != "tux")
+    LOGOS.iter().find(|logo| {
+        logo.slug == slug && logo.slug != "apple" && logo.slug != "tux" && logo.slug != "windows"
+    })
 }
 
 fn machine_logo(machine: &Machine) -> Option<&'static Logo> {
@@ -70,16 +71,17 @@ fn machine_logo(machine: &Machine) -> Option<&'static Logo> {
             .as_ref()
             .and_then(|distribution| distro_logo(&distribution.id))
             .or_else(|| LOGOS.iter().find(|logo| logo.slug == "tux")),
-        MachineKind::Windows | MachineKind::Unknown => None,
+        MachineKind::Windows => LOGOS.iter().find(|logo| logo.slug == "windows"),
+        MachineKind::Unknown => None,
     }
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn machine_svg_bytes(machine: &Machine) -> Option<&'static [u8]> {
-    machine_logo(machine).map(|logo| logo.bytes)
+pub(crate) fn machine_svg_artwork(machine: &Machine) -> Option<(&'static [u8], u32)> {
+    machine_logo(machine).map(|logo| (logo.bytes, logo.color))
 }
 
-pub(super) fn platform_label(machine: &Machine) -> &str {
+pub(crate) fn platform_label(machine: &Machine) -> &str {
     if let Some(logo) = machine_logo(machine)
         && logo.slug != "tux"
     {
@@ -152,6 +154,20 @@ mod tests {
         assert_eq!(platform_label(&machine), "CachyOS");
         machine.kind = MachineKind::MacOS;
         assert_eq!(machine_logo(&machine).unwrap().slug, "apple");
+    }
+
+    #[test]
+    fn windows_identity_uses_windows_artwork_for_local_and_remote_machines() {
+        let mut machine = Machine {
+            kind: MachineKind::Windows,
+            ..Default::default()
+        };
+        assert_eq!(machine_logo(&machine).unwrap().slug, "windows");
+        assert_eq!(platform_label(&machine), "Windows");
+        machine.remote = Some(Default::default());
+        assert_eq!(machine_logo(&machine).unwrap().slug, "windows");
+        machine.kind = MachineKind::Unknown;
+        assert!(machine_logo(&machine).is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Link-layer byte counters: address aliases must not count an interface twice.
+//! Non-loopback link counters; address aliases never count an interface twice.
 use super::super::NetworkCounter;
 use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result, ensure};
@@ -48,11 +48,11 @@ fn parse(output: &str) -> Result<Vec<NetworkCounter>> {
             "Incomplete macOS link counters"
         );
         let id = fields[0].trim_end_matches('*').to_owned();
-        if !ids.insert(id.clone()) {
+        if id == "lo0" || !ids.insert(id.clone()) {
             continue;
         }
-        // Loopback lacks a hardware Address token. Locate numeric statistics
-        // from the right instead of assuming every row has four leading fields.
+        // Locate statistics from the right: virtual interfaces may lack a
+        // hardware Address token, so not every row has four leading fields.
         let stats = &fields[fields.len() - stat_count..];
         counters.push(NetworkCounter {
             id,
@@ -71,14 +71,75 @@ fn parse(output: &str) -> Result<Vec<NetworkCounter>> {
 mod tests {
     use super::*;
     #[test]
-    fn aliases_and_missing_loopback_address_do_not_duplicate_bytes() -> Result<()> {
-        let output = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0 16384 <Link#1> 10 0 1000 20 0 2000 0\nlo0 16384 127 127.0.0.1 10 - 1000 20 - 2000 -\nen0* 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\nen0 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\n";
+    fn loopback_exclusion_retains_aliased_physical_and_virtual_interfaces() -> Result<()> {
+        let output = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0* 16384 <Link#1> 10 0 1000 20 0 2000 0\nlo0 16384 127 127.0.0.1 10 - 1000 20 - 2000 -\nen0* 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\nen0 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\nutun4 1380 <Link#3> 50 0 5000 60 0 6000 0\nbridge0 1500 <Link#4> cc:dd 70 0 7000 80 0 8000 0\n";
         let counters = parse(output)?;
-        assert_eq!(counters.len(), 2);
-        assert_eq!(counters[0].received_bytes, 1000);
-        assert_eq!(counters[1].id, "en0");
-        assert_eq!(counters[1].sent_bytes, 4000);
+        assert_eq!(
+            counters
+                .iter()
+                .map(|counter| (
+                    counter.id.as_str(),
+                    counter.received_bytes,
+                    counter.sent_bytes
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("en0", 3000, 4000),
+                ("utun4", 5000, 6000),
+                ("bridge0", 7000, 8000)
+            ]
+        );
         assert!(parse("Name Mtu Network Address Ipkts Ierrs\n").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rising_loopback_traffic_does_not_change_idle_external_rates() -> Result<()> {
+        use crate::resources::{CpuSample, MemorySample, ResourceMonitor, ResourceSample};
+        use std::time::{Duration, Instant};
+        let snapshot = |loopback| {
+            format!(
+                "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0* 16384 <Link#1> 10 0 {loopback} 20 0 {loopback} 0\nen0* 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\nen0 1500 <Link#2> aa:bb 30 0 3000 40 0 4000 0\n"
+            )
+        };
+        let start = Instant::now();
+        let sample = |network, captured_at, uptime_seconds| ResourceSample {
+            cpu: CpuSample::Sampled { percent: 0.0 },
+            logical_cpus: 1,
+            memory: MemorySample {
+                total_bytes: 4096,
+                available_bytes: 4096,
+                estimated: false,
+            },
+            swap: None,
+            load_average: None,
+            uptime_seconds,
+            boot_id: "fixture".into(),
+            captured_at,
+            processes: None,
+            network: Some(network),
+            disks: None,
+            gpus: None,
+        };
+        let mut monitor = ResourceMonitor::default();
+        monitor.update(sample(parse(&snapshot(1000))?, start, 0.0))?;
+        let usage = monitor.update(sample(
+            parse(&snapshot(1_000_000))?,
+            start + Duration::from_secs(2),
+            2.0,
+        ))?;
+        let rows = usage.network.context("Expected network counters")?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "en0");
+        assert_eq!(rows[0].received_bytes_per_second, Some(0.0));
+        assert_eq!(rows[0].sent_bytes_per_second, Some(0.0));
+        Ok(())
+    }
+
+    #[test]
+    fn loopback_only_is_a_known_empty_inventory() -> Result<()> {
+        let output = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0* 16384 <Link#1> 10 0 1000 20 0 2000 0\nlo0 16384 127 127.0.0.1 10 - 1000 20 - 2000 -\n";
+        assert!(parse(output)?.is_empty());
         Ok(())
     }
 }

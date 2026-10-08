@@ -1,4 +1,5 @@
 use crate::components::{common::control_tooltip, style};
+use crate::desktop::controls::{self, StatusControl, SurfaceControl};
 use gpui::prelude::*;
 use gpui::*;
 use lucide_icons::Icon;
@@ -16,7 +17,7 @@ use crate::components::table::{
     responsive_row, responsive_status_column, sort_heading, status_label, table_heading, toolbar,
 };
 
-fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) -> Div {
+fn status_badge(service: &ServiceItem, pending_action: Option<ServiceAction>) -> StatusControl {
     let label = pending_action
         .map(|action| action.pending_label())
         .unwrap_or_else(|| service.status_label());
@@ -42,7 +43,7 @@ fn stats_chip(
     active: bool,
     filter: Filter,
     cx: &mut Context<Crabdash>,
-) -> Stateful<Div> {
+) -> SurfaceControl {
     filter_chip(id, label, value.parse().unwrap_or(0), active).on_click(cx.listener(
         move |this, _, _, cx| {
             this.services_table.filter = filter;
@@ -55,6 +56,7 @@ fn stats_chip(
 fn table_header(
     show_details: bool,
     compact: bool,
+    actions_width: Pixels,
     app: &Crabdash,
     cx: &mut Context<Crabdash>,
 ) -> Div {
@@ -90,7 +92,14 @@ fn table_header(
             )
         })
         .when(!compact, |this| {
-            this.child(fixed_column(ACTIONS_WIDTH).text_center().child("Actions"))
+            this.child(
+                div()
+                    .w(actions_width)
+                    .flex_none()
+                    .min_w_0()
+                    .text_center()
+                    .child("Actions"),
+            )
         })
         .child(
             responsive_status_column(compact).h_full().child(
@@ -114,7 +123,7 @@ fn service_action_button(
     service: &ServiceItem,
     action: ServiceAction,
     disabled: bool,
-) -> impl IntoElement {
+) -> SurfaceControl {
     let bg = rgba(0x00000000);
     let disabled_bg = rgba(0x00000000);
     let disabled_fg = rgb(0x606060);
@@ -136,7 +145,7 @@ fn service_action_button(
         .tooltip(move |_, cx| control_tooltip(format!("{}", action.command()), cx))
         .child(lucide_icon(action.icon(), style::ICON));
 
-    if disabled {
+    let button = if disabled {
         button.cursor_default()
     } else {
         button
@@ -145,14 +154,18 @@ fn service_action_button(
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.execute_service_action(name.clone(), action, cx);
             }))
-    }
+    };
+    controls::enabled(
+        controls::icon_button(button, action.command(), action.icon()),
+        !disabled,
+    )
 }
 
 fn service_logs_button(
     app: &Crabdash,
     cx: &mut Context<Crabdash>,
     service: &ServiceItem,
-) -> impl IntoElement {
+) -> SurfaceControl {
     let service_name = service.name.clone();
     let log_key = (app.selected_machine().uuid, service_name.clone());
     let logs_open = app.logs_open_services.contains(&log_key);
@@ -162,7 +175,7 @@ fn service_logs_button(
         rgba(0x00000000)
     };
 
-    div()
+    let button = div()
         .id(SharedString::from(format!("logs-service-{service_name}")))
         .h(gpui::rems(style::CONTROL / 16.0))
         .w(gpui::rems(style::CONTROL / 16.0))
@@ -178,7 +191,8 @@ fn service_logs_button(
         .child(lucide_icon(Icon::FileText, style::ICON))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_service_logs(log_key.clone(), cx);
-        }))
+        }));
+    controls::selected_icon_button(button, "Show / hide logs", Icon::FileText, logs_open)
 }
 
 fn system_service_row(
@@ -187,6 +201,7 @@ fn system_service_row(
     service: &ServiceItem,
     show_details: bool,
     compact: bool,
+    actions_width: Pixels,
 ) -> Div {
     let service_name = service.name.clone();
     let pending_action = app
@@ -233,27 +248,34 @@ fn system_service_row(
             )
             .into_any_element()
     });
-    let actions = fixed_column(ACTIONS_WIDTH)
+    let actions = div()
+        .w(actions_width)
+        .flex_none()
+        .min_w_0()
         .flex()
         .items_center()
         .justify_center()
-        .gap(px(4.0))
-        .child(service_logs_button(app, cx, service))
-        .child(service_action_button(
-            cx,
-            service,
-            if service.is_running() {
-                ServiceAction::Stop
-            } else {
-                ServiceAction::Start
-            },
-            actions_disabled,
-        ))
-        .child(service_action_button(
-            cx,
-            service,
-            ServiceAction::Restart,
-            actions_disabled,
+        .child(controls::action_group(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0)),
+            vec![
+                service_logs_button(app, cx, service),
+                service_action_button(
+                    cx,
+                    service,
+                    if service.is_running() {
+                        ServiceAction::Stop
+                    } else {
+                        ServiceAction::Start
+                    },
+                    actions_disabled,
+                ),
+                service_action_button(cx, service, ServiceAction::Restart, actions_disabled),
+            ],
         ));
     div()
         .w_full()
@@ -287,10 +309,21 @@ fn system_service_row(
 
 pub fn render(
     app: &Crabdash,
-    _window: &Window,
+    window: &Window,
     cx: &mut Context<Crabdash>,
     panel_width: Pixels,
 ) -> Div {
+    let actions_width = controls::action_group_width(
+        ACTIONS_WIDTH,
+        &[
+            &[Icon::FileText],
+            &[Icon::Play, Icon::X],
+            &[Icon::RefreshCw],
+        ],
+        app.preferences.liquid_glass,
+        window,
+        cx,
+    );
     let compact = panel_width
         < px(400.0 * app.preferences.interface_font_size / crate::components::style::TEXT);
     let show_details = panel_width
@@ -351,6 +384,7 @@ pub fn render(
             interface_font: app.preferences.interface_font.clone(),
             interface_size: app.preferences.interface_font_size.to_bits(),
             log_line_height: line_height.to_bits(),
+            action_width: f32::from(actions_width).to_bits(),
         },
     );
 
@@ -393,7 +427,7 @@ pub fn render(
                             .border_r_1()
                             .border_color(rgb(style::BORDER))
                             .rounded_t(px(style::CARD_RADIUS))
-                            .child(table_header(show_details, compact, app, cx))
+                            .child(table_header(show_details, compact, actions_width, app, cx))
                             .into_any_element()
                     } else if let Some(service) = snapshot.get(index - 1) {
                         div()
@@ -406,7 +440,14 @@ pub fn render(
                             .when(index == count, |this| {
                                 this.border_b_1().rounded_b(px(style::CARD_RADIUS))
                             })
-                            .child(system_service_row(app, cx, service, show_details, compact))
+                            .child(system_service_row(
+                                app,
+                                cx,
+                                service,
+                                show_details,
+                                compact,
+                                actions_width,
+                            ))
                             .into_any_element()
                     } else {
                         div().into_any_element()

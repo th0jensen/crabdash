@@ -24,4 +24,5 @@ pub(crate) const TAB_INDICATOR: u32 = 0xA0A0A0;
 pub(crate) const SUCCESS: u32 = 0x59C69A;
 pub(crate) const WARNING: u32 = 0xE4BB72;
 pub(crate) const DANGER: u32 = 0xF08B86;
+pub(crate) const STATE_TINT_ALPHA: f32 = 0.24;
 pub(crate) const CARD_RADIUS: f32 = 4.0;

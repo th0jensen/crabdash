@@ -11,6 +11,7 @@ use crate::components::{
     style,
     text_field::TextField,
 };
+use crate::desktop::controls::{self, SurfaceControl};
 
 fn form() -> Div {
     div().w_full().min_w_0().flex().flex_col().gap(px(14.0))
@@ -61,8 +62,8 @@ fn choice(
     active: bool,
     cx: &mut Context<Crabdash>,
     change: impl Fn(&mut Crabdash) + 'static,
-) -> Stateful<Div> {
-    surface_button(id, None, Some(text))
+) -> SurfaceControl {
+    let button = surface_button(id, None, Some(text))
         .bg(rgb(if active {
             style::CONTROL_SELECTED_BG
         } else {
@@ -84,7 +85,8 @@ fn choice(
                 this.docker_run_config.error = None;
                 cx.notify();
             }
-        }))
+        }));
+    controls::selected(button, active)
 }
 
 fn checkbox(
@@ -94,8 +96,8 @@ fn checkbox(
     active: bool,
     cx: &mut Context<Crabdash>,
     change: impl Fn(&mut Crabdash) + 'static,
-) -> Stateful<Div> {
-    div()
+) -> SurfaceControl {
+    let button = div()
         .id(id)
         .h(rems(style::CONTROL / 16.0))
         .flex_none()
@@ -121,7 +123,17 @@ fn checkbox(
                 this.docker_run_config.error = None;
                 cx.notify();
             }
-        }))
+        }));
+    controls::selected_button(
+        button,
+        text,
+        Some(if active {
+            Icon::SquareCheck
+        } else {
+            Icon::Square
+        }),
+        active,
+    )
 }
 
 fn container(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
@@ -316,7 +328,7 @@ fn tabs(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
         .border_color(rgb(style::BORDER))
         .children(RunSection::ALL.into_iter().map(|section| {
             let active = section == app.docker_run_config.section;
-            div()
+            let button = div()
                 .id(SharedString::from(format!("run-tab-{}", section.label())))
                 .h(rems(style::BAR / 16.0))
                 .flex_none()
@@ -343,7 +355,8 @@ fn tabs(app: &Crabdash, cx: &mut Context<Crabdash>) -> Div {
                         this.docker_run_config.section = section;
                         cx.notify();
                     }
-                }))
+                }));
+            controls::selected_button(button, section.label(), None, active)
         }))
 }
 
@@ -399,7 +412,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
         .items_center()
         .justify_center()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(
+        .child(crate::desktop::controls::modal(
             div()
                 .w(rems(540.0 / 16.0))
                 .max_w(window.viewport_size().width - px(32.0))
@@ -519,7 +532,7 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                 .items_center()
                                 .justify_between()
                                 .gap(px(12.0))
-                                .child(
+                                .child(controls::selected_button(
                                     div()
                                         .id("run-preview-toggle")
                                         .h(rems(style::CONTROL / 16.0))
@@ -542,43 +555,41 @@ pub fn render(app: &Crabdash, window: &Window, cx: &mut Context<Crabdash>) -> im
                                             this.docker_run_config.show_preview ^= true;
                                             cx.notify();
                                         })),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap(px(8.0))
-                                        .child(
-                                            surface_button(
-                                                "run-modal-cancel",
-                                                None,
-                                                Some("Cancel"),
-                                            )
+                                    "Command preview",
+                                    Some(if config.show_preview {
+                                        Icon::ChevronDown
+                                    } else {
+                                        Icon::ChevronRight
+                                    }),
+                                    config.show_preview,
+                                ))
+                                .child(controls::action_group(
+                                    div().flex().gap(px(8.0)),
+                                    vec![
+                                        surface_button("run-modal-cancel", None, Some("Cancel"))
                                             .opacity(if busy { 0.5 } else { 1.0 })
-                                            .on_click(
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.close_docker_run_modal(cx);
-                                                    if !this.docker_run_config.busy {
-                                                        this.focus_handle.focus(window);
-                                                    }
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            surface_button(
-                                                "run-modal-submit",
-                                                Some(Icon::Play),
-                                                Some(if busy { "Running…" } else { "Run" }),
-                                            )
-                                            .opacity(if busy || !valid { 0.5 } else { 1.0 })
-                                            .on_click(
-                                                cx.listener(|this, _, window, cx| {
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.close_docker_run_modal(cx);
+                                                if !this.docker_run_config.busy {
                                                     this.focus_handle.focus(window);
-                                                    this.submit_docker_run(cx);
-                                                }),
-                                            ),
+                                                }
+                                            })),
+                                        controls::primary(surface_button(
+                                            "run-modal-submit",
+                                            Some(Icon::Play),
+                                            Some(if busy { "Running…" } else { "Run" }),
+                                        ))
+                                        .opacity(if busy || !valid { 0.5 } else { 1.0 })
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.focus_handle.focus(window);
+                                                this.submit_docker_run(cx);
+                                            }),
                                         ),
-                                ),
+                                    ],
+                                )),
                         ),
                 ),
-        )
+            136.0 / 255.0,
+        ))
 }

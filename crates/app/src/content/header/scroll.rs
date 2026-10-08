@@ -27,10 +27,7 @@ pub(super) fn handle(
     window: &mut Window,
     cx: &mut Context<Crabdash>,
 ) -> ScrollHandle {
-    let id = SharedString::from(format!(
-        "tab-scroll-{}-{pane}",
-        app.workspaces.store.active
-    ));
+    let id = SharedString::from(format!("tab-scroll-{}-{pane}", app.workspaces.store.active));
     let state = window.use_keyed_state(id, cx, |_, _| State::default());
     let geometry = Geometry {
         tabs: tabs.to_vec(),
@@ -64,20 +61,7 @@ pub(super) fn handle(
     })
 }
 
-fn reveal_offset(current: Pixels, width: Pixels, viewport: Pixels, index: usize) -> Pixels {
-    if viewport <= px(0.0) {
-        return current;
-    }
-    let left = width * index as f32;
-    let right = left + width;
-    if left + current < px(0.0) || width > viewport {
-        -left
-    } else if right + current > viewport {
-        viewport - right
-    } else {
-        current
-    }
-}
+use crate::layout::geometry::reveal_offset;
 
 #[cfg(test)]
 mod tests {
@@ -86,14 +70,20 @@ mod tests {
     #[test]
     fn reveals_clipped_tabs_using_the_current_pane_width() {
         assert_eq!(reveal_offset(px(0.0), px(154.0), px(430.0), 2), px(-32.0));
-        assert_eq!(reveal_offset(px(-32.0), px(154.0), px(330.0), 2), px(-132.0));
+        assert_eq!(
+            reveal_offset(px(-32.0), px(154.0), px(330.0), 2),
+            px(-132.0)
+        );
         assert_eq!(reveal_offset(px(-132.0), px(154.0), px(330.0), 0), px(0.0));
         assert_eq!(reveal_offset(px(0.0), px(220.0), px(858.0), 3), px(-22.0));
     }
 
     #[test]
     fn preserves_visible_tabs_and_prefers_identity_when_a_tab_cannot_fit() {
-        assert_eq!(reveal_offset(px(-100.0), px(154.0), px(430.0), 1), px(-100.0));
+        assert_eq!(
+            reveal_offset(px(-100.0), px(154.0), px(430.0), 1),
+            px(-100.0)
+        );
         assert_eq!(reveal_offset(px(-32.0), px(154.0), px(600.0), 2), px(-32.0));
         assert_eq!(reveal_offset(px(0.0), px(300.0), px(200.0), 1), px(-300.0));
         assert_eq!(reveal_offset(px(-10.0), px(154.0), px(0.0), 2), px(-10.0));

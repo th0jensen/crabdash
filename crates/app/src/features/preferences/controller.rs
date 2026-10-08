@@ -113,13 +113,6 @@ impl Crabdash {
         if self.preferences.sidebar_width != settings.sidebar_width {
             self.sidebar_width = px(settings.sidebar_width);
         }
-        if self.preferences.terminal_rows != settings.terminal_rows {
-            self.quake_height = px(crate::components::style::BAR * settings.interface_font_size
-                / crate::components::style::TEXT
-                + 26.0
-                + f32::from(settings.terminal_rows)
-                    * (settings.terminal_font_size * settings.terminal_line_height).ceil());
-        }
         if self.preferences.log_lines != settings.log_lines {
             self.expanded_docker_logs.clear();
             self.logs_open_containers.clear();

@@ -6,6 +6,36 @@ use anyhow::{Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use utils::{args, args::Args, output::Output};
 
+#[cfg(any(target_os = "windows", test))]
+mod windows;
+
+/// Bundled local Windows PowerShell, shared with the interactive terminal.
+/// The environment and filesystem are consulted only on a Windows host.
+pub(crate) fn local_executable() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = std::env::var("SystemRoot").ok();
+        windows::bundled_executable(root.as_deref(), |path| std::path::Path::new(path).is_file())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+fn remote_command(encoded: &str) -> Result<String> {
+    // Every argument is generated ASCII. Leaving them unquoted works with
+    // Windows OpenSSH's cmd.exe and PowerShell default shells. The target
+    // resolves its own executable; a desktop SystemRoot never enters SSH.
+    let command =
+        format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
+    ensure!(
+        command.len() <= 8191,
+        "Windows SSH command is too long for the default command shell; shorten the command or its parameters"
+    );
+    Ok(command)
+}
+
 pub(crate) fn literal(value: &str) -> Result<String> {
     ensure!(
         !value.contains('\0'),
@@ -121,20 +151,13 @@ pub(crate) async fn run_native(
 pub(crate) async fn run(machine: &mut Machine, script: &str) -> Result<Output> {
     let encoded = encoded(script);
     if let Some(remote) = machine.remote.as_mut() {
-        // Every argument here is generated ASCII. Leaving them unquoted works
-        // with Windows OpenSSH's cmd.exe and PowerShell default shells, and
-        // avoids applying POSIX single-quote rules to a Windows shell.
-        let command =
-            format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
-        ensure!(
-            command.len() <= 8191,
-            "Windows SSH command is too long for the default command shell; shorten the command or its parameters"
-        );
+        let command = remote_command(&encoded)?;
         remote.run_ssh_command(&command, &Args::new()).await
     } else {
+        let executable = local_executable().unwrap_or_else(|| "powershell.exe".into());
         machine
             .run(
-                "powershell.exe",
+                &executable,
                 &args![
                     "-NoLogo",
                     "-NoProfile",
@@ -147,44 +170,56 @@ pub(crate) async fn run(machine: &mut Machine, script: &str) -> Result<Output> {
     }
 }
 
-/// Resource-only variant: encoded transport uses the same sample deadline as
-/// every preceding platform subquery, including Windows OpenSSH shell limits.
+// Base64 stdin keeps the source independent of the target's input code page.
+// A short encoded bootstrap also stays below cmd.exe's Windows SSH limit.
+const INPUT_BOOTSTRAP: &str = "$source = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String([Console]::In.ReadToEnd())); & ([ScriptBlock]::Create($source))";
+
+/// Resource-only variant: input delivery, execution and output share the same
+/// sample deadline. Source length does not consume the remote command line.
 pub(crate) async fn run_until(
     machine: &mut Machine,
     script: &str,
     deadline: std::time::Instant,
 ) -> Result<Output> {
-    let encoded = encoded(script);
+    let encoded = encoded(INPUT_BOOTSTRAP);
+    let input = STANDARD.encode(script.as_bytes());
     if let Some(remote) = machine.remote.as_mut() {
-        let command =
-            format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
-        ensure!(
-            command.len() <= 8191,
-            "Windows SSH command is too long for the default command shell; shorten the command or its parameters"
-        );
+        let command = remote_command(&encoded)?;
         remote
-            .run_ssh_command_until(&command, &Args::new(), deadline)
+            .run_ssh_command_with_input_until(&command, &Args::new(), input.as_bytes(), deadline)
             .await
     } else {
-        machine
-            .run_until(
-                "powershell.exe",
-                &args![
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-EncodedCommand",
-                    &encoded
-                ],
-                deadline,
-            )
-            .await
+        let executable = local_executable().unwrap_or_else(|| "powershell.exe".into());
+        crate::command::run_with_input_until(
+            &executable,
+            &args![
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                &encoded
+            ],
+            input.as_bytes(),
+            deadline,
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_commands_use_the_target_executable_instead_of_local_system_root() -> Result<()> {
+        let local = windows::bundled_executable(Some(r"C:\Windows with spaces"), |_| true)
+            .ok_or_else(|| anyhow::anyhow!("Expected bundled Windows PowerShell"))?;
+        let command = remote_command(&encoded("Write-Output 'test'"))?;
+        assert!(command.starts_with("powershell.exe -NoLogo "));
+        assert!(!command.contains(&local));
+        assert!(remote_command(&"A".repeat(8192)).is_err());
+        Ok(())
+    }
 
     #[test]
     fn names_are_literals_and_encoded_scripts_round_trip() -> Result<()> {
@@ -200,6 +235,21 @@ mod tests {
         let decoded = String::from_utf16(&utf16)?;
         assert!(decoded.contains("Write-Output '雪'"));
         assert!(decoded.contains("exit 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn stdin_script_payload_is_unicode_safe_and_independent_of_command_length() -> Result<()> {
+        let script = "Write-Output '雪 ‘quoted’ $literal';\n".repeat(10_000);
+        assert!(encoded(&script).len() > 8191);
+        let input = STANDARD.encode(script.as_bytes());
+        assert!(input.is_ascii());
+        assert_eq!(STANDARD.decode(input)?, script.as_bytes());
+        let command = format!(
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
+            encoded(INPUT_BOOTSTRAP)
+        );
+        assert!(command.len() <= 8191);
         Ok(())
     }
 

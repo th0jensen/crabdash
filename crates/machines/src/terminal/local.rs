@@ -1,18 +1,20 @@
-use super::{
-    TerminalCommand, TerminalController, TerminalEvent, TerminalOptions, TerminalSession,
-    TerminalSize,
-};
+use super::{TerminalController, TerminalOptions, TerminalSession, TerminalSize};
 use anyhow::{Context as _, Result};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, native_pty_system};
-use smol::{
-    channel::{Receiver, Sender},
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
-};
 use std::io;
+#[cfg(not(target_os = "windows"))]
+mod unix;
+#[cfg(any(target_os = "windows", test))]
+mod windows;
+#[cfg(not(target_os = "windows"))]
+use unix::run_local_terminal;
+#[cfg(target_os = "windows")]
+use windows::run_local_terminal;
+
 struct LocalTerminal {
     master: Box<dyn MasterPty + Send>,
-    reader: smol::Unblock<Box<dyn io::Read + Send>>,
-    writer: smol::Unblock<Box<dyn io::Write + Send>>,
+    reader: Box<dyn io::Read + Send>,
+    writer: Box<dyn io::Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
@@ -51,8 +53,8 @@ pub(super) async fn open_local_terminal(
 
         Ok(LocalTerminal {
             master: pty_pair.master,
-            reader: smol::Unblock::with_capacity(64 * 1024, reader),
-            writer: smol::Unblock::with_capacity(64 * 1024, writer),
+            reader,
+            writer,
             child,
             killer,
         })
@@ -78,145 +80,11 @@ fn shell_command() -> CommandBuilder {
 fn shell_command() -> CommandBuilder {
     // Windows PowerShell is bundled with supported Windows versions. Resolve
     // it under SystemRoot so launching does not depend on an edited PATH.
-    if let Some(root) = std::env::var_os("SystemRoot") {
-        let shell =
-            std::path::PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-        if shell.is_file() {
-            let mut command = CommandBuilder::new(shell);
-            command.arg("-NoLogo");
-            return command;
-        }
+    if let Some(shell) = crate::powershell::local_executable() {
+        let mut command = CommandBuilder::new(shell);
+        command.arg("-NoLogo");
+        return command;
     }
     // portable-pty's Windows default resolves COMSPEC (normally cmd.exe).
     CommandBuilder::new_default_prog()
-}
-
-enum LocalAction {
-    Output(io::Result<Vec<u8>>),
-    Command(Result<TerminalCommand, smol::channel::RecvError>),
-}
-
-async fn run_local_terminal(
-    mut terminal: LocalTerminal,
-    commands: Receiver<TerminalCommand>,
-    events: Sender<TerminalEvent>,
-) {
-    let mut natural_exit = false;
-
-    loop {
-        let action = smol::future::race(
-            async {
-                let mut buffer = vec![0; 16 * 1024];
-                let result = terminal.reader.read(&mut buffer).await.map(|count| {
-                    buffer.truncate(count);
-                    buffer
-                });
-                LocalAction::Output(result)
-            },
-            async { LocalAction::Command(commands.recv().await) },
-        )
-        .await;
-
-        match action {
-            LocalAction::Output(Ok(output)) if output.is_empty() => {
-                natural_exit = true;
-                break;
-            }
-            LocalAction::Output(Ok(output)) => {
-                if events.send(TerminalEvent::Output(output)).await.is_err() {
-                    break;
-                }
-            }
-            LocalAction::Output(Err(error)) => {
-                if events
-                    .send(TerminalEvent::Error(format!(
-                        "Local terminal read failed: {error}"
-                    )))
-                    .await
-                    .is_err()
-                {
-                    tracing::debug!("Terminal event receiver closed after local read failure");
-                }
-                break;
-            }
-            LocalAction::Command(Ok(TerminalCommand::Input(input))) => {
-                if let Err(error) = terminal.writer.write_all(&input).await {
-                    if events
-                        .send(TerminalEvent::Error(format!(
-                            "Local terminal write failed: {error}"
-                        )))
-                        .await
-                        .is_err()
-                    {
-                        tracing::debug!("Terminal event receiver closed after local write failure");
-                    }
-                    break;
-                }
-                if let Err(error) = terminal.writer.flush().await {
-                    if events
-                        .send(TerminalEvent::Error(format!(
-                            "Local terminal flush failed: {error}"
-                        )))
-                        .await
-                        .is_err()
-                    {
-                        tracing::debug!("Terminal event receiver closed after local flush failure");
-                    }
-                    break;
-                }
-            }
-            LocalAction::Command(Ok(TerminalCommand::Resize(size))) => {
-                if let Err(error) = terminal.master.resize(size.into()) {
-                    if events
-                        .send(TerminalEvent::Error(format!(
-                            "Local terminal resize failed: {error}"
-                        )))
-                        .await
-                        .is_err()
-                    {
-                        tracing::debug!(
-                            "Terminal event receiver closed after local resize failure"
-                        );
-                    }
-                }
-            }
-            LocalAction::Command(Ok(TerminalCommand::Shutdown) | Err(_)) => break,
-        }
-    }
-
-    if let Err(error) = terminal.writer.flush().await {
-        tracing::debug!(%error, "Failed to flush local terminal during shutdown");
-    }
-    drop(terminal.writer);
-
-    if !natural_exit {
-        if let Err(error) = terminal.killer.kill() {
-            tracing::debug!(%error, "Failed to terminate local terminal process");
-        }
-    }
-
-    let exit_status = smol::unblock(move || terminal.child.wait()).await;
-    match exit_status {
-        Ok(status) => {
-            let code = status.exit_code() as i32;
-            if events
-                .send(TerminalEvent::Exited(Some(code)))
-                .await
-                .is_err()
-            {
-                tracing::debug!("Terminal event receiver closed before local exit status");
-            }
-        }
-        Err(error) => {
-            if events
-                .send(TerminalEvent::Error(format!(
-                    "Failed to reap local terminal process: {error}"
-                )))
-                .await
-                .is_err()
-            {
-                tracing::debug!("Terminal event receiver closed before local wait error");
-            }
-        }
-    }
 }

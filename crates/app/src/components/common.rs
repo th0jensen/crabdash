@@ -18,6 +18,8 @@ impl Render for ControlTooltip {
 
 pub fn tooltip_text(label: impl Into<SharedString>) -> Div {
     div()
+        .max_w(rems(360.0 / 16.0))
+        .whitespace_normal()
         .px(px(8.0))
         .py(px(5.0))
         .rounded(px(style::RADIUS))
@@ -62,12 +64,31 @@ pub fn lucide_icon(icon: LucideIcon, size: f32) -> Div {
         .child(char::from(icon).to_string())
 }
 
-pub fn button<I, L>(
+/// Compact, transparent window chrome shared by titlebar and terminal actions.
+pub(crate) fn chrome_icon_button(id: impl Into<ElementId>, icon: Icon) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(rems(style::CHROME_CONTROL / 16.0))
+        .flex_none()
+        .rounded(px(style::RADIUS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(style::TEXT_MUTED))
+        .cursor_pointer()
+        .hover(|this| {
+            this.bg(rgb(style::SURFACE_HOVER))
+                .text_color(rgb(style::TEXT_SELECTED))
+        })
+        .child(lucide_icon(icon, style::ICON))
+}
+
+pub(crate) fn button<I, L>(
     id: impl Into<ElementId>,
     icon: Option<I>,
     label: Option<L>,
     primary: bool,
-) -> Stateful<Div>
+) -> crate::desktop::controls::SurfaceControl
 where
     L: Into<SharedString>,
     I: Into<LucideIcon>,
@@ -75,6 +96,8 @@ where
     let has_label = label.is_some();
     let label = label.map(Into::into);
     let icon = icon.map(Into::into);
+    let native_label = label.clone().unwrap_or_default();
+    let native_icon = icon;
 
     let bg = if primary {
         rgb(0x3A3A3A)
@@ -92,7 +115,7 @@ where
         rgb(0x303030)
     };
 
-    div()
+    let fallback = div()
         .id(id)
         .h(gpui::rems(style::CONTROL / 16.0))
         .px(px(12.0))
@@ -111,11 +134,37 @@ where
         .when_some(icon, |this, icon| {
             this.child(lucide_icon(icon, style::ICON))
         })
-        .when_some(label, |this, label| this.child(div().child(label)))
+        .when_some(label, |this, label| this.child(div().child(label)));
+    crate::desktop::controls::button(fallback, native_label, native_icon)
 }
 
 /// Neutral action control matching table filters and compact text fields.
 pub(crate) fn surface_button(
+    id: impl Into<ElementId>,
+    icon: Option<Icon>,
+    label: Option<&str>,
+) -> crate::desktop::controls::SurfaceControl {
+    crate::desktop::controls::button(
+        surface_button_fallback(id, icon, label),
+        label.unwrap_or_default().to_owned(),
+        icon,
+    )
+}
+
+/// Icon-only surface control with a meaningful native tooltip and accessibility label.
+pub(crate) fn surface_icon_button(
+    id: impl Into<ElementId>,
+    icon: Icon,
+    help: &str,
+) -> crate::desktop::controls::SurfaceControl {
+    crate::desktop::controls::icon_button(
+        surface_button_fallback(id, Some(icon), None),
+        help.to_owned(),
+        icon,
+    )
+}
+
+fn surface_button_fallback(
     id: impl Into<ElementId>,
     icon: Option<Icon>,
     label: Option<&str>,

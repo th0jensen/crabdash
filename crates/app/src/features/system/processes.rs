@@ -15,6 +15,7 @@ pub(super) use view::render;
 pub(crate) enum Column {
     Pid,
     Name,
+    User,
     Cpu,
     Memory,
 }
@@ -68,6 +69,9 @@ fn optional_order<T: PartialOrd>(a: Option<T>, b: Option<T>, sort: Sort<Column>)
         (None, None) => Ordering::Equal,
     }
 }
+fn user_name(row: &ProcessUsage) -> Option<&str> {
+    row.user.as_deref().filter(|user| !user.trim().is_empty())
+}
 fn visible_indices(rows: &[ProcessUsage], sort: Sort<Column>, query: &str) -> Vec<usize> {
     let mut visible: Vec<_> = rows
         .iter()
@@ -83,15 +87,22 @@ fn visible_indices(rows: &[ProcessUsage], sort: Sort<Column>, query: &str) -> Ve
         })
         .map(|(index, _)| index)
         .collect();
-    if sort.column == Column::Name {
+    if matches!(sort.column, Column::Name | Column::User) {
         let mut named: Vec<_> = visible
             .into_iter()
-            .map(|index| (index, rows[index].name.to_lowercase()))
+            .map(|index| {
+                let key = if sort.column == Column::User {
+                    user_name(&rows[index]).map(str::to_lowercase)
+                } else {
+                    Some(rows[index].name.to_lowercase())
+                };
+                (index, key)
+            })
             .collect();
         named.sort_by(|(a, name_a), (b, name_b)| {
             let a = &rows[*a];
             let b = &rows[*b];
-            sort.order(name_a.cmp(name_b))
+            optional_order(name_a.as_deref(), name_b.as_deref(), sort)
                 .then_with(|| a.pid.cmp(&b.pid))
                 .then_with(|| a.start_id.cmp(&b.start_id))
         });
@@ -102,7 +113,7 @@ fn visible_indices(rows: &[ProcessUsage], sort: Sort<Column>, query: &str) -> Ve
         let b = &rows[*b];
         match sort.column {
             Column::Pid => sort.order(a.pid.cmp(&b.pid)),
-            Column::Name => Ordering::Equal,
+            Column::Name | Column::User => Ordering::Equal,
             Column::Cpu => optional_order(
                 a.cpu_percent.filter(|value| value.is_finite()),
                 b.cpu_percent.filter(|value| value.is_finite()),
@@ -135,6 +146,44 @@ mod tests {
             user: Some("alice".into()),
             memory_bytes: Some(u64::from(pid) * 1024),
             cpu_percent: cpu,
+        }
+    }
+    #[test]
+    fn user_order_is_case_insensitive_with_unknowns_last_in_both_directions() {
+        let mut rows: Vec<_> = (1..=7).map(|pid| process(pid, "worker", None)).collect();
+        for (row, user) in rows.iter_mut().zip([
+            Some("Zulu"),
+            None,
+            Some("alice"),
+            Some("ALICE"),
+            Some(""),
+            Some("   "),
+            Some("bob"),
+        ]) {
+            row.user = user.map(str::to_string);
+        }
+        for (direction, expected) in [
+            (Direction::Ascending, vec![3, 4, 7, 1, 2, 5, 6]),
+            (Direction::Descending, vec![1, 7, 3, 4, 2, 5, 6]),
+        ] {
+            let sort = Sort {
+                column: Column::User,
+                direction,
+            };
+            assert_eq!(
+                visible(&rows, sort, "")
+                    .iter()
+                    .map(|row| row.pid)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                visible(&rows, sort, " ALICE ")
+                    .iter()
+                    .map(|row| row.pid)
+                    .collect::<Vec<_>>(),
+                [3, 4]
+            );
         }
     }
     #[test]
