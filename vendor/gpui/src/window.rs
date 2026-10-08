@@ -54,6 +54,7 @@ use util::{ResultExt, measure};
 use uuid::Uuid;
 
 mod prompts;
+mod tooltip;
 
 use crate::util::atomic_incr_if_not_zero;
 pub use prompts::*;
@@ -474,6 +475,15 @@ pub(crate) struct HitTest {
     pub(crate) hover_hitbox_count: usize,
 }
 
+impl HitTest {
+    fn is_hovered(&self, source: HitboxId) -> bool {
+        self.ids
+            .iter()
+            .take(self.hover_hitbox_count)
+            .any(|id| *id == source)
+    }
+}
+
 /// A type of window control area that corresponds to the platform window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowControlArea {
@@ -533,6 +543,22 @@ pub struct Hitbox {
     pub content_mask: ContentMask<Pixels>,
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
+    #[cfg(target_os = "macos")]
+    native_modal_opacity: Option<f32>,
+    #[cfg(target_os = "macos")]
+    native_modal_backdrop_for: Option<HitboxId>,
+}
+
+/// How an embedded AppKit control participates in the current GPUI frame.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NativeControlPresentation {
+    /// The native control is unobstructed and may receive input.
+    Visible,
+    /// Keep the native material, but disable input behind a modal backdrop.
+    Dimmed(f32),
+    /// A dialog, clipping mask or another overlay covers the native control.
+    Hidden,
 }
 
 impl Hitbox {
@@ -861,6 +887,7 @@ pub struct Window {
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
     active: Rc<Cell<bool>>,
     hovered: Rc<Cell<bool>>,
+    tooltip_presence: tooltip::Presence,
     pub(crate) needs_present: Rc<Cell<bool>>,
     pub(crate) last_input_timestamp: Rc<Cell<Instant>>,
     pub(crate) refreshing: bool,
@@ -1095,6 +1122,9 @@ impl Window {
                 handle
                     .update(&mut cx, |_, window, cx| {
                         window.active.set(active);
+                        if window.tooltip_presence.set_active(active) {
+                            window.tooltip_bounds.take();
+                        }
                         window.modifiers = window.platform_window.modifiers();
                         window.capslock = window.platform_window.capslock();
                         window
@@ -1115,8 +1145,14 @@ impl Window {
             move |active| {
                 handle
                     .update(&mut cx, |_, window, _| {
-                        window.hovered.set(active);
-                        window.refresh();
+                        let changed = window.hovered.replace(active) != active;
+                        let invalidated = window.tooltip_presence.set_hovered(active);
+                        if invalidated {
+                            window.tooltip_bounds.take();
+                        }
+                        if changed || invalidated {
+                            window.refresh();
+                        }
                     })
                     .log_err();
             }
@@ -1242,6 +1278,7 @@ impl Window {
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),
+            tooltip_presence: tooltip::Presence::new(hovered.get(), active.get()),
             active,
             hovered,
             needs_present,
@@ -1910,6 +1947,130 @@ impl Window {
         self.prompt.is_some()
             || self.tooltip_bounds.is_some()
             || !self.next_frame.deferred_draws.is_empty()
+    }
+
+    /// Register the actual dialog bounds before prepainting its children.
+    /// The marker is part of the frame's hitboxes so cached prepaint replay
+    /// preserves the modal's bounds and stacking order.
+    #[cfg(target_os = "macos")]
+    pub fn register_native_control_modal(&mut self, bounds: Bounds<Pixels>, backdrop_opacity: f32) {
+        let viewport = Bounds::new(Point::default(), self.viewport_size());
+        let backdrop = self.next_frame.hitboxes.iter().rposition(|hitbox| {
+            hitbox.behavior == HitboxBehavior::BlockMouse
+                && hitbox.native_modal_backdrop_for.is_none()
+                && hitbox
+                    .bounds
+                    .intersect(&hitbox.content_mask.bounds)
+                    .intersect(&viewport)
+                    == viewport
+        });
+        let dialog = self.insert_hitbox(bounds, HitboxBehavior::Normal);
+        if let Some(backdrop) = backdrop {
+            self.next_frame.hitboxes[backdrop].native_modal_backdrop_for = Some(dialog.id);
+        }
+        if let Some(marker) = self.next_frame.hitboxes.last_mut() {
+            marker.native_modal_opacity = Some(backdrop_opacity.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Classify native content after deferred layers have been prepainted.
+    /// Dialog content occludes native views; its surrounding backdrop dims
+    /// their original AppKit material instead of changing their appearance.
+    #[cfg(target_os = "macos")]
+    pub fn native_control_presentation(&self, marker: &Hitbox) -> NativeControlPresentation {
+        self.invalidator.debug_assert_paint();
+        if self.prompt.is_some()
+            || marker.bounds.intersect(&marker.content_mask.bounds) != marker.bounds
+            || self
+                .tooltip_bounds
+                .as_ref()
+                .is_some_and(|tooltip| tooltip.bounds.intersects(&marker.bounds))
+        {
+            return NativeControlPresentation::Hidden;
+        }
+        let Some(index) = self
+            .next_frame
+            .hitboxes
+            .iter()
+            .position(|hitbox| hitbox.id == marker.id)
+        else {
+            return NativeControlPresentation::Hidden;
+        };
+        let later = &self.next_frame.hitboxes[index + 1..];
+        let mut opacity = 1.0;
+        let mut last_modal = None;
+        for (position, hitbox) in later.iter().enumerate() {
+            if let Some(backdrop) = hitbox.native_modal_opacity {
+                if hitbox
+                    .bounds
+                    .intersect(&hitbox.content_mask.bounds)
+                    .intersects(&marker.bounds)
+                {
+                    return NativeControlPresentation::Hidden;
+                }
+                opacity *= 1.0 - backdrop;
+                last_modal = Some(position);
+            }
+        }
+        for hitbox in later {
+            if hitbox.behavior == HitboxBehavior::Normal {
+                continue;
+            }
+            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+            let modal_backdrop = hitbox.native_modal_backdrop_for.is_some_and(|dialog| {
+                later
+                    .iter()
+                    .any(|hitbox| hitbox.id == dialog && hitbox.native_modal_opacity.is_some())
+            });
+            if !modal_backdrop && bounds.intersects(&marker.bounds) {
+                return NativeControlPresentation::Hidden;
+            }
+        }
+        if last_modal.is_some() {
+            NativeControlPresentation::Dimmed(opacity)
+        } else {
+            NativeControlPresentation::Visible
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    /// Whether native content must hide beneath another rendered surface.
+    pub fn native_control_is_occluded(&self, marker: &Hitbox) -> bool {
+        self.native_control_presentation(marker) == NativeControlPresentation::Hidden
+    }
+
+    /// Register a native leaf's GPUI input/listener fallback without drawing an
+    /// opaque duplicate behind its actual AppKit material and native content.
+    #[cfg(target_os = "macos")]
+    pub fn paint_native_control_fallback<R>(&mut self, paint: impl FnOnce(&mut Self) -> R) -> R {
+        self.with_element_opacity(Some(0.0), paint)
+    }
+
+    /// Dispatch a validated native control activation through the existing
+    /// GPUI click listeners without exposing the platform dispatch result.
+    #[cfg(target_os = "macos")]
+    pub fn dispatch_native_control_click(&mut self, position: Point<Pixels>, cx: &mut App) {
+        let modifiers = self.modifiers();
+        self.dispatch_event(
+            PlatformInput::MouseDown(crate::MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                modifiers,
+                ..Default::default()
+            }),
+            cx,
+        );
+        self.dispatch_event(
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                modifiers,
+                ..Default::default()
+            }),
+            cx,
+        );
     }
 
     /// The current state of the keyboard's modifiers
@@ -3331,9 +3492,38 @@ impl Window {
             bounds,
             content_mask,
             behavior,
+            #[cfg(target_os = "macos")]
+            native_modal_opacity: None,
+            #[cfg(target_os = "macos")]
+            native_modal_backdrop_for: None,
         };
         self.next_frame.hitboxes.push(hitbox.clone());
         hitbox
+    }
+
+    // Called before tooltip prepaint, once current root and deferred hitboxes are inserted.
+    pub(crate) fn is_tooltip_source_hovered(&self, source: HitboxId) -> bool {
+        self.tooltip_pointer_present()
+            && self
+                .next_frame
+                .hit_test(self.mouse_position)
+                .is_hovered(source)
+    }
+
+    pub(crate) fn tooltip_pointer_present(&self) -> bool {
+        self.tooltip_presence.contains_pointer()
+    }
+
+    pub(crate) fn tooltip_epoch(&self) -> u64 {
+        self.tooltip_presence.epoch()
+    }
+
+    pub(crate) fn tooltip_epoch_is_current(&self, epoch: u64) -> bool {
+        self.tooltip_presence.permits(epoch)
+    }
+
+    pub(crate) fn tooltip_callback_is_current(&self, origin: u64, current: Option<u64>) -> bool {
+        self.tooltip_presence.permits_callback(origin, current)
     }
 
     /// Set a hitbox which will act as a control area of the platform window.
@@ -3607,6 +3797,13 @@ impl Window {
             // Track the mouse position with our own state, since accessing the platform
             // API for the mouse position can only occur on the main thread.
             PlatformInput::MouseMove(mouse_move) => {
+                if self
+                    .tooltip_presence
+                    .set_hovered(self.platform_window.is_hovered())
+                {
+                    self.tooltip_bounds.take();
+                    self.refresh();
+                }
                 self.mouse_position = mouse_move.position;
                 self.modifiers = mouse_move.modifiers;
                 PlatformInput::MouseMove(mouse_move)
@@ -3622,6 +3819,10 @@ impl Window {
                 PlatformInput::MouseUp(mouse_up)
             }
             PlatformInput::MouseExited(mouse_exited) => {
+                if self.tooltip_presence.set_hovered(false) {
+                    self.tooltip_bounds.take();
+                    self.refresh();
+                }
                 self.modifiers = mouse_exited.modifiers;
                 PlatformInput::MouseExited(mouse_exited)
             }
@@ -5117,5 +5318,90 @@ pub fn outline(
         border_widths: (1.).into(),
         border_color: border_color.into(),
         border_style,
+    }
+}
+
+#[cfg(test)]
+mod tooltip_source_tests {
+    use super::{ContentMask, DispatchTree, Frame, Hitbox, HitboxBehavior, HitboxId};
+    use crate::{ActionRegistry, Bounds, Keymap, Pixels, point, px, size};
+    use std::{cell::RefCell, rc::Rc};
+
+    fn frame() -> Frame {
+        Frame::new(DispatchTree::new(
+            Rc::new(RefCell::new(Keymap::new(Vec::new()))),
+            Rc::new(ActionRegistry::default()),
+        ))
+    }
+
+    fn bounds(x: f32, width: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(0.0)), size(px(width), px(100.0)))
+    }
+
+    fn hitbox(id: u64, x: f32, behavior: HitboxBehavior) -> Hitbox {
+        Hitbox {
+            id: HitboxId(id),
+            bounds: bounds(x, 100.0),
+            content_mask: ContentMask {
+                bounds: bounds(x, 100.0),
+            },
+            behavior,
+            #[cfg(target_os = "macos")]
+            native_modal_opacity: None,
+            #[cfg(target_os = "macos")]
+            native_modal_backdrop_for: None,
+        }
+    }
+
+    #[test]
+    fn tooltip_source_uses_current_geometry_mask_and_hitbox_identity() {
+        let mut frame = frame();
+        frame.hitboxes.push(hitbox(1, 0.0, HitboxBehavior::Normal));
+        let pointer = point(px(20.0), px(20.0));
+        assert!(frame.hit_test(pointer).is_hovered(HitboxId(1)));
+
+        // The same element receives a fresh hitbox at a new location next frame.
+        frame.hitboxes = vec![hitbox(2, 100.0, HitboxBehavior::Normal)];
+        assert!(!frame.hit_test(pointer).is_hovered(HitboxId(2)));
+        let pointer = point(px(120.0), px(20.0));
+        assert!(!frame.hit_test(pointer).is_hovered(HitboxId(1)));
+        assert!(frame.hit_test(pointer).is_hovered(HitboxId(2)));
+
+        frame.hitboxes[0].content_mask.bounds = bounds(150.0, 50.0);
+        assert!(!frame.hit_test(pointer).is_hovered(HitboxId(2)));
+        assert!(
+            frame
+                .hit_test(point(px(170.0), px(20.0)))
+                .is_hovered(HitboxId(2))
+        );
+    }
+
+    #[test]
+    fn blocking_layers_hide_tooltip_sources_but_cached_replay_preserves_identity() {
+        let mut frame = frame();
+        let pointer = point(px(20.0), px(20.0));
+        frame.hitboxes.push(hitbox(1, 0.0, HitboxBehavior::Normal));
+        frame.hitboxes.push(hitbox(2, 0.0, HitboxBehavior::Normal));
+        assert!(frame.hit_test(pointer).is_hovered(HitboxId(1)));
+
+        for behavior in [
+            HitboxBehavior::BlockMouse,
+            HitboxBehavior::BlockMouseExceptScroll,
+        ] {
+            frame.hitboxes[1].behavior = behavior;
+            let hit_test = frame.hit_test(pointer);
+            assert!(hit_test.is_hovered(HitboxId(2)));
+            assert!(!hit_test.is_hovered(HitboxId(1)));
+            if behavior == HitboxBehavior::BlockMouseExceptScroll {
+                assert!(hit_test.ids.contains(&HitboxId(1)));
+            }
+        }
+
+        frame.hitboxes.pop();
+        let replay = frame.hitboxes.clone();
+        frame.hitboxes.clear();
+        assert!(!frame.hit_test(pointer).is_hovered(HitboxId(1)));
+        frame.hitboxes.extend(replay);
+        assert!(frame.hit_test(pointer).is_hovered(HitboxId(1)));
     }
 }

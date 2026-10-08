@@ -614,6 +614,14 @@ impl<'alloc: 'cb, 'cb> Terminal<'alloc, 'cb> {
     pub fn rows(&self) -> Result<u16> {
         self.get(Data::ROWS)
     }
+    /// Get the emulator grid width in physical pixels, set by [`Self::resize`].
+    pub fn width_px(&self) -> Result<u32> {
+        self.get(Data::WIDTH_PX)
+    }
+    /// Get the emulator grid height in physical pixels, set by [`Self::resize`].
+    pub fn height_px(&self) -> Result<u32> {
+        self.get(Data::HEIGHT_PX)
+    }
     /// Get the cursor column position (inner-indexed).
     pub fn cursor_x(&self) -> Result<u16> {
         self.get(Data::CURSOR_X)

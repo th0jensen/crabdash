@@ -29,6 +29,7 @@ pub(crate) struct TestWindowState {
     moved_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
     is_fullscreen: bool,
+    hovered: bool,
 }
 
 #[derive(Clone)]
@@ -74,6 +75,7 @@ impl TestWindow {
             moved_callback: None,
             input_handler: None,
             is_fullscreen: false,
+            hovered: false,
         })))
     }
 
@@ -97,6 +99,17 @@ impl TestWindow {
         drop(lock);
         callback(active);
         self.0.lock().active_status_change_callback = Some(callback);
+    }
+
+    pub(crate) fn simulate_hover_status_change(&self, hovered: bool) {
+        let mut lock = self.0.lock();
+        lock.hovered = hovered;
+        let callback = lock.hover_status_change_callback.take();
+        drop(lock);
+        if let Some(mut callback) = callback {
+            callback(hovered);
+            self.0.lock().hover_status_change_callback = Some(callback);
+        }
     }
 
     pub fn simulate_input(&mut self, event: PlatformInput) -> bool {
@@ -196,7 +209,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn is_hovered(&self) -> bool {
-        false
+        self.0.lock().hovered
     }
 
     fn set_title(&mut self, title: &str) {

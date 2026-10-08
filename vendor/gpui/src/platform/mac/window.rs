@@ -52,6 +52,8 @@ use std::{
 };
 use util::ResultExt;
 
+mod hover;
+
 const WINDOW_STATE_IVAR: &str = "windowState";
 
 static mut WINDOW_CLASS: *const Class = ptr::null();
@@ -112,6 +114,10 @@ unsafe fn build_classes() {
             decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
             unsafe {
                 decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
+                decl.add_method(
+                    sel!(acceptsFirstResponder),
+                    yes as extern "C" fn(&Object, Sel) -> BOOL,
+                );
 
                 decl.add_method(
                     sel!(performKeyEquivalent:),
@@ -155,7 +161,11 @@ unsafe fn build_classes() {
                 );
                 decl.add_method(
                     sel!(mouseExited:),
-                    handle_view_event as extern "C" fn(&Object, Sel, id),
+                    handle_mouse_exited as extern "C" fn(&Object, Sel, id),
+                );
+                decl.add_method(
+                    sel!(mouseEntered:),
+                    handle_mouse_entered as extern "C" fn(&Object, Sel, id),
                 );
                 decl.add_method(
                     sel!(mouseDragged:),
@@ -388,8 +398,12 @@ struct MacWindowState {
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
+    hover_callback: Option<Box<dyn FnMut(bool)>>,
+    hover: hover::Hover<PlatformInput>,
+    removed: bool,
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     resize_callback_pending: bool,
+    defer_renderer_resize: bool,
     moved_callback: Option<Box<dyn FnMut()>>,
     should_close_callback: Option<Box<dyn FnMut() -> bool>>,
     close_callback: Option<Box<dyn FnOnce()>>,
@@ -549,6 +563,26 @@ impl MacWindowState {
         // SAFETY: Public NSWindow conversion accounts for the display/window origin.
         let position = unsafe { msg_send![self.native_window, convertPointFromScreen: position] };
         self.point_from_window(position)
+    }
+
+    fn pointer_in_renderer(&self, position: Point<Pixels>) -> bool {
+        // Use the view's current visible rectangle, not its former content host.
+        unsafe {
+            let view = self.native_view.as_ptr() as id;
+            let bounds = NSView::bounds(view);
+            let flipped: BOOL = msg_send![view, isFlipped];
+            let local = view_coordinates::local_rect(
+                Bounds::new(position, size(px(0.0), px(0.0))),
+                bounds,
+                flipped == YES,
+            )
+            .origin;
+            let visible: NSRect = msg_send![view, visibleRect];
+            local.x >= visible.origin.x
+                && local.y >= visible.origin.y
+                && local.x < visible.origin.x + visible.size.width
+                && local.y < visible.origin.y + visible.size.height
+        }
     }
 
     fn rect_to_screen(&self, bounds: Bounds<Pixels>) -> NSRect {
@@ -746,8 +780,12 @@ impl MacWindow {
                 request_frame_callback: None,
                 event_callback: None,
                 activate_callback: None,
+                hover_callback: None,
+                hover: Default::default(),
+                removed: false,
                 resize_callback: None,
                 resize_callback_pending: false,
+                defer_renderer_resize: false,
                 moved_callback: None,
                 should_close_callback: None,
                 close_callback: None,
@@ -823,6 +861,17 @@ impl MacWindow {
             content_view.addSubview_(native_view.autorelease());
             native_window.makeFirstResponder_(native_view);
 
+            // Track the renderer itself, including after embedding/reparenting.
+            let tracking_area: id = msg_send![class!(NSTrackingArea), alloc];
+            let tracking_area: id = msg_send![
+                tracking_area,
+                initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.))
+                options: renderer_tracking_options(kind)
+                owner: native_view
+                userInfo: nil
+            ];
+            let _: () = msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
+
             match kind {
                 WindowKind::Normal | WindowKind::Floating => {
                     native_window.setLevel_(NSNormalWindowLevel);
@@ -836,20 +885,6 @@ impl MacWindow {
                     }
                 }
                 WindowKind::PopUp => {
-                    // Use a tracking area to allow receiving MouseMoved events even when
-                    // the window or application aren't active, which is often the case
-                    // e.g. for notification windows.
-                    let tracking_area: id = msg_send![class!(NSTrackingArea), alloc];
-                    let _: () = msg_send![
-                        tracking_area,
-                        initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.))
-                        options: NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
-                        owner: native_view
-                        userInfo: nil
-                    ];
-                    let _: () =
-                        msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
-
                     native_window.setLevel_(NSPopUpWindowLevel);
                     let _: () = msg_send![
                         native_window,
@@ -980,6 +1015,9 @@ impl MacWindow {
 impl Drop for MacWindow {
     fn drop(&mut self) {
         let mut this = self.0.lock();
+        this.removed = true;
+        this.hover_callback.take();
+        this.hover.clear();
         this.renderer.destroy();
         let window = this.native_window;
         this.display_link.take();
@@ -1271,9 +1309,8 @@ impl PlatformWindow for MacWindow {
         unsafe { self.0.lock().native_window.isKeyWindow() == YES }
     }
 
-    // is_hovered is unused on macOS. See Window::is_window_hovered.
     fn is_hovered(&self) -> bool {
-        false
+        self.0.lock().hover.hovered()
     }
 
     fn set_title(&mut self, title: &str) {
@@ -1434,7 +1471,9 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().activate_callback = Some(callback);
     }
 
-    fn on_hover_status_change(&self, _: Box<dyn FnMut(bool)>) {}
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
+        self.0.lock().hover_callback = Some(callback);
+    }
 
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {
         self.0.as_ref().lock().resize_callback = Some(callback);
@@ -1667,6 +1706,18 @@ extern "C" fn dealloc_view(this: &Object, _: Sel) {
 }
 
 extern "C" fn handle_key_equivalent(this: &Object, _: Sel, native_event: id) -> BOOL {
+    // Native siblings and their field editors own their editing shortcuts.
+    // Traversing the renderer must not dispatch them to a hidden GPUI input.
+    // Returning NO lets AppKit continue through its responder chain and menus.
+    unsafe {
+        let window: id = msg_send![this, window];
+        if window != nil {
+            let responder: id = msg_send![window, firstResponder];
+            if responder != nil && responder != this as *const Object as id {
+                return NO;
+            }
+        }
+    }
     handle_key_event(this, native_event, true)
 }
 
@@ -1884,10 +1935,31 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
             _ => {}
         };
 
+        if let PlatformInput::MouseMove(mouse_move) = &event {
+            let hovered = lock.pointer_in_renderer(mouse_move.position);
+            drop(lock);
+            publish_renderer_hover(&window_state, hovered, None);
+            lock = window_state.lock();
+        }
+
         match &event {
             PlatformInput::MouseDown(_) => {
                 drop(lock);
                 unsafe {
+                    // A native sibling (such as an embedded sidebar table) may
+                    // own AppKit focus even after GPUI focuses a text field.
+                    // Hand text input back to this NSTextInputClient when the
+                    // user clicks its dashboard, outside the window-state lock.
+                    if matches!(
+                        &event,
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Left,
+                            ..
+                        })
+                    ) {
+                        let native_window: id = msg_send![this, window];
+                        let _: BOOL = msg_send![native_window, makeFirstResponder: this];
+                    }
                     let input_context: id = msg_send![this, inputContext];
                     msg_send![input_context, handleEvent: native_event]
                 }
@@ -1940,10 +2012,138 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
             _ => {}
         }
 
-        if let Some(mut callback) = lock.event_callback.take() {
-            drop(lock);
+        // Flush native tracking changes before this genuine pointer event, so a
+        // quick leave/reentry starts its delay in the correct lifetime.
+        drop(lock);
+        drain_renderer_hover(&window_state);
+        let callback = {
+            let mut lock = window_state.lock();
+            if lock.removed {
+                return;
+            }
+            lock.event_callback.take()
+        };
+        if let Some(mut callback) = callback {
             callback(event);
-            window_state.lock().event_callback = Some(callback);
+            let mut lock = window_state.lock();
+            if !lock.removed {
+                lock.event_callback = Some(callback);
+            }
+        }
+    }
+}
+
+fn renderer_tracking_options(kind: WindowKind) -> NSUInteger {
+    let options =
+        NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect;
+    if kind == WindowKind::PopUp {
+        options | NSTrackingMouseMoved
+    } else {
+        options
+    }
+}
+
+#[cfg(test)]
+mod renderer_tracking_tests {
+    use super::{
+        NSTrackingActiveAlways, NSTrackingInVisibleRect, NSTrackingMouseEnteredAndExited,
+        NSTrackingMouseMoved, WindowKind, renderer_tracking_options,
+    };
+
+    #[test]
+    fn all_renderer_kinds_track_presence_and_only_popups_track_inactive_mouse_moves() {
+        let presence =
+            NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect;
+        assert_eq!(renderer_tracking_options(WindowKind::Normal), presence);
+        assert_eq!(renderer_tracking_options(WindowKind::Floating), presence);
+        assert_eq!(
+            renderer_tracking_options(WindowKind::PopUp),
+            presence | NSTrackingMouseMoved
+        );
+    }
+}
+
+extern "C" fn handle_mouse_entered(this: &Object, _: Sel, _: id) {
+    let state = unsafe { get_window_state(this) };
+    publish_renderer_hover(&state, true, None);
+}
+
+extern "C" fn handle_mouse_exited(this: &Object, _: Sel, event: id) {
+    let state = unsafe { get_window_state(this) };
+    let event = state.lock().input_from_native(event);
+    publish_renderer_hover(&state, false, event);
+}
+
+fn publish_renderer_hover(
+    state: &Arc<Mutex<MacWindowState>>,
+    hovered: bool,
+    exit: Option<PlatformInput>,
+) {
+    let mut lock = state.lock();
+    if lock.removed {
+        return;
+    }
+    if !lock.hover.record(hovered, exit) {
+        return;
+    }
+    let executor = lock.executor.clone();
+    let weak_state = Arc::downgrade(state);
+    drop(lock);
+    // Tracking callbacks may run inside native layout during a GPUI update.
+    // Preserve every transition in FIFO order; do not coalesce a quick exit away.
+    executor
+        .spawn(async move {
+            let Some(state) = weak_state.upgrade() else {
+                return;
+            };
+            drain_renderer_hover(&state);
+        })
+        .detach();
+}
+
+fn drain_renderer_hover(state: &Arc<Mutex<MacWindowState>>) {
+    loop {
+        let event = {
+            let mut lock = state.lock();
+            if lock.removed {
+                return;
+            }
+            lock.hover.take()
+        };
+        let Some((hovered, exit)) = event else {
+            return;
+        };
+        if let Some(hovered) = hovered {
+            let callback = {
+                let mut lock = state.lock();
+                if lock.removed {
+                    return;
+                }
+                lock.hover_callback.take()
+            };
+            if let Some(mut callback) = callback {
+                callback(hovered);
+                let mut lock = state.lock();
+                if !lock.removed {
+                    lock.hover_callback = Some(callback);
+                }
+            }
+        }
+        if let Some(exit) = exit {
+            let callback = {
+                let mut lock = state.lock();
+                if lock.removed {
+                    return;
+                }
+                lock.event_callback.take()
+            };
+            if let Some(mut callback) = callback {
+                callback(exit);
+                let mut lock = state.lock();
+                if !lock.removed {
+                    lock.event_callback = Some(callback);
+                }
+            }
         }
     }
 }
@@ -2170,12 +2370,15 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
 fn notify_renderer_resize(window_state: &Arc<Mutex<MacWindowState>>) {
     let mut state = window_state.lock();
     // An embedded host can lay out the renderer while GPUI's App is borrowed.
-    // The original direct-content child keeps its synchronous resize behavior.
+    // Keep callbacks deferred after reparenting back to the original host too:
+    // that transition can resize the now-direct child inside the same update.
+    // Windows that have never embedded their renderer remain synchronous.
     let embedded = unsafe {
         let parent: id = msg_send![state.native_view.as_ptr(), superview];
         parent != state.native_window.contentView()
     };
-    if !embedded {
+    state.defer_renderer_resize |= embedded;
+    if !state.defer_renderer_resize {
         let callback = state.resize_callback.take();
         let size = state.content_size();
         let scale = state.scale_factor();

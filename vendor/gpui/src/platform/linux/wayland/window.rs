@@ -743,6 +743,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn set_hovered(&self, focus: bool) {
+        self.state.borrow_mut().hovered = focus;
         if let Some(ref mut fun) = self.callbacks.borrow_mut().hover_status_change {
             fun(focus);
         }

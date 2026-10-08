@@ -19,6 +19,10 @@ use pathfinder_geometry::{
 use smallvec::SmallVec;
 use std::{borrow::Cow, sync::Arc};
 
+#[cfg(target_os = "linux")]
+#[path = "emoji_fallback.rs"]
+mod emoji_fallback;
+
 pub(crate) struct CosmicTextSystem(RwLock<CosmicTextSystemState>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -53,7 +57,9 @@ struct LoadedFont {
 impl CosmicTextSystem {
     pub(crate) fn new() -> Self {
         // todo(linux) make font loading non-blocking
-        let mut font_system = FontSystem::new();
+        let font_system = FontSystem::new();
+        #[cfg(target_os = "linux")]
+        let font_system = emoji_fallback::with_supported_emoji(font_system);
 
         Self(RwLock::new(CosmicTextSystemState {
             font_system,

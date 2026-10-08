@@ -198,6 +198,13 @@ impl<'t> Selection<'t> {
 
 /// Methods related to [selections](crate::selection).
 impl Terminal<'_, '_> {
+    /// Snapshot of the active screen's tracked selection, if present.
+    /// The returned refs obey the same mutation lifetime rules as other selections.
+    pub fn selection(&self) -> Result<Option<Selection<'_>>> {
+        self.get_optional::<ffi::Selection>(ffi::TerminalData::SELECTION)
+            .map(|selection| selection.map(|raw| unsafe { Selection::from_raw(raw) }))
+    }
+
     /// Set the active screen selection.
     ///
     /// The selection's grid references must be valid for this terminal's
