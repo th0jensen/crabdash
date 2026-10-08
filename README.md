@@ -46,6 +46,10 @@ uses a stock Glass button on macOS 26 and later. Older releases use standard
 buttons. Turning Liquid Glass off restores the shared dashboard sidebar and
 toolbar without replacing the window or its terminal sessions. Native controls
 disable while application overlays are open.
+Appearance follows the system by default; Preferences also offers explicit light
+and dark modes. The searchable settings pane groups General, Interface, Terminal
+and System settings. The terminal drawer uses shared controls in every appearance
+and spans the full window below the native macOS sidebar.
 Windows backends use caption hit areas, the notification area, and per-user login startup.
 Unavailable startup/tray capabilities remain visible in Preferences.
 
@@ -64,6 +68,13 @@ services input, output, resizing, and process exit independently, so synchronous
 ConPTY operations do not prevent output draining or shutdown. Its pinned PTY
 patch uses a fresh console cursor and closes unused pipe handles before native
 teardown; see `vendor/portable-pty/CRABDASH_PATCHES.md`.
+Terminal tabs show the foreground local program, or command-bearing OSC titles
+from SSH shells. Mouse-aware programs receive clicks, drags and wheel input; hold
+Shift to select text or scroll history instead. Growing the drawer reveals rows
+above existing content, with fullscreen terminal programs retaining their own
+coordinate layout. Dashboard and terminal tabs fit their titles, support splits
+and can be closed; dashboard sections reopen from View or their keyboard shortcut.
+
 Local Windows queries and terminals resolve bundled Windows PowerShell under
 `SystemRoot`, so an edited `PATH` does not break machine discovery or telemetry.
 SSH queries resolve PowerShell on the target machine.
