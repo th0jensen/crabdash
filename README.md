@@ -1,7 +1,7 @@
 # Crabdash
 
 > [!NOTE]
-> This project is under active development and features may change as the project evolves toward v0.2.0
+> This project is under active development and features may change as the project evolves.
 
 ![Screenshot of the app (v0.1.1)](assets/screenshot_v0.1.0.png)
 
@@ -98,7 +98,7 @@ SSH identity discovery also probes Windows CIM when `uname` succeeds with an
 unrecognized identity, including Cygwin/MSYS. Recognized Linux, WSL, and Darwin
 targets retain their Unix detection path.
 
-## Features (Milestone v0.2.0)
+## Features
 
 - [x] System overview (hostname, OS version, architecture)
 - [x] Docker container control (start, stop, restart)

@@ -9085,11 +9085,11 @@ SOFTWARE.
 ======================================================================
 MIT License (MIT)
 Used by:
-  app 0.2.0
-  crabdash 0.2.0
-  machines 0.2.0
-  services 0.2.0
-  utils 0.2.0
+  app 0.1.4
+  crabdash 0.1.4
+  machines 0.1.4
+  services 0.1.4
+  utils 0.1.4
   libghostty-vt 0.2.2 https://github.com/uzaaft/libghostty-rs
   blade-graphics 0.7.1 https://github.com/kvark/blade
   blade-macros 0.3.0 https://github.com/kvark/blade

@@ -77,7 +77,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "crabdash"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "app",
  "embed-resource",
@@ -3247,7 +3247,7 @@ checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
 name = "machines"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-ssh2-lite",
@@ -5236,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "services"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "lucide-icons",
@@ -6428,7 +6428,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "utils"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "plist",
