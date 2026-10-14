@@ -1,17 +1,48 @@
 //! Stage native sources and apply the extension without modifying their checkout.
 use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
+    ffi::OsStr,
     fs::{self, OpenOptions},
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
+#[cfg(not(windows))]
+fn git_path(path: &Path) -> Cow<'_, OsStr> {
+    Cow::Borrowed(path.as_os_str())
+}
+
+#[cfg(windows)]
+fn git_path(path: &Path) -> Cow<'_, OsStr> {
+    use std::{
+        ffi::OsString,
+        os::windows::ffi::{OsStrExt, OsStringExt},
+        path::{Component, Prefix},
+    };
+    // Git for Windows rejects Rust's verbatim prefix. Preserve native paths for
+    // filesystem calls and remove only recognized disk/UNC prefixes in argv.
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return Cow::Borrowed(path.as_os_str());
+    };
+    let (skip, unc) = match prefix.kind() {
+        Prefix::VerbatimDisk(_) => (4, false),
+        Prefix::VerbatimUNC(_, _) => (8, true),
+        _ => return Cow::Borrowed(path.as_os_str()),
+    };
+    let mut wide = if unc { vec![92, 92] } else { Vec::new() };
+    wide.extend(path.as_os_str().encode_wide().skip(skip));
+    Cow::Owned(OsString::from_wide(&wide))
+}
+
 fn git(source: &Path, args: &[&str], patch: Option<&Path>) -> Result<Output, String> {
     let mut command = Command::new("git");
-    command.arg("-C").arg(source).args(args);
+    #[cfg(windows)]
+    command.args(["-c", "core.longpaths=true"]);
+    command.arg("-C").arg(git_path(source)).args(args);
     if let Some(patch) = patch {
-        command.arg(patch);
+        command.arg(git_path(patch));
     }
     command
         .output()
@@ -306,6 +337,35 @@ mod tests {
 
     struct Fixture(PathBuf);
 
+    #[cfg(windows)]
+    #[test]
+    fn git_arguments_preserve_unicode_without_verbatim_disk_or_unc_prefixes() {
+        for (native, expected) in [
+            (
+                r"\\?\C:\Thomas 工作\change.patch",
+                r"C:\Thomas 工作\change.patch",
+            ),
+            (
+                r"\\?\UNC\server\share\工作\change.patch",
+                r"\\server\share\工作\change.patch",
+            ),
+            (
+                r"C:\Thomas 工作\change.patch",
+                r"C:\Thomas 工作\change.patch",
+            ),
+            (
+                r"\\server\share\工作\change.patch",
+                r"\\server\share\工作\change.patch",
+            ),
+            (
+                r"\\?\Volume{abc}\change.patch",
+                r"\\?\Volume{abc}\change.patch",
+            ),
+        ] {
+            assert_eq!(&*git_path(Path::new(native)), OsStr::new(expected));
+        }
+    }
+
     impl Fixture {
         fn new(content: &str) -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -321,6 +381,10 @@ mod tests {
                     .status
                     .success()
             );
+            // These fixtures assert exact LF bytes, including in staged copies.
+            // Do not inherit a developer or Windows runner's core.autocrlf setting.
+            fs::write(path.join(".gitattributes"), "* text eol=lf\n")
+                .expect("set fixture line endings");
             fs::write(path.join("value"), content).expect("write native fixture");
             fs::write(
                 path.join("change.patch"),
