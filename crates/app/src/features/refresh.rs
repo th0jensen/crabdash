@@ -31,11 +31,15 @@ impl<K: Eq + Hash> Requests<K> {
     }
 
     pub(crate) fn complete(&mut self, key: &K, ticket: u64) -> bool {
-        if self.active.get(key) != Some(&ticket) {
+        if !self.is_current(key, ticket) {
             return false;
         }
         self.active.remove(key);
         true
+    }
+
+    pub(crate) fn is_current(&self, key: &K, ticket: u64) -> bool {
+        self.active.get(key) == Some(&ticket)
     }
 
     pub(crate) fn forget(&mut self, key: &K) {
@@ -71,8 +75,11 @@ mod tests {
         let mut requests = Requests::default();
         let old = requests.restart("fedora");
         let current = requests.restart("fedora");
+        assert!(!requests.is_current(&"fedora", old));
+        assert!(requests.is_current(&"fedora", current));
         assert!(!requests.complete(&"fedora", old));
         assert!(requests.complete(&"fedora", current));
+        assert!(!requests.is_current(&"fedora", current));
         let removed = requests.restart("fedora");
         requests.forget(&"fedora");
         let recreated = requests.restart("fedora");

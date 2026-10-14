@@ -7,9 +7,7 @@ use utils::{args, args::Args};
 
 // top's first sample has no usable interval. Two logging samples produce a
 // target-side interval without installing a helper or assuming Python exists.
-const SCRIPT: &str = r#"set -eu
-export LC_ALL=C
-printf '[cpu]\n'; /usr/bin/top -l 2 -s 1 -n 0 -F -R
+const SYSTEM_SCRIPT: &str = r#"
 printf '\n[memory]\n'; /usr/bin/vm_stat
 printf '\n[total]\n'; /usr/sbin/sysctl -n hw.memsize
 printf '\n[cores]\n'; /usr/sbin/sysctl -n hw.logicalcpu
@@ -18,7 +16,10 @@ printf '\n[time]\n'; /bin/date +%s
 printf '\n[swap]\n'; /usr/sbin/sysctl -n vm.swapusage 2>/dev/null || true
 "#;
 
-pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
+pub(super) async fn sample(
+    machine: &mut ResourceCollector<'_>,
+    on_core: &mut impl FnMut(ResourceSample),
+) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
     // Read counters beside the request timestamp, before top's one-second interval.
     // An SSH target must never receive counters from the desktop host.
@@ -34,19 +35,19 @@ pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Resour
     } else {
         None
     };
-    let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
-    let mut sample = parse(&output)?;
-    #[cfg(target_os = "macos")]
-    if let Some(cpu) = native_cpu {
-        if matches!(&cpu, CpuSample::Counters { cores, .. } if cores.len() == sample.logical_cpus) {
-            sample.cpu = cpu;
-        } else {
-            tracing::warn!(
-                logical_cpus = sample.logical_cpus,
-                "Native macOS CPU topology changed; using top aggregate"
-            );
-        }
-    }
+    #[cfg(not(target_os = "macos"))]
+    let native_cpu: Option<CpuSample> = None;
+    let cpu_script = if native_cpu.is_some() {
+        "printf '[load]\\n'; /usr/sbin/sysctl -n vm.loadavg\n"
+    } else {
+        "printf '[cpu]\\n'; /usr/bin/top -l 2 -s 1 -n 0 -F -R\n"
+    };
+    let script = format!("set -eu\nexport LC_ALL=C\n{cpu_script}{SYSTEM_SCRIPT}");
+    let output = machine.run("sh", &args!["-c", script]).await?;
+    let mut sample = parse_with_cpu(&output, native_cpu)?;
+    sample.captured_at = captured_at;
+    machine.check_budget()?;
+    on_core(sample.clone());
     sample.processes = super::processes::macos::sample(machine).await.ok();
     sample.network = super::network::macos::sample(machine).await.ok();
     sample.disks = super::disks::macos::sample(machine).await.ok();
@@ -55,29 +56,69 @@ pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Resour
     Ok(sample)
 }
 
+#[cfg(test)]
 fn parse(output: &str) -> Result<ResourceSample> {
-    let top = section(output, "cpu")?;
-    let cpu_lines = top
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("CPU usage:"))
-        .collect::<Vec<_>>();
-    ensure!(cpu_lines.len() >= 2, "Missing second macOS CPU interval");
-    let cpu_line = cpu_lines.last().context("Missing macOS CPU interval")?;
-    let idle = cpu_line
-        .split(',')
-        .find(|value| value.contains("idle"))
-        .context("Missing macOS idle CPU")?
-        .trim()
-        .split_once('%')
-        .context("Invalid macOS idle CPU")?
-        .0
-        .trim()
-        .parse::<f64>()
-        .context("Invalid macOS idle CPU")?;
-    ensure!(
-        idle.is_finite() && (0.0..=100.0).contains(&idle),
-        "Invalid macOS idle percentage"
-    );
+    parse_with_cpu(output, None)
+}
+
+fn parse_with_cpu(output: &str, native_cpu: Option<CpuSample>) -> Result<ResourceSample> {
+    let (cpu, load_average) = if let Some(cpu) = native_cpu {
+        let load = section(output, "load")?;
+        let fields = load
+            .trim_matches(|character: char| {
+                character.is_whitespace() || matches!(character, '{' | '}')
+            })
+            .split_whitespace()
+            .map(str::parse::<f64>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Invalid macOS load average")?;
+        ensure!(fields.len() == 3, "Incomplete macOS load average");
+        (cpu, Some([fields[0], fields[1], fields[2]]))
+    } else {
+        let top = section(output, "cpu")?;
+        let cpu_lines = top
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("CPU usage:"))
+            .collect::<Vec<_>>();
+        ensure!(cpu_lines.len() >= 2, "Missing second macOS CPU interval");
+        let cpu_line = cpu_lines.last().context("Missing macOS CPU interval")?;
+        let idle = cpu_line
+            .split(',')
+            .find(|value| value.contains("idle"))
+            .context("Missing macOS idle CPU")?
+            .trim()
+            .split_once('%')
+            .context("Invalid macOS idle CPU")?
+            .0
+            .trim()
+            .parse::<f64>()
+            .context("Invalid macOS idle CPU")?;
+        ensure!(
+            idle.is_finite() && (0.0..=100.0).contains(&idle),
+            "Invalid macOS idle percentage"
+        );
+        let load_average = top
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("Load Avg:"))
+            .last()
+            .map(|line| {
+                let fields = line
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::parse::<f64>)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .context("Invalid macOS load average")?;
+                ensure!(fields.len() == 3, "Incomplete macOS load average");
+                Ok::<_, anyhow::Error>([fields[0], fields[1], fields[2]])
+            })
+            .transpose()?;
+        (
+            CpuSample::Sampled {
+                percent: 100.0 - idle,
+            },
+            load_average,
+        )
+    };
     let total_bytes = section(output, "total")?
         .parse::<u64>()
         .context("Invalid macOS total memory")?;
@@ -85,6 +126,12 @@ fn parse(output: &str) -> Result<ResourceSample> {
     let logical_cpus = section(output, "cores")?
         .parse()
         .context("Invalid macOS logical CPU count")?;
+    if let CpuSample::Counters { cores, .. } = &cpu {
+        ensure!(
+            cores.len() == logical_cpus,
+            "Native macOS CPU topology changed during sampling"
+        );
+    }
     let boot = section(output, "boot")?;
     let boot_seconds = boot
         .split_once("sec =")
@@ -102,26 +149,9 @@ fn parse(output: &str) -> Result<ResourceSample> {
     let uptime_seconds = now
         .checked_sub(boot_seconds)
         .context("macOS clock is earlier than boot time")? as f64;
-    let load_average = top
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("Load Avg:"))
-        .last()
-        .map(|line| {
-            let fields = line
-                .split(',')
-                .map(str::trim)
-                .map(str::parse::<f64>)
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("Invalid macOS load average")?;
-            ensure!(fields.len() == 3, "Incomplete macOS load average");
-            Ok::<_, anyhow::Error>([fields[0], fields[1], fields[2]])
-        })
-        .transpose()?;
     let swap = parse_swap(section(output, "swap")?).ok();
     let sample = ResourceSample {
-        cpu: CpuSample::Sampled {
-            percent: 100.0 - idle,
-        },
+        cpu,
         logical_cpus,
         memory,
         swap,
@@ -254,6 +284,31 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn native_cpu_snapshot_needs_no_top_interval_and_validates_topology() -> Result<()> {
+        use super::super::{CpuCoreCounter, CpuCounter};
+        let output = "[load]\n{ 0.5 1.0 1.5 }\n[memory]\nVM (page size of 4096 bytes)\nPages free: 10.\nPages inactive: 20.\n[total]\n1048576\n[cores]\n1\n[boot]\n{ sec = 1700000000, usec = 0 }\n[time]\n1700000123\n[swap]\n";
+        let counter = CpuCounter {
+            total: 100,
+            idle: 40,
+        };
+        let cpu = CpuSample::Counters {
+            aggregate: counter,
+            cores: vec![CpuCoreCounter {
+                name: "0".into(),
+                counter,
+            }],
+        };
+        let sample = parse_with_cpu(output, Some(cpu.clone()))?;
+        assert!(matches!(sample.cpu, CpuSample::Counters { .. }));
+        assert_eq!(sample.load_average, Some([0.5, 1.0, 1.5]));
+        assert!(parse_with_cpu(&output.replace("[cores]\n1", "[cores]\n2"), Some(cpu)).is_err());
+        // Remote fallback must still require top's actual interval, rather than
+        // accidentally accepting the desktop's cumulative native counters.
+        assert!(parse(output).is_err());
+        Ok(())
+    }
+
     #[test]
     fn compressor_larger_than_free_and_inactive_does_not_erase_available_memory() -> Result<()> {
         let output = "VM (page size of 16384 bytes)\nPages free: 4228.\nPages inactive: 190493.\nPages purgeable: 9000.\nPages occupied by compressor: 448199.\n";

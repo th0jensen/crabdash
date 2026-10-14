@@ -1,5 +1,4 @@
 //! Cumulative 100ns process time; creation timestamps guard against PID reuse.
-use super::super::collector::ResourceCollector;
 use super::super::{ProcessCpu, ProcessSample, ProcessesSample};
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
@@ -55,10 +54,9 @@ $rows = @($all | Select-Object -First 8192 | ForEach-Object {
 [pscustomobject]@{ count = $all.Count; rows = $rows } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ProcessesSample> {
+pub(crate) fn script() -> String {
     // Static native source is a literal here-string; target data is never code.
-    let script = format!("$crabdash_process_owner = @'\n{OWNER}\n'@\n{SCRIPT}");
-    parse(&machine.powershell(&script).await?)
+    format!("$crabdash_process_owner = @'\n{OWNER}\n'@\n{SCRIPT}")
 }
 #[derive(Deserialize)]
 struct Row {
@@ -75,7 +73,7 @@ struct Snapshot {
     count: usize,
     rows: Vec<Row>,
 }
-fn parse(output: &str) -> Result<ProcessesSample> {
+pub(crate) fn parse(output: &str) -> Result<ProcessesSample> {
     let snapshot: Snapshot = serde_json::from_str(output.trim_start_matches('\u{feff}'))
         .context("Invalid Windows process response")?;
     ensure!(

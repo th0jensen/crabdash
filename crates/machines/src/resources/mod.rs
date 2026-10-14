@@ -27,12 +27,22 @@ use collector::ResourceCollector;
 
 impl Machine {
     pub async fn sample_resources(&mut self) -> Result<ResourceSample> {
+        self.sample_resources_with_progress(|_| {}).await
+    }
+
+    /// Publishes validated core counters before optional inventories finish.
+    /// The callback runs on the collector task and must not block. Its snapshot
+    /// is a preview, not an additional counter interval.
+    pub async fn sample_resources_with_progress(
+        &mut self,
+        mut on_core: impl FnMut(ResourceSample),
+    ) -> Result<ResourceSample> {
         let kind = self.kind;
         let mut collector = ResourceCollector::new(self);
         let sample = match kind {
-            MachineKind::Linux => linux::sample(&mut collector).await?,
-            MachineKind::MacOS => macos::sample(&mut collector).await?,
-            MachineKind::Windows => windows::sample(&mut collector).await?,
+            MachineKind::Linux => linux::sample(&mut collector, &mut on_core).await?,
+            MachineKind::MacOS => macos::sample(&mut collector, &mut on_core).await?,
+            MachineKind::Windows => windows::sample(&mut collector, &mut on_core).await?,
             MachineKind::Unknown => {
                 bail!("Machine platform is not yet known; refresh the machine first.")
             }

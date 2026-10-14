@@ -165,9 +165,55 @@ impl Crabdash {
         state.last_requested = Some(std::time::Instant::now());
         let show_initial_loading = state.usage.is_none();
         cx.spawn(async move |this: WeakEntity<Crabdash>, cx: &mut AsyncApp| {
-            let result = cx
-                .background_spawn(async move { machine.sample_resources().await })
-                .await;
+            enum Event {
+                Core(machines::resources::ResourceSample),
+                Complete(anyhow::Result<machines::resources::ResourceSample>),
+            }
+            // Exactly one preview and one completion can be queued. Keeping the
+            // collector task alive also guarantees channel closure on panic.
+            let (send, receive) = smol::channel::bounded(2);
+            let _collector = cx.background_spawn(async move {
+                let result = machine
+                    .sample_resources_with_progress(|sample| {
+                        let _ = send.try_send(Event::Core(sample));
+                    })
+                    .await;
+                let _ = send.send(Event::Complete(result)).await;
+            });
+            let result = loop {
+                match receive.recv().await {
+                    Ok(Event::Complete(result)) => break result,
+                    Ok(Event::Core(sample)) => {
+                        if this
+                            .update(cx, |this, cx| {
+                                this.system.observe_clock(super::clock::Reading::now());
+                                if !this.system.requests.is_current(&uuid, ticket)
+                                    || !this
+                                        .machine_store
+                                        .machines
+                                        .iter()
+                                        .find(|machine| machine.uuid == uuid)
+                                        .is_some_and(|machine| target.matches(machine))
+                                {
+                                    return;
+                                }
+                                let state = this.system.machines.entry(uuid).or_default();
+                                if state.preview(sample).is_ok() {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(_) => {
+                        break Err(anyhow::anyhow!(
+                            "Resource collector stopped before completion"
+                        ));
+                    }
+                }
+            };
             this.update(cx, |this, cx| {
                 let interrupted = this.system.observe_clock(super::clock::Reading::now());
                 if !this.system.requests.complete(&uuid, ticket) {

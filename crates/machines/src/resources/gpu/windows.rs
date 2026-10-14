@@ -2,18 +2,14 @@
 //! Different engines can execute concurrently: overall activity is the busiest
 //! engine, not the sum of the 3D/copy/video percentages.
 use super::super::GpuSample;
-use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result, ensure};
 use serde::Deserialize;
-use std::{
-    collections::{BTreeMap, HashMap},
-    time::Duration,
-};
+use std::collections::{BTreeMap, HashMap};
 
 const INVENTORY: &str = include_str!("windows/inventory.cs");
 const PROBE: &str = include_str!("windows/probe.ps1");
 
-fn script(discover: bool) -> String {
+pub(crate) fn script(discover: bool) -> String {
     // Static source is a literal here-string, never interpolated target/user data.
     if discover {
         format!(
@@ -24,14 +20,11 @@ fn script(discover: bool) -> String {
     }
 }
 
-pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<GpuSample>> {
-    let first = parse(&machine.powershell(&script(false)).await?)?;
-    if first.supported {
-        machine.delay(Duration::from_secs(1)).await?;
-    }
+pub(crate) fn parse_interval(first: &str, second: &str) -> Result<Vec<GpuSample>> {
+    let first = parse(first)?;
     // Inventory is discovered once per sample, after the counter baseline. This
     // retains hotplug handling without compiling the native helper twice.
-    let second = parse(&machine.powershell(&script(true)).await?)?;
+    let second = parse(second)?;
     if !first.supported || !second.supported {
         return cook(&second, &second);
     }

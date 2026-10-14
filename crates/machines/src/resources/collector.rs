@@ -45,20 +45,6 @@ impl<'a> ResourceCollector<'a> {
         self.check_budget()?;
         result
     }
-
-    pub async fn delay(&self, duration: Duration) -> Result<()> {
-        self.check_budget()?;
-        smol::future::race(
-            async {
-                smol::Timer::after(duration).await;
-            },
-            async {
-                smol::Timer::at(self.deadline).await;
-            },
-        )
-        .await;
-        self.check_budget()
-    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

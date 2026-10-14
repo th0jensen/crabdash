@@ -190,6 +190,14 @@ impl ResourceMonitor {
         self.previous = None;
     }
     pub fn update(&mut self, sample: ResourceSample) -> Result<ResourceUsage> {
+        let usage = self.preview(&sample)?;
+        self.previous = Some(sample);
+        Ok(usage)
+    }
+
+    /// Computes a preview against the last complete sample without replacing
+    /// counter baselines. Optional inventories may still be collecting.
+    pub fn preview(&self, sample: &ResourceSample) -> Result<ResourceUsage> {
         sample.validate()?;
         let previous = self.previous.as_ref().filter(|previous| {
             previous.boot_id == sample.boot_id
@@ -314,7 +322,6 @@ impl ResourceMonitor {
             disks,
             gpus: sample.gpus.clone(),
         };
-        self.previous = Some(sample);
         Ok(usage)
     }
 }
@@ -349,6 +356,26 @@ mod tests {
             gpus: None,
         }
     }
+    #[test]
+    fn previews_do_not_replace_counter_baselines() -> Result<()> {
+        let mut monitor = ResourceMonitor::default();
+        let first = sample(100, 40, 10.0);
+        assert_eq!(monitor.preview(&first)?.cpu_percent, None);
+        assert_eq!(monitor.update(first)?.cpu_percent, None);
+        let second = sample(200, 60, 11.0);
+        for _ in 0..2 {
+            assert_eq!(monitor.preview(&second)?.cpu_percent, Some(80.0));
+        }
+        // Discarding a preview must not shift the baseline for completion.
+        assert_eq!(
+            monitor.update(sample(300, 120, 12.0))?.cpu_percent,
+            Some(60.0)
+        );
+        monitor.reset();
+        assert_eq!(monitor.preview(&sample(400, 150, 13.0))?.cpu_percent, None);
+        Ok(())
+    }
+
     #[test]
     fn interval_cpu_requires_two_samples_and_resets_after_restart() -> Result<()> {
         let mut monitor = ResourceMonitor::default();

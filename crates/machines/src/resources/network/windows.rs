@@ -1,25 +1,21 @@
 //! Raw CIM byte counters, never localized formatted performance-counter paths.
 use super::super::NetworkCounter;
-use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
-const SCRIPT: &str = r#"
+pub(crate) const SCRIPT: &str = r#"
 $rows = @(Get-CimInstance -ClassName Win32_PerfRawData_Tcpip_NetworkInterface -ErrorAction Stop | ForEach-Object {
     if ($null -eq $_.BytesReceivedPerSec -or $null -eq $_.BytesSentPerSec) { throw 'Network byte counters unavailable' }
     [pscustomobject]@{ id = [string]$_.Name; received = ([uint64]$_.BytesReceivedPerSec).ToString(); sent = ([uint64]$_.BytesSentPerSec).ToString() }
 })
 ConvertTo-Json -InputObject $rows -Depth 3 -Compress
 "#;
-pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<NetworkCounter>> {
-    parse(&machine.powershell(SCRIPT).await?)
-}
 #[derive(Deserialize)]
 struct Row {
     id: String,
     received: String,
     sent: String,
 }
-fn parse(output: &str) -> Result<Vec<NetworkCounter>> {
+pub(crate) fn parse(output: &str) -> Result<Vec<NetworkCounter>> {
     let rows: Vec<Row> = serde_json::from_str(output.trim_start_matches('\u{feff}'))
         .context("Invalid Windows network response")?;
     rows.into_iter()

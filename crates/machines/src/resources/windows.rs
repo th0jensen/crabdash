@@ -37,16 +37,86 @@ try {
 } | ConvertTo-Json -Depth 4 -Compress
 "#;
 
-pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
+pub(super) async fn sample(
+    machine: &mut ResourceCollector<'_>,
+    on_core: &mut impl FnMut(ResourceSample),
+) -> Result<ResourceSample> {
     let captured_at = std::time::Instant::now();
     let output = machine.powershell(SCRIPT).await?;
     let mut sample = parse(&output)?;
-    sample.processes = super::processes::windows::sample(machine).await.ok();
-    sample.network = super::network::windows::sample(machine).await.ok();
-    sample.disks = super::disks::windows::sample(machine).await.ok();
-    sample.gpus = super::gpu::windows::sample(machine).await.ok();
     sample.captured_at = captured_at;
+    machine.check_budget()?;
+    on_core(sample.clone());
+    if let Ok(output) = machine.powershell(&optional_script()).await {
+        enrich(&mut sample, &output);
+    }
     Ok(sample)
+}
+
+/// One optional query process avoids repeated PowerShell startup, CIM setup and
+/// compiler allocations. Other inventories run during the GPU counter interval.
+/// Every domain catches its own failure; absent counters remain unknown.
+fn optional_script() -> String {
+    let gpu_first = super::gpu::windows::script(false);
+    let gpu_second = super::gpu::windows::script(true);
+    let processes = super::processes::windows::script();
+    let network = super::network::windows::SCRIPT;
+    let disks = super::disks::windows::SCRIPT;
+    format!(
+        r#"
+$crabdash_optional = [ordered]@{{ processes = $null; network = $null; disks = $null; gpu_first = $null; gpu_second = $null }}
+try {{ $crabdash_optional.gpu_first = & {{ {gpu_first} }} }} catch {{}}
+$crabdash_gpu_clock = [System.Diagnostics.Stopwatch]::StartNew()
+try {{ $crabdash_optional.processes = & {{ {processes} }} }} catch {{}}
+try {{ $crabdash_optional.network = & {{ {network} }} }} catch {{}}
+try {{ $crabdash_optional.disks = & {{ {disks} }} }} catch {{}}
+if ($null -ne $crabdash_optional.gpu_first) {{
+    try {{
+        $crabdash_gpu_supported = ($crabdash_optional.gpu_first | ConvertFrom-Json -ErrorAction Stop).supported
+        $crabdash_gpu_wait = 1000 - $crabdash_gpu_clock.ElapsedMilliseconds
+        if ($crabdash_gpu_supported -and $crabdash_gpu_wait -gt 0) {{ Start-Sleep -Milliseconds $crabdash_gpu_wait }}
+    }} catch {{}}
+}}
+try {{ $crabdash_optional.gpu_second = & {{ {gpu_second} }} }} catch {{}}
+# One JSON envelope avoids interleaving Console output and PowerShell's output
+# pipeline, and works with Windows CRLF without custom line framing.
+[pscustomobject]$crabdash_optional | ConvertTo-Json -Depth 3 -Compress
+"#
+    )
+}
+
+#[derive(Deserialize)]
+struct OptionalSnapshot {
+    processes: Option<String>,
+    network: Option<String>,
+    disks: Option<String>,
+    gpu_first: Option<String>,
+    gpu_second: Option<String>,
+}
+
+fn enrich(sample: &mut ResourceSample, output: &str) {
+    let Ok(snapshot) =
+        serde_json::from_str::<OptionalSnapshot>(output.trim_start_matches('\u{feff}'))
+    else {
+        return;
+    };
+    sample.processes = snapshot
+        .processes
+        .as_deref()
+        .and_then(|output| super::processes::windows::parse(output).ok());
+    sample.network = snapshot
+        .network
+        .as_deref()
+        .and_then(|output| super::network::windows::parse(output).ok());
+    sample.disks = snapshot
+        .disks
+        .as_deref()
+        .and_then(|output| super::disks::windows::parse(output).ok());
+    sample.gpus = snapshot
+        .gpu_first
+        .as_deref()
+        .zip(snapshot.gpu_second.as_deref())
+        .and_then(|(first, second)| super::gpu::windows::parse_interval(first, second).ok());
 }
 
 // WMI uint64 values may be represented as decimal strings by older tools.
@@ -248,6 +318,38 @@ mod tests {
         assert_eq!(idle.cores[0].percent, Some(0.0));
         assert_eq!(idle.memory.used_percent(), 0.0);
         assert!(idle.swap.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn optional_envelope_handles_crlf_unicode_and_independent_failures() -> Result<()> {
+        let mut sample = parse(&zero_snapshot().to_string())?;
+        let envelope = serde_json::json!({
+            "processes": "unavailable",
+            "network": r#"[{"id":"Ethernet 雪","received":"1234","sent":"5678"}]"#,
+            "disks": null,
+            "gpu_first": r#"{"supported":false,"inventory_available":false,"engines":[],"memory":[],"inventory":[]}"#,
+            "gpu_second": r#"{"supported":false,"inventory_available":true,"engines":[],"memory":[],"inventory":[{"id":"PCI\\GPU","name":"GPU","vendor":"Virtio","driver":"1"}]}"#,
+        });
+        enrich(&mut sample, &format!("\u{feff}{}\r\n", envelope));
+        assert!(sample.processes.is_none());
+        assert!(sample.disks.is_none());
+        let network = sample
+            .network
+            .as_ref()
+            .context("Expected valid network despite process failure")?;
+        assert_eq!(network[0].id, "Ethernet 雪");
+        assert_eq!(network[0].received_bytes, 1234);
+        let gpus = sample
+            .gpus
+            .as_ref()
+            .context("Expected GPU inventory without utilization counters")?;
+        assert_eq!(gpus[0].name, "GPU");
+        assert_eq!(gpus[0].busy_percent, None);
+        // A malformed optional envelope cannot invalidate validated core data.
+        enrich(&mut sample, "broken optional response");
+        sample.validate()?;
+        assert_eq!(sample.memory.total_bytes, 8192);
         Ok(())
     }
 

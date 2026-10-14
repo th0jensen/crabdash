@@ -1,25 +1,21 @@
 //! Physical disks expose cumulative byte counts despite their PerSec names.
 use super::super::DiskCounter;
-use super::super::collector::ResourceCollector;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
-const SCRIPT: &str = r#"
+pub(crate) const SCRIPT: &str = r#"
 $rows = @(Get-CimInstance -ClassName Win32_PerfRawData_PerfDisk_PhysicalDisk -ErrorAction Stop | ForEach-Object {
     if ($null -eq $_.DiskReadBytesPerSec -or $null -eq $_.DiskWriteBytesPerSec) { throw 'Disk byte counters unavailable' }
     [pscustomobject]@{ id = [string]$_.Name; read = ([uint64]$_.DiskReadBytesPerSec).ToString(); written = ([uint64]$_.DiskWriteBytesPerSec).ToString() }
 })
 ConvertTo-Json -InputObject $rows -Depth 3 -Compress
 "#;
-pub(crate) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<Vec<DiskCounter>> {
-    parse(&machine.powershell(SCRIPT).await?)
-}
 #[derive(Deserialize)]
 struct Row {
     id: String,
     read: String,
     written: String,
 }
-fn parse(output: &str) -> Result<Vec<DiskCounter>> {
+pub(crate) fn parse(output: &str) -> Result<Vec<DiskCounter>> {
     let rows: Vec<Row> = serde_json::from_str(output.trim_start_matches('\u{feff}'))
         .context("Invalid Windows disk response")?;
     rows.into_iter()

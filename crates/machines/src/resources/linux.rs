@@ -16,20 +16,48 @@ printf '\n[load]\n'; cat /proc/loadavg 2>/dev/null || true
 printf '\n[boot]\n'; cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
 "#;
 
-pub(super) async fn sample(machine: &mut ResourceCollector<'_>) -> Result<ResourceSample> {
+pub(super) async fn sample(
+    machine: &mut ResourceCollector<'_>,
+    on_core: &mut impl FnMut(ResourceSample),
+) -> Result<ResourceSample> {
+    let captured_at = std::time::Instant::now();
+    let output = machine.run("sh", &args!["-c", SCRIPT]).await?;
+    let mut sample = parse(&output)?;
+    sample.captured_at = captured_at;
+    machine.check_budget()?;
+    on_core(sample.clone());
+    // Core counters must not wait for a large process inventory or an optional
+    // GPU driver. The remaining domains still share one command and deadline.
     let script = [
-        SCRIPT,
+        "export LC_ALL=C\n",
         super::processes::linux::SCRIPT,
         super::network::linux::SCRIPT,
         super::disks::linux::SCRIPT,
         super::gpu::linux::SCRIPT,
     ]
     .concat();
-    let captured_at = std::time::Instant::now();
-    let output = machine.run("sh", &args!["-c", script]).await?;
-    let mut sample = parse(&output)?;
-    sample.captured_at = captured_at;
+    if let Ok(output) = machine.run("sh", &args!["-c", script]).await {
+        enrich(&mut sample, &output);
+    }
     Ok(sample)
+}
+
+fn enrich(sample: &mut ResourceSample, output: &str) {
+    let CpuSample::Counters { aggregate, .. } = &sample.cpu else {
+        return;
+    };
+    sample.processes = section(output, "processes")
+        .ok()
+        .and_then(|value| super::processes::linux::parse(value, aggregate.total));
+    sample.network = section(output, "network")
+        .ok()
+        .and_then(super::network::linux::parse);
+    sample.disks = section(output, "disks")
+        .ok()
+        .and_then(super::disks::linux::parse);
+    sample.gpus = section(output, "gpus")
+        .ok()
+        .and_then(|value| super::gpu::linux::parse(value, section(output, "nvidia").ok()));
 }
 
 fn parse(output: &str) -> Result<ResourceSample> {
@@ -237,6 +265,36 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn optional_enrichment_does_not_change_core_counters_or_capture_time() -> Result<()> {
+        let output = "[cpu]\ncpu 10 0 0 90\ncpu0 10 0 0 90\nbtime 1700000000\n[memory]\nMemTotal: 1000 kB\nMemAvailable: 250 kB\n[uptime]\n120.5 80.0\n[load]\n\n[boot]\nboot\n";
+        let mut sample = parse(output)?;
+        let captured_at = sample.captured_at;
+        enrich(
+            &mut sample,
+            "[network]\nInter-| Receive bytes | Transmit bytes\neth0: 100 1 0 0 0 0 0 0 300 1 0 0 0 0 0 0\n[processes]\nunavailable\n",
+        );
+        assert!(sample.processes.is_none());
+        assert_eq!(sample.captured_at, captured_at);
+        assert_eq!(sample.memory.used_bytes(), 750 * 1024);
+        assert!(matches!(
+            sample.cpu,
+            CpuSample::Counters {
+                aggregate: CpuCounter {
+                    total: 100,
+                    idle: 90
+                },
+                ..
+            }
+        ));
+        let network = sample
+            .network
+            .context("Expected available network counters")?;
+        assert_eq!(network[0].received_bytes, 100);
+        assert_eq!(network[0].sent_bytes, 300);
+        Ok(())
+    }
+
     #[test]
     fn old_kernel_memory_fallback_is_explicitly_estimated() -> Result<()> {
         let (memory, _) = parse_memory(

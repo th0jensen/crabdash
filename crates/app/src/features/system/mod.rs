@@ -37,6 +37,7 @@ pub(crate) struct MachineState {
     target: Option<Target>,
     monitor: ResourceMonitor,
     boot_id: Option<String>,
+    recorded_uptime: Option<f64>,
     pub usage: Option<Rc<ResourceUsage>>,
     pub history: VecDeque<HistoryPoint>,
     pub gpu_history: HashMap<String, VecDeque<ScalarPoint>>,
@@ -70,6 +71,27 @@ impl Target {
 }
 
 impl MachineState {
+    /// Publish core readings immediately while preserving optional inventories
+    /// and rate baselines until the complete sample is recorded.
+    fn preview(&mut self, sample: ResourceSample) -> anyhow::Result<()> {
+        let core = self.monitor.preview(&sample)?;
+        if let Some(current) = &mut self.usage {
+            let current = Rc::make_mut(current);
+            current.cpu_percent = core.cpu_percent;
+            current.cores = core.cores;
+            current.logical_cpus = core.logical_cpus;
+            current.memory = core.memory;
+            current.swap = core.swap;
+            current.load_average = core.load_average;
+            current.uptime_seconds = core.uptime_seconds;
+        } else {
+            self.usage = Some(Rc::new(core));
+        }
+        self.error = None;
+        self.updated = Some(Instant::now());
+        Ok(())
+    }
+
     fn sampling_due(&self, now: Instant, interval: Duration) -> bool {
         !self.loading
             && self
@@ -100,14 +122,14 @@ impl MachineState {
             .as_ref()
             .is_some_and(|current| current != &boot_id)
             || self
-                .usage
-                .as_ref()
-                .is_some_and(|previous| usage.uptime_seconds < previous.uptime_seconds)
+                .recorded_uptime
+                .is_some_and(|previous| usage.uptime_seconds < previous)
         {
             self.history.clear();
             self.gpu_history.clear();
         }
         self.boot_id = Some(boot_id);
+        self.recorded_uptime = Some(usage.uptime_seconds);
         append(
             &mut self.history,
             HistoryPoint {
@@ -201,6 +223,86 @@ mod tests {
             disks: None,
             gpus: None,
         }
+    }
+
+    #[test]
+    fn core_previews_preserve_inventory_and_only_completion_adds_history() -> anyhow::Result<()> {
+        use machines::resources::{CpuCoreCounter, CpuCounter, GpuSample};
+        let mut state = MachineState::default();
+        let mut first = sample("boot", 10.0);
+        let counter = CpuCounter {
+            total: 100,
+            idle: 40,
+        };
+        first.cpu = CpuSample::Counters {
+            aggregate: counter,
+            cores: vec![CpuCoreCounter {
+                name: "0".into(),
+                counter,
+            }],
+        };
+        state.preview(first.clone())?;
+        assert!(state.history.is_empty());
+        assert!(
+            state
+                .usage
+                .as_ref()
+                .is_some_and(|usage| usage.cpu_percent.is_none())
+        );
+        first.gpus = Some(vec![GpuSample {
+            id: "gpu".into(),
+            name: "GPU".into(),
+            vendor: "Apple".into(),
+            driver: None,
+            busy_percent: Some(30.0),
+            memory_used_bytes: None,
+            memory_total_bytes: None,
+            temperature_celsius: None,
+        }]);
+        state.record(first)?;
+        let mut second = sample("boot", 11.0);
+        let counter = CpuCounter {
+            total: 200,
+            idle: 60,
+        };
+        second.cpu = CpuSample::Counters {
+            aggregate: counter,
+            cores: vec![CpuCoreCounter {
+                name: "0".into(),
+                counter,
+            }],
+        };
+        second.memory.available_bytes = 2048;
+        state.preview(second.clone())?;
+        assert_eq!(state.history.len(), 1);
+        let usage = state
+            .usage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing preview"))?;
+        assert_eq!(usage.cpu_percent, Some(80.0));
+        assert_eq!(usage.memory.available_bytes, 2048);
+        assert!(usage.gpus.as_ref().is_some_and(|gpus| gpus[0].id == "gpu"));
+        state.record(second)?;
+        assert_eq!(state.history.len(), 2);
+        assert_eq!(state.history.back().and_then(|point| point.cpu), Some(80.0));
+        assert!(
+            state
+                .usage
+                .as_ref()
+                .is_some_and(|usage| usage.gpus.is_none())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn core_preview_cannot_hide_uptime_regression_from_history_reset() -> anyhow::Result<()> {
+        let mut state = MachineState::default();
+        state.record(sample("boot", 100.0))?;
+        state.record(sample("boot", 101.0))?;
+        state.preview(sample("boot", 1.0))?;
+        state.record(sample("boot", 1.0))?;
+        assert_eq!(state.history.len(), 1);
+        Ok(())
     }
 
     #[test]

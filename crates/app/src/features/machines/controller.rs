@@ -93,7 +93,7 @@ impl Crabdash {
             .machines
             .iter()
             .find(|m| m.uuid == uuid)
-            .cloned()
+            .map(Machine::command_snapshot)
         else {
             return;
         };
