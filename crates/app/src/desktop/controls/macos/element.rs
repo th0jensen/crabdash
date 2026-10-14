@@ -166,6 +166,7 @@ impl Element for Control {
                         leaf.synchronize(
                             &self.spec,
                             bounds,
+                            window.native_control_bounds(&prepaint.1),
                             interactive,
                             opacity,
                             self.leading,

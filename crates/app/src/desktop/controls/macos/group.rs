@@ -58,7 +58,8 @@ define_class!(
 struct Pools(HashMap<gpui::WindowId, Weak<Group>>);
 impl Global for Pools {}
 pub(super) struct Group {
-    root: Retained<Container>,
+    root: Retained<NSView>,
+    clip_host: Option<Retained<Content>>,
     content: Retained<Content>,
     surface: Option<Retained<Surface>>,
 }
@@ -78,12 +79,13 @@ impl Group {
         {
             return group;
         }
-        let root: Retained<Container> =
-            unsafe { msg_send![super(Container::alloc(mtm).set_ivars(())), init] };
+        // Independent controls must not share a window-wide glass container:
+        // AppKit batches their effects outside the individual clipping hosts.
+        let root: Retained<Content> =
+            unsafe { msg_send![super(Content::alloc(mtm).set_ivars(())), init] };
         let content: Retained<Content> =
             unsafe { msg_send![super(Content::alloc(mtm).set_ivars(())), init] };
-        root.setContentView(Some(&content));
-        root.setSpacing(0.0);
+        root.addSubview(&content);
         root.setFrame(renderer.bounds());
         root.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
@@ -96,7 +98,8 @@ impl Group {
         );
         renderer.addSubview(&root);
         let group = Rc::new(Self {
-            root,
+            root: Retained::into_super(root),
+            clip_host: None,
             content,
             surface: None,
         });
@@ -129,6 +132,9 @@ impl Group {
 impl Drop for Group {
     fn drop(&mut self) {
         self.root.removeFromSuperview();
+        if let Some(host) = &self.clip_host {
+            host.removeFromSuperview();
+        }
     }
 }
 
@@ -172,6 +178,13 @@ impl Row {
         let renderer = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
         let root: Retained<Container> =
             unsafe { msg_send![super(Container::alloc(mtm).set_ivars(())), init] };
+        let clip_host: Retained<Content> =
+            unsafe { msg_send![super(Content::alloc(mtm).set_ivars(())), init] };
+        clip_host.setWantsLayer(true);
+        clip_host.setClipsToBounds(true);
+        if let Some(layer) = clip_host.layer() {
+            layer.setMasksToBounds(true);
+        }
         let content: Retained<Content> =
             unsafe { msg_send![super(Content::alloc(mtm).set_ivars(())), init] };
         // The shared native glass, rather than independent bordered bezels,
@@ -183,16 +196,25 @@ impl Row {
         root.setContentView(Some(&surface));
         root.setSpacing(8.0);
         root.setClipsToBounds(true);
-        renderer.addSubview(&root);
+        clip_host.addSubview(&root);
+        renderer.addSubview(&clip_host);
         Some(Self {
             group: Rc::new(Group {
-                root,
+                root: Retained::into_super(Retained::into_super(root)),
+                clip_host: Some(clip_host),
                 content,
                 surface: Some(surface),
             }),
         })
     }
-    fn position(&self, bounds: Bounds<Pixels>, opacity: f32, toolbar: bool, window: &Window) {
+    fn position(
+        &self,
+        bounds: Bounds<Pixels>,
+        visible_bounds: Bounds<Pixels>,
+        opacity: f32,
+        toolbar: bool,
+        window: &Window,
+    ) {
         let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;
         };
@@ -203,19 +225,42 @@ impl Row {
         let renderer = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
         let origin = renderer.bounds().origin;
         let y = if renderer.isFlipped() {
-            origin.y + f64::from(f32::from(bounds.origin.y))
+            origin.y + f64::from(f32::from(visible_bounds.origin.y))
         } else {
-            origin.y + renderer.bounds().size.height - f64::from(f32::from(bounds.bottom()))
+            origin.y + renderer.bounds().size.height - f64::from(f32::from(visible_bounds.bottom()))
         };
+        let clip_host = self.group.clip_host.as_ref().expect("row clipping host");
+        clip_host.setFrame(NSRect::new(
+            NSPoint::new(origin.x + f64::from(f32::from(visible_bounds.origin.x)), y),
+            NSSize::new(
+                f64::from(f32::from(visible_bounds.size.width)),
+                f64::from(f32::from(visible_bounds.size.height)),
+            ),
+        ));
+        let content_origin = super::super::geometry::content_origin(bounds, visible_bounds);
+        clip_host.setBounds(NSRect::new(
+            NSPoint::new(
+                f64::from(f32::from(content_origin.x)),
+                f64::from(f32::from(content_origin.y)),
+            ),
+            clip_host.frame().size,
+        ));
+        // Glass keeps its full geometry; only the ordinary host crops it.
         self.group.root.setFrame(NSRect::new(
-            NSPoint::new(origin.x + f64::from(f32::from(bounds.origin.x)), y),
+            NSPoint::new(0.0, 0.0),
             NSSize::new(
                 f64::from(f32::from(bounds.size.width)),
                 f64::from(f32::from(bounds.size.height)),
             ),
         ));
         if let Some(surface) = &self.group.surface {
-            surface.setFrame(self.group.root.bounds());
+            surface.setFrame(NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(
+                    f64::from(f32::from(bounds.size.width)),
+                    f64::from(f32::from(bounds.size.height)),
+                ),
+            ));
             if toolbar {
                 // Toolbar groups use a shared capsule, like NSToolbarItemGroup.
                 surface.setCornerRadius(f64::from(f32::from(bounds.size.height)) / 2.0);
@@ -306,7 +351,13 @@ impl Element for Actions {
                     row = Row::new(window);
                 }
                 if let Some(native_row) = row.as_ref() {
-                    native_row.position(bounds, opacity, self.toolbar, window);
+                    native_row.position(
+                        bounds,
+                        window.native_control_bounds(&prepaint.1),
+                        opacity,
+                        self.toolbar,
+                        window,
+                    );
                     cx.default_global::<Scopes>().0.push(Scope {
                         window: Window::window_handle(window).window_id(),
                         bounds,

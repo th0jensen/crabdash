@@ -123,6 +123,7 @@ pub(super) struct Token {
     visible: Cell<bool>,
     enabled: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
+    visible_bounds: Cell<Bounds<Pixels>>,
     surface: Cell<Option<Surface>>,
     target: RefCell<Option<MachineTarget>>,
 }
@@ -189,7 +190,11 @@ impl Leaf {
             return None;
         };
         root.addSubview(hosted);
+        root.setWantsLayer(true);
         root.setClipsToBounds(true);
+        if let Some(layer) = root.layer() {
+            layer.setMasksToBounds(true);
+        }
         let group = Group::get(renderer, window, cx, mtm);
         group.add(&root);
         root.setHidden(true);
@@ -207,6 +212,7 @@ impl Leaf {
             visible: Cell::new(false),
             enabled: Cell::new(true),
             bounds: Cell::new(Bounds::default()),
+            visible_bounds: Cell::new(Bounds::default()),
             surface: Cell::new(None),
             target: RefCell::new(current_target(window, cx)),
         });
@@ -256,7 +262,7 @@ impl Leaf {
                     {
                         return;
                     }
-                    let bounds = token.bounds.get();
+                    let bounds = token.visible_bounds.get();
                     let viewport = Bounds::new(Point::default(), window.viewport_size());
                     if bounds.size.width <= px(0.0)
                         || bounds.size.height <= px(0.0)
@@ -459,6 +465,7 @@ impl Leaf {
         &mut self,
         spec: &Spec,
         bounds: Bounds<Pixels>,
+        visible_bounds: Bounds<Pixels>,
         enabled: bool,
         opacity: f32,
         leading: bool,
@@ -474,6 +481,7 @@ impl Leaf {
         if target_changed
             || !self.token.visible.get()
             || self.token.bounds.get() != bounds
+            || self.token.visible_bounds.get() != visible_bounds
             || self.token.surface.get() != current_surface
             || self.token.enabled.get() != enabled
         {
@@ -495,11 +503,12 @@ impl Leaf {
                 .set(self.token.editing_revision.get().wrapping_add(1));
         }
         let view_bounds = renderer.bounds();
-        let x = view_bounds.origin.x + f64::from(f32::from(bounds.origin.x));
+        let x = view_bounds.origin.x + f64::from(f32::from(visible_bounds.origin.x));
         let y = if renderer.isFlipped() {
-            view_bounds.origin.y + f64::from(f32::from(bounds.origin.y))
+            view_bounds.origin.y + f64::from(f32::from(visible_bounds.origin.y))
         } else {
-            view_bounds.origin.y + view_bounds.size.height - f64::from(f32::from(bounds.bottom()))
+            view_bounds.origin.y + view_bounds.size.height
+                - f64::from(f32::from(visible_bounds.bottom()))
         };
         let size = NSSize::new(
             f64::from(f32::from(bounds.size.width)),
@@ -534,8 +543,20 @@ impl Leaf {
             );
             button.setBordered(!host.joined() || emphasized);
         }
+        let clipped_size = NSSize::new(
+            f64::from(f32::from(visible_bounds.size.width)),
+            f64::from(f32::from(visible_bounds.size.height)),
+        );
         self.root
-            .setFrame(host.rect(NSRect::new(NSPoint::new(x, y), size), renderer));
+            .setFrame(host.rect(NSRect::new(NSPoint::new(x, y), clipped_size), renderer));
+        let content_origin = super::super::geometry::content_origin(bounds, visible_bounds);
+        self.root.setBounds(NSRect::new(
+            NSPoint::new(
+                f64::from(f32::from(content_origin.x)),
+                f64::from(f32::from(content_origin.y)),
+            ),
+            clipped_size,
+        ));
         let local = NSRect::new(NSPoint::new(0.0, 0.0), size);
         if let Some(glass) = self.glass.as_ref() {
             glass.setFrame(local);
@@ -722,6 +743,7 @@ impl Leaf {
         self.token.surface.set(current_surface);
         self.token.target.replace(current_target(window, cx));
         self.token.bounds.set(bounds);
+        self.token.visible_bounds.set(visible_bounds);
         self.token.visible.set(true);
         self.root.setHidden(false);
     }

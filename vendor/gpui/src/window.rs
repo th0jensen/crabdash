@@ -1979,12 +1979,14 @@ impl Window {
     #[cfg(target_os = "macos")]
     pub fn native_control_presentation(&self, marker: &Hitbox) -> NativeControlPresentation {
         self.invalidator.debug_assert_paint();
+        let visible_bounds = self.native_control_bounds(marker);
         if self.prompt.is_some()
-            || marker.bounds.intersect(&marker.content_mask.bounds) != marker.bounds
+            || visible_bounds.size.width <= px(0.0)
+            || visible_bounds.size.height <= px(0.0)
             || self
                 .tooltip_bounds
                 .as_ref()
-                .is_some_and(|tooltip| tooltip.bounds.intersects(&marker.bounds))
+                .is_some_and(|tooltip| tooltip.bounds.intersects(&visible_bounds))
         {
             return NativeControlPresentation::Hidden;
         }
@@ -2004,7 +2006,7 @@ impl Window {
                 if hitbox
                     .bounds
                     .intersect(&hitbox.content_mask.bounds)
-                    .intersects(&marker.bounds)
+                    .intersects(&visible_bounds)
                 {
                     return NativeControlPresentation::Hidden;
                 }
@@ -2016,13 +2018,13 @@ impl Window {
             if hitbox.behavior == HitboxBehavior::Normal {
                 continue;
             }
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+            let occluder_bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
             let modal_backdrop = hitbox.native_modal_backdrop_for.is_some_and(|dialog| {
                 later
                     .iter()
                     .any(|hitbox| hitbox.id == dialog && hitbox.native_modal_opacity.is_some())
             });
-            if !modal_backdrop && bounds.intersects(&marker.bounds) {
+            if !modal_backdrop && occluder_bounds.intersects(&visible_bounds) {
                 return NativeControlPresentation::Hidden;
             }
         }
@@ -2031,6 +2033,16 @@ impl Window {
         } else {
             NativeControlPresentation::Visible
         }
+    }
+
+    /// Visible native-view frame within its scroll mask and the window. Keep
+    /// partial controls mounted; AppKit clips them without resizing their content.
+    #[cfg(target_os = "macos")]
+    pub fn native_control_bounds(&self, marker: &Hitbox) -> Bounds<Pixels> {
+        marker
+            .bounds
+            .intersect(&marker.content_mask.bounds)
+            .intersect(&Bounds::new(Point::default(), self.viewport_size()))
     }
 
     #[cfg(target_os = "macos")]
