@@ -135,7 +135,28 @@ def audit_linux(binary, architecture):
     return {"file": description, "glibc_max": ".".join(map(str, max(glibc))), "dependencies": dependencies.splitlines()}
 
 
-def audit_windows(binary):
+def audit_windows_version(blob, version):
+    require(len(blob) >= 6, "Truncated Windows version resource")
+    length, value_length, kind = struct.unpack_from("<HHH", blob)
+    require(6 <= length <= len(blob) and value_length == 52 and kind == 0,
+            "Invalid Windows fixed version information")
+    key = "VS_VERSION_INFO\0".encode("utf-16-le")
+    require(blob[6:6 + len(key)] == key, "Windows fixed version key missing")
+    start = (6 + len(key) + 3) & ~3
+    require(start + value_length <= length, "Truncated Windows fixed version value")
+    fixed = struct.unpack_from("<13I", blob, start)
+    require(fixed[0] == 0xFEEF04BD and fixed[1] == 0x10000, "Invalid Windows fixed version signature")
+    expected = tuple(map(int, version.split("."))) + (0,)
+    require(len(expected) == 4 and all(0 <= part <= 65535 for part in expected),
+            "Windows release version must fit major.minor.patch")
+    file_version = (fixed[2] >> 16, fixed[2] & 65535, fixed[3] >> 16, fixed[3] & 65535)
+    product_version = (fixed[4] >> 16, fixed[4] & 65535, fixed[5] >> 16, fixed[5] & 65535)
+    require(file_version == expected and product_version == expected,
+            f"Windows executable version differs from release {version}: {file_version}, {product_version}")
+    return ".".join(map(str, file_version))
+
+
+def audit_windows(binary, version):
     data = binary.read_bytes()
     require(len(data) >= 64 and data[:2] == b"MZ", "Expected Windows PE executable")
     offset = struct.unpack_from("<I", data, 60)[0]
@@ -170,7 +191,37 @@ def audit_windows(binary):
         identifier = struct.unpack_from("<I", data, resources + 16 + index * 8)[0]
         if not identifier & 0x80000000:
             resource_types.add(identifier)
-    require({3, 14, 24}.issubset(resource_types), "Windows icon, group-icon, or DPI manifest resources missing")
+    require({3, 14, 16, 24}.issubset(resource_types), "Windows icon, group-icon, version, or DPI manifest resources missing")
+
+    def resource_entries(relative):
+        require(relative + 16 <= resource_size, "Truncated Windows resource subdirectory")
+        named, identifiers = struct.unpack_from("<HH", data, resources + relative + 12)
+        count = named + identifiers
+        require(relative + 16 + count * 8 <= resource_size, "Truncated Windows resource children")
+        return [struct.unpack_from("<II", data, resources + relative + 16 + index * 8) for index in range(count)]
+
+    def version_leaves(relative, depth=0):
+        require(depth <= 2, "Windows version resource nesting exceeds type/name/language")
+        leaves = []
+        for _, target in resource_entries(relative):
+            offset = target & 0x7FFFFFFF
+            if target & 0x80000000:
+                leaves.extend(version_leaves(offset, depth + 1))
+            else:
+                require(offset + 16 <= resource_size, "Truncated Windows resource data entry")
+                address, size = struct.unpack_from("<II", data, resources + offset)
+                require(size > 0, "Empty Windows version resource")
+                start = raw_offset(address, size)
+                leaves.append(data[start:start + size])
+        return leaves
+
+    version_resources = []
+    for identifier, target in resource_entries(0):
+        if identifier == 16:
+            require(target & 0x80000000, "Windows version resource directory missing")
+            version_resources.extend(version_leaves(target & 0x7FFFFFFF))
+    require(version_resources, "Windows version resource data missing")
+    versions = {audit_windows_version(blob, version) for blob in version_resources}
 
     imports = []
     import_rva, import_size = struct.unpack_from("<II", data, optional + 120)
@@ -195,7 +246,8 @@ def audit_windows(binary):
         require(optional_size >= 224, "Truncated PE delay-import directory")
         delay_rva, delay_size = struct.unpack_from("<II", data, optional + 216)
         require(not delay_rva and not delay_size, "Delay imports require an explicit dependency audit")
-    return {"file": "PE32+ AMD64", "resource_bytes": resource_size, "resource_types": sorted(resource_types), "dependencies": imports}
+    return {"file": "PE32+ AMD64", "resource_bytes": resource_size, "resource_types": sorted(resource_types),
+            "executable_version": sorted(versions), "dependencies": imports}
 
 
 def package_macos(binary, version, stage, artifact):
@@ -263,7 +315,7 @@ def main():
     binary = args.binary.resolve()
     require(binary.is_file(), f"Binary missing: {binary}")
     platform, architecture = TARGETS[args.target]
-    audit = {"macos": lambda: audit_macos(binary, architecture), "linux": lambda: audit_linux(binary, architecture), "windows": lambda: audit_windows(binary)}[platform]()
+    audit = {"macos": lambda: audit_macos(binary, architecture), "linux": lambda: audit_linux(binary, architecture), "windows": lambda: audit_windows(binary, args.version)}[platform]()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     name = f"crabdash-v{args.version}-{args.target}"
