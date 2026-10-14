@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 import unittest
 
@@ -14,6 +15,23 @@ def load(name, filename):
 
 package = load("release_package", "package.py")
 sdk = load("select_macos_sdk", "select-macos-sdk.py")
+
+
+class NativePatchInputs(unittest.TestCase):
+    def test_extension_patches_keep_lf_when_git_autocrlf_is_enabled(self):
+        root = Path(__file__).resolve().parents[2]
+        patches = sorted((root / "script/patches").glob("*.patch"))
+        self.assertTrue(patches)
+        for patch in patches:
+            with self.subTest(patch=patch.name):
+                self.assertNotIn(b"\r", patch.read_bytes())
+                relative = patch.relative_to(root).as_posix()
+                result = subprocess.run(
+                    ["git", "-c", "core.autocrlf=true", "check-attr", "text", "eol", "--", relative],
+                    cwd=root, capture_output=True, text=True, check=True,
+                ).stdout.splitlines()
+                self.assertIn(f"{relative}: text: set", result)
+                self.assertIn(f"{relative}: eol: lf", result)
 
 
 def version_blob(version=(0, 1, 5, 0)):
