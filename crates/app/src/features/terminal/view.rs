@@ -233,6 +233,8 @@ pub(crate) fn render_quake(
         .right_0()
         .bottom_0()
         .h(app.quake_height)
+        .border_t_1()
+        .border_color(crate::components::style::rgb(style::BORDER))
         .bg(crate::components::style::rgb(style::CONTENT))
         .shadow_lg()
         .flex()

@@ -1,4 +1,4 @@
-//! In-window pane composition; feature state stays scoped by unique domain tabs.
+//! In-window pane composition; each pane owns its tab group, while domain data is shared.
 mod docking;
 mod geometry;
 use geometry::minimum_extent;
@@ -41,7 +41,8 @@ fn panel(
     }
 }
 
-fn empty_dashboard(cx: &mut Context<Crabdash>) -> Div {
+fn empty_dashboard(app: &Crabdash, pane: u32, cx: &mut Context<Crabdash>) -> Div {
+    let group = crate::features::workspaces::groups::Target::current(app, pane);
     div()
         .h_full()
         .w_full()
@@ -69,7 +70,11 @@ fn empty_dashboard(cx: &mut Context<Crabdash>) -> Div {
                         Some(tab.label()),
                         false,
                     )
-                    .on_click(cx.listener(move |app, _, _, cx| app.select_workspace_tab(tab, cx)))
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        if group.validate(app, cx) {
+                            app.select_pane_tab(pane, tab, cx);
+                        }
+                    }))
                 })),
         )
 }
@@ -85,17 +90,25 @@ fn render_node(
     match node {
         Node::Pane { id, tabs, active } => {
             let pane = *id;
-            let feature = if tabs.is_empty() {
-                empty_dashboard(cx)
-            } else {
-                panel(
-                    app,
-                    (*active).into(),
-                    (width - px(24.0)).max(px(0.0)),
-                    window,
-                    cx,
-                )
-            };
+            let group = crate::features::workspaces::groups::Target::current(app, pane);
+            // Keyed state allocated while constructing a panel (such as chart
+            // readouts) belongs to this group even when its kind appears twice.
+            let feature = window.with_element_namespace(
+                SharedString::from(format!("dashboard-{}-{pane}", group.workspace)),
+                |window| {
+                    if tabs.is_empty() {
+                        empty_dashboard(app, pane, cx)
+                    } else {
+                        panel(
+                            app,
+                            (*active).into(),
+                            (width - px(24.0)).max(px(0.0)),
+                            window,
+                            cx,
+                        )
+                    }
+                },
+            );
             div()
                 .id(SharedString::from(format!("workspace-pane-{pane}")))
                 // Percentage heights can resolve against System's intrinsic
@@ -112,7 +125,9 @@ fn render_node(
                 .flex_col()
                 .bg(crate::components::style::rgb(style::CONTENT))
                 .capture_any_mouse_down(cx.listener(move |app, _, _, cx| {
-                    app.focus_workspace_pane(pane, cx);
+                    if group.validate(app, cx) {
+                        app.focus_workspace_pane(pane, cx);
+                    }
                 }))
                 .child(header::render(app, pane, tabs, *active, window, width, cx))
                 .child(docking::body(app, pane, feature, cx))

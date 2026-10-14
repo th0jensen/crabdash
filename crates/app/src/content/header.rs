@@ -1,4 +1,5 @@
 //! Pane tabs reorder within their strip and drag into content to split or join.
+mod add;
 mod drag;
 mod scroll;
 
@@ -16,7 +17,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(super) struct DraggedTab {
     pub(super) tab: MainTab,
-    source_pane: u32,
+    pub(super) source_pane: u32,
     source_index: usize,
     owner: EntityId,
     workspace: Uuid,
@@ -66,16 +67,16 @@ impl Render for DraggedTab {
         {
             return div();
         }
-        crate::components::drag_preview::render(self.tab.label(), tab_icon(self.tab, None))
+        crate::components::drag_preview::render(
+            self.tab.label(),
+            tab_icon(self.tab, style::color(style::TEXT_PRIMARY)),
+        )
     }
 }
 
-fn tab_icon(tab: MainTab, accent: Option<u32>) -> Div {
+fn tab_icon(tab: MainTab, color: u32) -> Div {
     if tab == MainTab::Docker {
-        crate::features::docker::brand::icon_with_color(
-            style::ICON,
-            accent.unwrap_or(crate::components::style::color(style::TEXT_PRIMARY)),
-        )
+        crate::features::docker::brand::icon_with_color(style::ICON, color)
     } else {
         div()
             .size(rems(style::ICON / 16.0))
@@ -83,7 +84,7 @@ fn tab_icon(tab: MainTab, accent: Option<u32>) -> Div {
             .flex()
             .items_center()
             .justify_center()
-            .when_some(accent, |this, accent| this.text_color(rgb(accent)))
+            .text_color(rgb(color))
             .child(lucide_icon(tab.icon(), style::ICON))
     }
 }
@@ -129,12 +130,14 @@ fn reorder(
     if drag.validate(app, cx)
         && let Some((tabs, _)) = app.workspaces.layout().pane(pane)
     {
-        let source = tabs.iter().position(|tab| *tab == drag.tab.into());
+        let source = (drag.source_pane == pane)
+            .then(|| tabs.iter().position(|tab| *tab == drag.tab.into()))
+            .flatten();
         let target = target.and_then(|target| tabs.iter().position(|tab| *tab == target.into()));
         let boundary = target.map_or(tabs.len(), |target| {
             target + usize::from(source.is_some_and(|source| source < target))
         });
-        app.drop_workspace_tab(drag.tab, pane, Drop::Tab(boundary), cx);
+        app.drop_workspace_tab(drag.source_pane, drag.tab, pane, Drop::Tab(boundary), cx);
     }
     cx.stop_propagation();
 }
@@ -149,11 +152,15 @@ fn tab_button(
     title_width: Pixels,
     cx: &mut Context<Crabdash>,
 ) -> Stateful<Div> {
+    let group = crate::features::workspaces::groups::Target::current(app, pane);
     let owner = cx.entity().downgrade();
     let hover_owner = owner.clone();
-    let accent = (active && app.workspaces.layout().focused == pane)
-        .then(|| crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx))
-        .flatten();
+    let tab_text_color = style::color(style::TEXT_PRIMARY);
+    let tab_label_opacity = if active && app.workspaces.layout().focused == pane {
+        1.0
+    } else {
+        style::TAB_LABEL_INACTIVE_OPACITY
+    };
     div()
         .id(SharedString::from(format!(
             "pane-{pane}-tab-{}",
@@ -170,15 +177,7 @@ fn tab_button(
         .text_size(rems(style::TEXT / 16.0))
         .line_height(relative(1.0))
         .whitespace_nowrap()
-        .text_color(crate::components::style::rgb(
-            if active && app.workspaces.layout().focused == pane {
-                style::TEXT_SELECTED
-            } else if active {
-                style::TEXT_PRIMARY
-            } else {
-                style::TEXT_MUTED
-            },
-        ))
+        .text_color(rgb(tab_text_color))
         .border_r_1()
         .border_color(crate::components::style::rgb(style::BORDER))
         .bg(crate::components::style::rgb(if active {
@@ -194,7 +193,6 @@ fn tab_button(
             } else {
                 style::SURFACE_HOVER
             }))
-            .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
         })
         .drag_over::<DraggedTab>(move |this, drag, _, cx| {
             if !valid_hover(&hover_owner, drag, cx) {
@@ -232,14 +230,14 @@ fn tab_button(
                 .flex()
                 .items_center()
                 .gap(rems(4.0 / 16.0))
-                .child(tab_icon(tab, accent))
+                .child(tab_icon(tab, tab_text_color).opacity(tab_label_opacity))
                 .child(
                     div()
                         .w(title_width)
                         .min_w_0()
                         .text_ellipsis()
                         .overflow_hidden()
-                        .when_some(accent, |this, accent| this.text_color(rgb(accent)))
+                        .opacity(tab_label_opacity)
                         .child(tab.label()),
                 )
                 .child(
@@ -263,13 +261,19 @@ fn tab_button(
                         .tooltip(move |_, cx| control_tooltip(format!("Close {}", tab.label()), cx))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |app, _, _, cx| {
-                            app.close_workspace_tab(pane, tab, cx);
+                            if group.validate(app, cx) {
+                                app.close_workspace_tab(pane, tab, cx);
+                            }
                             cx.stop_propagation();
                         }))
                         .child(lucide_icon(Icon::X, 12.0)),
                 ),
         )
-        .on_click(cx.listener(move |app, _, _, cx| app.select_pane_tab(pane, tab, cx)))
+        .on_click(cx.listener(move |app, _, _, cx| {
+            if group.validate(app, cx) {
+                app.select_pane_tab(pane, tab, cx);
+            }
+        }))
         .on_drag(
             DraggedTab {
                 tab,
@@ -313,7 +317,14 @@ pub(super) fn render(
         .iter()
         .map(|tab| tab_width(app, (*tab).into(), window))
         .collect();
-    let scroll = scroll::handle(app, pane, tabs, active, &widths, viewport, window, cx);
+    let control_width = window.rem_size() * (style::BAR / 16.0);
+    let tab_viewport = (viewport - control_width).max(px(0.0));
+    let strip_width = widths
+        .iter()
+        .copied()
+        .fold(px(0.0), |sum, width| sum + width)
+        .min(tab_viewport);
+    let scroll = scroll::handle(app, pane, tabs, active, &widths, tab_viewport, window, cx);
     let hover_owner = cx.entity().downgrade();
     div()
         .id(SharedString::from(format!("pane-{pane}-tab-strip")))
@@ -322,40 +333,51 @@ pub(super) fn render(
         .bg(crate::components::style::rgb(0x202020))
         .flex()
         .items_center()
-        .overflow_x_scroll()
-        .track_scroll(&scroll)
-        .on_drag_move(
-            cx.listener(|app, event: &DragMoveEvent<DraggedTab>, _, cx| {
-                let drag = event.drag(cx).clone();
-                if !drag.validate(app, cx) {
-                    return;
-                }
-                if event.bounds.contains(&event.event.position)
-                    && app.workspaces.drag_target.take().is_some()
-                {
-                    cx.notify();
-                }
-            }),
+        .child(
+            div()
+                .id(SharedString::from(format!("pane-{pane}-scrollable-tabs")))
+                .h_full()
+                .w(strip_width)
+                .flex_none()
+                .flex()
+                .items_center()
+                .overflow_x_scroll()
+                .track_scroll(&scroll)
+                .on_drag_move(
+                    cx.listener(|app, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                        let drag = event.drag(cx).clone();
+                        if !drag.validate(app, cx) {
+                            return;
+                        }
+                        if event.bounds.contains(&event.event.position)
+                            && app.workspaces.drag_target.take().is_some()
+                        {
+                            cx.notify();
+                        }
+                    }),
+                )
+                .children(tabs.iter().enumerate().map(|(index, tab)| {
+                    let width = widths[index];
+                    let title_width =
+                        text_width(app, MainTab::from(*tab).label(), style::TEXT, window);
+                    tab_button(
+                        app,
+                        pane,
+                        index,
+                        (*tab).into(),
+                        *tab == active,
+                        width,
+                        title_width,
+                        cx,
+                    )
+                })),
         )
-        .children(tabs.iter().enumerate().map(|(index, tab)| {
-            let width = widths[index];
-            let title_width = text_width(app, MainTab::from(*tab).label(), style::TEXT, window);
-            tab_button(
-                app,
-                pane,
-                index,
-                (*tab).into(),
-                *tab == active,
-                width,
-                title_width,
-                cx,
-            )
-        }))
+        .child(add::button(app, pane, window, cx))
         .child(
             div()
                 .id(SharedString::from(format!("pane-{pane}-tab-strip-append")))
                 .flex_1()
-                .min_w(rems(24.0 / 16.0))
+                .min_w_0()
                 .h_full()
                 .border_b_1()
                 .border_color(crate::components::style::rgb(style::BORDER))

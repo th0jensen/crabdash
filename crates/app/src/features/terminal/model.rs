@@ -2,6 +2,13 @@
 use crate::layout::{Drop, Layout};
 use uuid::Uuid;
 
+#[derive(Clone, Copy)]
+pub(super) struct PaneTarget {
+    scope: Uuid,
+    revision: u64,
+    pub id: u32,
+}
+
 #[derive(Clone)]
 pub(super) struct Model {
     pub scope: Uuid,
@@ -46,10 +53,32 @@ impl Model {
 
     /// Plan before allocating an emulator, input entity, or transport.
     pub fn with_session(&self, session: Uuid, edge: Option<Drop>) -> Option<Self> {
+        self.with_session_in(self.layout.focused, session, edge)
+    }
+
+    pub fn group(&self, id: u32) -> Option<PaneTarget> {
+        self.layout.pane(id)?;
+        Some(PaneTarget {
+            scope: self.scope,
+            revision: self.revision,
+            id,
+        })
+    }
+
+    pub fn accepts_group(&self, group: PaneTarget) -> bool {
+        self.scope == group.scope
+            && self.revision == group.revision
+            && self.layout.pane(group.id).is_some()
+    }
+
+    /// The explicit target is independent of whichever split currently has focus.
+    pub fn with_session_in(&self, pane: u32, session: Uuid, edge: Option<Drop>) -> Option<Self> {
+        if self.layout.tabs().contains(&session) {
+            return None;
+        }
         let mut candidate = self.clone();
-        let old_active = self.layout.focused_tab()?;
-        let pane = self.layout.focused;
-        if !candidate.layout.insert(session) {
+        let (_, old_active) = self.layout.pane(pane)?;
+        if !candidate.layout.insert_in(pane, session) {
             return None;
         }
         if let Some(edge) = edge {
@@ -106,6 +135,79 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_sessions_belong_to_the_target_group_regardless_of_focus() {
+        let left = Uuid::new_v4();
+        let right = Uuid::new_v4();
+        let below = Uuid::new_v4();
+        let mut model = Model::new(left);
+        assert!(model.insert(right));
+        assert!(model.insert(below));
+        assert!(model.drop_tab(right, 1, Drop::Right));
+        let right_pane = model.layout.focused;
+        assert!(model.drop_tab(below, 1, Drop::Bottom));
+        let lower_pane = model.layout.focused;
+        for (pane, original) in [(1, left), (right_pane, right), (lower_pane, below)] {
+            let fresh = Uuid::new_v4();
+            let candidate = model.with_session_in(pane, fresh, None).unwrap();
+            assert_eq!(
+                candidate.layout.pane(pane),
+                Some(([original, fresh].as_slice(), fresh))
+            );
+            assert_eq!(candidate.layout.focused, pane);
+            assert_eq!(candidate.revision, model.revision + 1);
+            for other in [1, right_pane, lower_pane]
+                .into_iter()
+                .filter(|id| *id != pane)
+            {
+                assert_eq!(candidate.layout.pane(other), model.layout.pane(other));
+            }
+            assert!(
+                candidate
+                    .layout
+                    .validate_members(&[left, right, below, fresh])
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn group_actions_survive_focus_changes_but_reject_removed_or_recreated_panes() {
+        let left = Uuid::new_v4();
+        let right = Uuid::new_v4();
+        let mut model = Model::new(left);
+        assert!(model.insert(right));
+        assert!(model.drop_tab(right, 1, Drop::Right));
+        let right_pane = model.layout.focused;
+        let target = model.group(right_pane).unwrap();
+        assert!(model.layout.select(left));
+        assert!(model.accepts_group(target));
+        let candidate = model
+            .with_session_in(right_pane, Uuid::new_v4(), None)
+            .unwrap();
+        assert!(!candidate.accepts_group(target));
+        assert!(model.remove(right));
+        assert!(!model.accepts_group(target));
+        assert!(model.group(right_pane).is_none());
+        let replacement = model
+            .with_session(Uuid::new_v4(), Some(Drop::Right))
+            .unwrap();
+        assert_ne!(replacement.layout.focused, right_pane);
+        assert!(!replacement.accepts_group(target));
+        let old_left = model.group(1).unwrap();
+        assert!(!Model::new(left).accepts_group(old_left));
+    }
+
+    #[test]
+    fn adding_to_a_missing_group_or_reusing_a_session_is_rejected_before_allocation() {
+        let first = Uuid::new_v4();
+        let model = Model::new(first);
+        assert!(model.with_session_in(99, Uuid::new_v4(), None).is_none());
+        assert!(model.with_session_in(1, first, None).is_none());
+        assert_eq!(model.layout.tabs(), vec![first]);
+        assert_eq!(model.revision, 0);
+    }
 
     #[test]
     fn fresh_splits_preserve_the_original_active_session() {

@@ -584,7 +584,7 @@ impl Toggle {
             Self::SystemAccent => (
                 "system-accent-toggle",
                 "Use system accent",
-                "Colour the focused tab, resource graphs and the shared sidebar",
+                "Colour resource graphs and the shared sidebar",
             ),
             Self::TrueColor => (
                 "true-color-toggle",

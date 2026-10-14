@@ -25,6 +25,8 @@ pub(crate) type Layout = crate::layout::Layout<Tab>;
 struct SavedTree {
     root: Node,
     focused: u32,
+    #[serde(default)]
+    next_id: Option<u32>,
 }
 
 impl Default for Layout {
@@ -49,12 +51,9 @@ impl Layout {
             }
             3 => {
                 let saved: SavedTree = serde_json::from_value(value)?;
-                Self {
-                    root: saved.root,
-                    focused: saved.focused,
-                }
+                Self::from_tree(saved.root, saved.focused, saved.next_id)?
             }
-            4 | 5 => serde_json::from_value(value)?,
+            4 | 5 | 6 => serde_json::from_value(value)?,
             _ => bail!("Unsupported workspace layout version."),
         };
         let mut layout = layout;
@@ -65,6 +64,9 @@ impl Layout {
                 bail!("Workspace is missing its focused pane.");
             };
             tabs.push(Tab::System);
+        }
+        if version < 6 && !layout.tabs().is_empty() {
+            layout.validate_members(&layout.tabs())?;
         }
         layout.validate()?;
         Ok(layout)
@@ -86,21 +88,53 @@ impl Layout {
                 _ => bail!("An empty workspace must contain one focused pane."),
             };
         }
-        self.validate_members(&tabs)
+        self.validate_groups(&tabs)
     }
+    #[cfg(test)]
     pub(crate) fn show_feature(&mut self, tab: Tab) -> bool {
-        self.select(tab) || self.insert(tab)
+        self.show_feature_in(self.focused, tab)
     }
+    pub(crate) fn show_feature_in(&mut self, pane: u32, tab: Tab) -> bool {
+        self.select_in(pane, tab) || self.insert_in(pane, tab)
+    }
+    pub(crate) fn available_features(&self, pane: u32) -> Vec<Tab> {
+        self.pane(pane).map_or_else(Vec::new, |(tabs, _)| {
+            Tab::ALL
+                .into_iter()
+                .filter(|tab| !tabs.contains(tab))
+                .collect()
+        })
+    }
+    #[cfg(test)]
     pub(crate) fn close_feature(&mut self, tab: Tab) -> bool {
+        let Some(pane) = self.tabs_pane(tab) else {
+            return false;
+        };
+        self.close_feature_in(pane, tab)
+    }
+    #[cfg(test)]
+    fn tabs_pane(&self, tab: Tab) -> Option<u32> {
+        fn find(node: &Node, tab: Tab) -> Option<u32> {
+            match node {
+                Node::Pane { id, tabs, .. } => tabs.contains(&tab).then_some(*id),
+                Node::Split { first, second, .. } => find(first, tab).or_else(|| find(second, tab)),
+            }
+        }
+        find(&self.root, tab)
+    }
+    pub(crate) fn close_feature_in(&mut self, pane: u32, tab: Tab) -> bool {
+        if !self.pane(pane).is_some_and(|(tabs, _)| tabs.contains(&tab)) {
+            return false;
+        }
         if self.tabs() == [tab] {
             self.root = Node::Pane {
-                id: self.focused,
+                id: pane,
                 tabs: Vec::new(),
                 active: Tab::Docker,
             };
             return true;
         }
-        self.remove(tab)
+        self.remove_from(pane, tab)
     }
     pub(crate) fn active(&self) -> Tab {
         self.focused_tab().unwrap_or(Tab::Docker)
@@ -110,10 +144,8 @@ impl Layout {
 impl<'de> Deserialize<'de> for Layout {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let saved = SavedTree::deserialize(deserializer)?;
-        let layout = Self {
-            root: saved.root,
-            focused: saved.focused,
-        };
+        let layout = Self::from_tree(saved.root, saved.focused, saved.next_id)
+            .map_err(serde::de::Error::custom)?;
         layout.validate().map_err(serde::de::Error::custom)?;
         Ok(layout)
     }
@@ -267,6 +299,104 @@ impl LegacyLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_group_ids_are_not_reused_after_saving() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Disks, 1, Drop::Right));
+        let removed = layout.focused;
+        assert!(layout.close_feature_in(removed, Tab::Disks));
+        assert!(layout.pane(removed).is_none());
+        let mut restored = Layout::from_saved(serde_json::to_value(&layout)?, 6)?;
+        assert!(restored.drop_tab(Tab::Services, 1, Drop::Right));
+        assert!(restored.focused > removed);
+        assert!(restored.pane(removed).is_none());
+        restored.validate()
+    }
+
+    #[test]
+    fn saved_group_cursor_cannot_reuse_an_existing_id() -> Result<()> {
+        let mut saved = serde_json::to_value(Layout::default())?;
+        saved["next_id"] = 1.into();
+        assert!(Layout::from_saved(saved, 6).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn service_kinds_belong_to_their_group_and_round_trip() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert_eq!(
+            layout.available_features(right),
+            [Tab::Docker, Tab::Disks, Tab::System]
+        );
+        assert!(layout.show_feature_in(right, Tab::Docker));
+        assert_eq!(
+            layout.pane(right),
+            Some((&[Tab::Services, Tab::Docker][..], Tab::Docker))
+        );
+        assert_eq!(layout.pane(1).unwrap().1, Tab::Docker);
+        assert!(layout.select_in(1, Tab::Disks));
+        assert!(layout.select_in(right, Tab::Docker));
+        assert_eq!(layout.focused, right);
+        let saved = serde_json::to_value(&layout)?;
+        assert_eq!(Layout::from_saved(saved.clone(), 6)?, layout);
+        assert!(Layout::from_saved(saved, 5).is_err());
+        assert!(layout.close_feature_in(right, Tab::Docker));
+        assert!(layout.pane(1).unwrap().0.contains(&Tab::Docker));
+        assert_eq!(
+            layout.pane(right),
+            Some((&[Tab::Services][..], Tab::Services))
+        );
+        layout.validate()
+    }
+
+    #[test]
+    fn duplicate_kind_drag_targets_the_source_group_and_merges_when_joined() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert!(layout.show_feature_in(right, Tab::Docker));
+        assert!(layout.drop_from(right, Tab::Docker, right, Drop::Bottom));
+        let bottom = layout.focused;
+        assert_eq!(
+            layout.pane(right),
+            Some((&[Tab::Services][..], Tab::Services))
+        );
+        assert!(layout.pane(1).unwrap().0.contains(&Tab::Docker));
+        assert!(layout.drop_from(bottom, Tab::Docker, 1, Drop::Tab(0)));
+        assert!(layout.pane(bottom).is_none());
+        assert_eq!(layout.focused, 1);
+        assert_eq!(
+            layout
+                .tabs()
+                .iter()
+                .filter(|tab| **tab == Tab::Docker)
+                .count(),
+            1
+        );
+        let before = layout.clone();
+        assert!(!layout.drop_from(bottom, Tab::Docker, right, Drop::Left));
+        assert_eq!(layout, before);
+        layout.validate()
+    }
+
+    #[test]
+    fn adding_to_an_unfocused_group_keeps_other_groups_order_and_selection() -> Result<()> {
+        let mut layout = Layout::default();
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert!(layout.select_in(1, Tab::Disks));
+        let left_before = layout.pane(1).unwrap().0.to_vec();
+        assert!(layout.show_feature_in(right, Tab::System));
+        assert_eq!(layout.focused, right);
+        assert_eq!(layout.pane(1), Some((left_before.as_slice(), Tab::Disks)));
+        assert!(!layout.show_feature_in(999, Tab::System));
+        assert!(!layout.show_feature_in(right, Tab::System));
+        assert_eq!(layout.available_features(right), [Tab::Docker, Tab::Disks]);
+        layout.validate()
+    }
 
     #[test]
     fn each_edge_creates_the_expected_axis_and_order() -> Result<()> {

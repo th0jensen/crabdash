@@ -99,6 +99,7 @@ pub(crate) const CONTROL_SELECTED_BORDER: u32 = 0x555555;
 pub(crate) const FOCUS_BORDER: u32 = 0x707070;
 pub(crate) const TAB_INDICATOR: u32 = 0xA0A0A0;
 pub(crate) const TAB_CLOSE: u32 = 0x878787;
+pub(crate) const TAB_LABEL_INACTIVE_OPACITY: f32 = 0.65;
 pub(crate) const SUCCESS: u32 = 0x59C69A;
 pub(crate) const WARNING: u32 = 0xE4BB72;
 pub(crate) const DANGER: u32 = 0xF08B86;

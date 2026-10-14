@@ -332,6 +332,7 @@ impl Crabdash {
             }
             self.workspaces.error = None;
             self.workspaces.rename_error = None;
+        } else if self.workspaces.group_picker.take().is_some() {
         } else if self.open_menu.take().is_none() {
             return;
         }
@@ -358,6 +359,16 @@ impl Render for Crabdash {
             16.0 * self.preferences.interface_font_size / crate::components::style::TEXT
         ));
         self.apply_workspace_runtime(window, cx);
+        if self.preferences_open
+            || self.add_machine_modal_open
+            || self.machine_rename.target.is_some()
+            || self.docker_run_modal_open
+            || self.docker_removal.is_some()
+            || self.workspaces.open
+            || self.open_menu.is_some()
+        {
+            self.workspaces.group_picker = None;
+        }
         self.reconcile_quake_resize(window, cx);
         self.reconcile_terminal_rename(window, cx);
         self.reconcile_terminal_selection(window, cx);
@@ -388,7 +399,9 @@ impl Render for Crabdash {
                 },
             ))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && cx.has_active_drag() {
+                if event.keystroke.key == "escape"
+                    && (cx.has_active_drag() || this.workspaces.group_picker.is_some())
+                {
                     this.dismiss_modal_action(&DismissModal, window, cx);
                     cx.stop_propagation();
                 }
@@ -409,6 +422,7 @@ impl Render for Crabdash {
                 show_about_dialog(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenPreferences, window, cx| {
+                this.workspaces.group_picker = None;
                 if !this.preference_editor.busy {
                     this.preference_editor = preferences::Editor::new(&this.preferences, cx);
                 }

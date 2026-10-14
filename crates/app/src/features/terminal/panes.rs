@@ -34,10 +34,10 @@ pub(super) fn drawer_minimum(node: &Node<Uuid>, metrics: Metrics) -> f32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct HeaderRole {
     pub resize: bool,
-    pub actions: bool,
+    pub hide_drawer: bool,
 }
 
-/// Only leaves touching the drawer's upper edge resize it; its rightmost leaf owns actions.
+/// Only leaves touching the drawer's upper edge resize it; its upper-right leaf owns Hide.
 pub(super) fn header_role(node: &Node<Uuid>, pane: u32) -> HeaderRole {
     fn upper_leaves(node: &Node<Uuid>, out: &mut Vec<u32>) {
         match node {
@@ -59,7 +59,7 @@ pub(super) fn header_role(node: &Node<Uuid>, pane: u32) -> HeaderRole {
     upper_leaves(node, &mut upper);
     HeaderRole {
         resize: upper.contains(&pane),
-        actions: upper.last() == Some(&pane),
+        hide_drawer: upper.last() == Some(&pane),
     }
 }
 
@@ -311,7 +311,7 @@ mod tests {
     use crate::layout::{Drop, Layout};
 
     #[test]
-    fn only_upper_edge_headers_resize_and_upper_right_header_owns_actions() {
+    fn only_upper_edge_headers_resize_and_upper_right_header_owns_hide() {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         let c = Uuid::new_v4();
@@ -321,7 +321,7 @@ mod tests {
             header_role(&layout.root, 1),
             HeaderRole {
                 resize: true,
-                actions: true
+                hide_drawer: true
             }
         );
         assert_eq!(header_role(&layout.root, 99), HeaderRole::default());
@@ -331,14 +331,14 @@ mod tests {
             header_role(&layout.root, 1),
             HeaderRole {
                 resize: true,
-                actions: false
+                hide_drawer: false
             }
         );
         assert_eq!(
             header_role(&layout.root, right),
             HeaderRole {
                 resize: true,
-                actions: true
+                hide_drawer: true
             }
         );
         assert!(layout.drop_tab(c, 1, Drop::Bottom));
@@ -354,21 +354,21 @@ mod tests {
             header_role(&layout.root, right),
             HeaderRole {
                 resize: true,
-                actions: true
+                hide_drawer: true
             }
         );
     }
 
     #[test]
-    fn a_single_pane_drawer_reserves_one_header_without_an_outer_border() {
+    fn a_single_pane_drawer_reserves_one_header_and_its_top_border() {
         let tab = Uuid::new_v4();
         let layout = Layout::single(vec![tab], tab);
         assert_eq!(
             drawer_minimum(&layout.root, Metrics::new(1.0, 100.0)),
-            158.0
+            159.0
         );
         assert!(
-            (drawer_minimum(&layout.root, Metrics::new(20.0 / 14.0, 100.0)) - 171.7143).abs()
+            (drawer_minimum(&layout.root, Metrics::new(20.0 / 14.0, 100.0)) - 172.7143).abs()
                 < 0.001
         );
     }
@@ -477,8 +477,8 @@ mod tests {
         let metrics = Metrics::new(1.25, 80.0);
         let geometry = Geometry::new(800.0, 150.0, 40.0, 7.8, 80.0);
         let height = clamp_height(geometry, 0.0, Some(&layout.root), metrics);
-        assert_eq!(height, 146.0);
-        assert_eq!(150.0 - height, 4.0);
+        assert_eq!(height, 147.0);
+        assert_eq!(150.0 - height, 3.0);
         assert!(height < drawer_minimum(&layout.root, metrics));
         let body = height - PANEL_BORDER;
         let assigned = visible(&layout.root, 800.0, body, metrics);

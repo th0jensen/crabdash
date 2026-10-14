@@ -39,8 +39,8 @@ pub(super) fn handle(
     let selection = app
         .workspaces
         .tab_reveal
-        .filter(|(tab, _)| *tab == active)
-        .map(|(_, sequence)| sequence);
+        .filter(|(target, tab, _)| *target == pane && *tab == active)
+        .map(|(_, _, sequence)| sequence);
     let dragging = cx.has_active_drag();
     state.update(cx, |state, _: &mut Context<State>| {
         if !dragging

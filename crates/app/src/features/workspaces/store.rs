@@ -9,9 +9,9 @@ use std::{
 };
 use uuid::Uuid;
 
-// Version 5 adds requested terminal drawer height; version 4 adds System. Versions 1/2 migrate to a
-// single pane; version 3 preserves splits. Loading never rewrites the file.
-const VERSION: u32 = 5;
+// Version 6 persists monotonic pane IDs; version 5 adds terminal height; version 4 adds System.
+// Versions 1/2 migrate to a single pane; version 3 preserves splits. Loading never rewrites the file.
+const VERSION: u32 = 6;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Workspace {
@@ -219,6 +219,31 @@ mod tests {
     }
 
     #[test]
+    fn group_owned_duplicate_kinds_save_and_reload_without_changing_other_groups() -> Result<()> {
+        use super::super::model::{Drop, Tab};
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let mut store = Store::default();
+        let layout = &mut store.current_mut().layout;
+        assert!(layout.drop_tab(Tab::Services, 1, Drop::Right));
+        let right = layout.focused;
+        assert!(layout.show_feature_in(right, Tab::Docker));
+        store.save_to(&path)?;
+        let bytes = fs::read(&path)?;
+        let loaded = Store::load_from(&path, 240.0)?;
+        assert_eq!(loaded.current().layout, store.current().layout);
+        assert_eq!(loaded.version, VERSION);
+        assert_eq!(fs::read(&path)?, bytes);
+        let mut legacy: serde_json::Value = serde_json::from_slice(&bytes)?;
+        legacy["version"] = serde_json::json!(5);
+        let legacy_bytes = serde_json::to_vec(&legacy)?;
+        fs::write(&path, &legacy_bytes)?;
+        assert!(Store::load_from(&path, 240.0).is_err());
+        assert_eq!(fs::read(&path)?, legacy_bytes);
+        Ok(())
+    }
+
+    #[test]
     fn saved_layouts_round_trip_and_validate() -> Result<()> {
         let store = Store::default();
         store.validate()?;
@@ -251,7 +276,7 @@ mod tests {
         loaded.active = original;
         assert_eq!(loaded.current().terminal_height, Some(720.5));
         assert!(!loaded.current().terminal_open);
-        assert_eq!(loaded.version, 5);
+        assert_eq!(loaded.version, VERSION);
         Ok(())
     }
 
@@ -285,7 +310,7 @@ mod tests {
         loaded.save_to(&path)?;
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?)?["version"],
-            5
+            VERSION
         );
         Ok(())
     }

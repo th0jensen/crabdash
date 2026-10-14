@@ -232,7 +232,18 @@ impl Crabdash {
     }
 
     pub(crate) fn new_quake_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.create_quake_terminal(None, window, cx);
+        self.create_quake_terminal(None, None, window, cx);
+    }
+
+    pub(super) fn new_quake_terminal_in_group(
+        &mut self,
+        group: terminal::groups::GroupTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if group.valid(self, cx.entity_id()) {
+            self.create_quake_terminal(Some(group.pane.id), None, window, cx);
+        }
     }
 
     pub(super) fn split_quake_terminal(
@@ -241,11 +252,12 @@ impl Crabdash {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create_quake_terminal(Some(edge), window, cx);
+        self.create_quake_terminal(None, Some(edge), window, cx);
     }
 
     fn create_quake_terminal(
         &mut self,
+        pane: Option<u32>,
         edge: Option<crate::layout::Drop>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -254,8 +266,14 @@ impl Crabdash {
         let machine_uuid = machine.uuid;
         let session_uuid = uuid::Uuid::new_v4();
         let candidate = match self.quake_terminals.get(&machine_uuid) {
-            Some(drawer) => drawer.model.with_session(session_uuid, edge),
-            None if edge.is_none() => Some(terminal::model::Model::new(session_uuid)),
+            Some(drawer) => drawer.model.with_session_in(
+                pane.unwrap_or(drawer.model.layout.focused),
+                session_uuid,
+                edge,
+            ),
+            None if pane.is_none() && edge.is_none() => {
+                Some(terminal::model::Model::new(session_uuid))
+            }
             None => None,
         };
         let Some(candidate) = candidate else {

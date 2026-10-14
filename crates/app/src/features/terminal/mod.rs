@@ -8,6 +8,7 @@ mod controller;
 mod docking;
 mod geometry;
 mod grid;
+mod groups;
 mod header;
 pub(crate) mod height;
 mod model;

@@ -12,19 +12,25 @@ use gpui::{prelude::*, *};
 use lucide_icons::Icon;
 use uuid::Uuid;
 
-fn new_session(cx: &mut Context<Crabdash>) -> Stateful<Div> {
-    chrome_icon_button("new-terminal-session", Icon::Plus)
-        .tooltip(|_, cx| {
-            control_tooltip(
-                format!(
-                    "New terminal · {}",
-                    crate::desktop::menus::shortcut("⌘T", "Ctrl+Shift+T")
-                ),
-                cx,
-            )
-        })
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(cx.listener(|app, _, window, cx| app.new_quake_terminal(window, cx)))
+fn new_session(group: super::groups::GroupTarget, cx: &mut Context<Crabdash>) -> Stateful<Div> {
+    chrome_icon_button(
+        SharedString::from(format!("new-terminal-session-{}", group.pane.id)),
+        Icon::Plus,
+    )
+    .tooltip(|_, cx| {
+        control_tooltip(
+            format!(
+                "New terminal · {}",
+                crate::desktop::menus::shortcut("⌘T", "Ctrl+Shift+T")
+            ),
+            cx,
+        )
+    })
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .on_click(cx.listener(move |app, _, window, cx| {
+        app.new_quake_terminal_in_group(group, window, cx);
+        cx.stop_propagation();
+    }))
 }
 
 fn hide(cx: &mut Context<Crabdash>) -> Stateful<Div> {
@@ -89,19 +95,14 @@ fn tab_width(measured: Pixels, maximum: Pixels, viewport: Pixels) -> Pixels {
     measured.min(maximum).min(viewport.max(px(1.0)))
 }
 
-fn strip_width(widths: &[Pixels], viewport: Pixels, actions: bool) -> Pixels {
-    let viewport = viewport.max(px(0.0));
-    if actions {
-        // The following sibling is Plus: stay next to the last tab when all
-        // tabs fit, and at the available strip edge when they overflow.
-        widths
-            .iter()
-            .copied()
-            .fold(px(0.0), |sum, width| sum + width)
-            .min(viewport)
-    } else {
-        viewport
-    }
+fn strip_width(widths: &[Pixels], viewport: Pixels) -> Pixels {
+    // Every pane has its own Plus immediately after its tabs, or at the
+    // available strip edge when the tabs overflow.
+    widths
+        .iter()
+        .copied()
+        .fold(px(0.0), |sum, width| sum + width)
+        .min(viewport.max(px(0.0)))
 }
 
 pub(super) fn tabs(
@@ -119,14 +120,12 @@ pub(super) fn tabs(
     };
     let owner = cx.entity().downgrade();
     let role = super::panes::header_role(&drawer.model.layout.root, pane);
+    let Some(group) = super::groups::GroupTarget::new(app, pane, cx.entity_id()) else {
+        return div().id("missing-terminal-group");
+    };
     let action_width = window.rem_size() * ((style::CHROME_CONTROL + 8.0) / 16.0);
-    let viewport = (viewport
-        - if role.actions {
-            action_width * 2.0
-        } else {
-            px(0.0)
-        })
-    .max(px(0.0));
+    let viewport =
+        (viewport - action_width * if role.hide_drawer { 2.0 } else { 1.0 }).max(px(0.0));
     let widths: Vec<_> = tabs
         .iter()
         .map(|id| {
@@ -152,7 +151,7 @@ pub(super) fn tabs(
             )
         })
         .collect();
-    let viewport = strip_width(&widths, viewport, role.actions);
+    let viewport = strip_width(&widths, viewport);
     let geometry = Geometry {
         tabs: tabs.to_vec(),
         active,
@@ -176,9 +175,6 @@ pub(super) fn tabs(
         }
         state.scroll.clone()
     });
-    let accent = (drawer.model.layout.focused == pane)
-        .then(|| crate::desktop::appearance::system_accent(app.preferences.use_system_accent, cx))
-        .flatten();
     let end = tabs.len();
     let strip = div()
         .id(SharedString::from(format!(
@@ -218,6 +214,12 @@ pub(super) fn tabs(
             );
             let title = super::rename::visible_title(session.custom_name.as_deref(), &automatic);
             let editing = session.rename.is_some();
+            let tab_text_color = style::rgb(style::TEXT_PRIMARY);
+            let tab_label_opacity = if id == active && drawer.model.layout.focused == pane {
+                1.0
+            } else {
+                style::TAB_LABEL_INACTIVE_OPACITY
+            };
             let tooltip_title =
                 super::rename::tooltip_title(session.custom_name.as_deref(), &full_title);
             let hint = format!(
@@ -246,15 +248,7 @@ pub(super) fn tabs(
                     }))
                     .text_size(rems(style::TEXT / 16.0))
                     .line_height(relative(1.0))
-                    .text_color(crate::components::style::rgb(
-                        if id == active && drawer.model.layout.focused == pane {
-                            style::TEXT_SELECTED
-                        } else if id == active {
-                            style::TEXT_PRIMARY
-                        } else {
-                            style::TEXT_MUTED
-                        },
-                    ))
+                    .text_color(tab_text_color)
                     .border_r_1()
                     .border_color(crate::components::style::rgb(style::BORDER))
                     .cursor_pointer()
@@ -264,7 +258,6 @@ pub(super) fn tabs(
                         } else {
                             style::SURFACE_HOVER
                         }))
-                        .text_color(crate::components::style::rgb(style::TEXT_SELECTED))
                     })
                     .when(id != active, |tab| tab.border_b_1())
                     .when(!editing && !cx.has_active_drag(), |tab| {
@@ -278,9 +271,6 @@ pub(super) fn tabs(
                             .items_center()
                             .justify_center()
                             .gap(px(4.0))
-                            .when_some(accent.filter(|_| id == active), |this, accent| {
-                                this.text_color(rgb(accent))
-                            })
                             .when_some(session.rename.as_ref(), |this, editor| {
                                 this.child(super::rename::render(editor, cx))
                             })
@@ -288,6 +278,7 @@ pub(super) fn tabs(
                                 this.child(
                                     clipped_text(title)
                                         .id(SharedString::from(format!("terminal-title-{id}")))
+                                        .opacity(tab_label_opacity)
                                         .flex_shrink()
                                         .on_click(cx.listener(
                                             move |app, event: &ClickEvent, window, cx| {
@@ -397,17 +388,17 @@ pub(super) fn tabs(
         .overflow_hidden()
         .bg(crate::components::style::rgb(style::CHROME))
         .child(strip)
-        .when(role.actions, |this| {
-            this.child(action_slot(action_width).child(new_session(cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .border_b_1()
-                        .border_color(crate::components::style::rgb(style::BORDER)),
-                )
-                .child(action_slot(action_width).child(hide(cx)))
+        .child(action_slot(action_width).child(new_session(group, cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .border_b_1()
+                .border_color(crate::components::style::rgb(style::BORDER)),
+        )
+        .when(role.hide_drawer, |this| {
+            this.child(action_slot(action_width).child(hide(cx)))
         });
     if role.resize {
         super::height::resize_header(row, app, cx)
@@ -432,21 +423,12 @@ mod tests {
     #[test]
     fn plus_follows_the_last_tab_and_pins_to_the_strip_edge_on_overflow() {
         let available = px(400.0) - px(32.0) * 2.0;
-        assert_eq!(
-            strip_width(&[px(92.0), px(80.0)], available, true),
-            px(172.0)
-        );
-        assert_eq!(
-            strip_width(&[px(92.0), px(244.0)], available, true),
-            available
-        );
-        assert_eq!(
-            strip_width(&[px(92.0), px(300.0)], available, true),
-            available
-        );
-        assert_eq!(strip_width(&[], available, true), px(0.0));
-        assert_eq!(strip_width(&[px(92.0)], available, false), available);
-        assert_eq!(strip_width(&[px(92.0)], px(-10.0), true), px(0.0));
+        assert_eq!(strip_width(&[px(92.0), px(80.0)], available), px(172.0));
+        assert_eq!(strip_width(&[px(92.0), px(244.0)], available), available);
+        assert_eq!(strip_width(&[px(92.0), px(300.0)], available), available);
+        assert_eq!(strip_width(&[], available), px(0.0));
+        assert_eq!(strip_width(&[px(92.0)], available), px(92.0));
+        assert_eq!(strip_width(&[px(92.0)], px(-10.0)), px(0.0));
     }
 
     #[test]

@@ -78,7 +78,7 @@ pub(super) fn body(
                 return;
             };
             app.workspaces.drag_target = None;
-            app.drop_workspace_tab(drag.tab, pane, drop, cx);
+            app.drop_workspace_tab(drag.source_pane, drag.tab, pane, drop, cx);
             cx.notify();
             cx.stop_propagation();
         }));

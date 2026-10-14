@@ -3,8 +3,8 @@ use super::sizing::Sizing;
 pub(super) const CONTENT_SIDE: f32 = 10.0;
 pub(super) const CONTENT_TOP: f32 = 16.0;
 pub(super) const CONTENT_BOTTOM: f32 = 10.0;
-// The terminal drawer is borderless; shared sizing reserves no outer pixel.
-pub(super) const PANEL_BORDER: f32 = 0.0;
+// The shared panel separator occupies one logical pixel above the pane headers.
+pub(super) const PANEL_BORDER: f32 = 1.0;
 pub(super) const DASHBOARD_RESERVE: f32 = 80.0;
 const MIN_ROWS: u16 = 4;
 
@@ -177,8 +177,8 @@ mod tests {
     #[test]
     fn tiny_fallback_surrenders_only_the_space_for_one_terminal_row() {
         let geometry = Geometry::new(800.0, 150.0, 64.0, 7.8, 20.0);
-        assert_eq!(geometry.clamp_height(2000.0), 110.0);
-        assert_eq!(150.0 - geometry.clamp_height(2000.0), 40.0);
+        assert_eq!(geometry.clamp_height(2000.0), 111.0);
+        assert_eq!(150.0 - geometry.clamp_height(2000.0), 39.0);
     }
     #[test]
     fn maximum_drawer_leaves_font_scaled_dashboard_chrome_and_body() {
@@ -243,11 +243,14 @@ mod tests {
     }
 
     #[test]
-    fn borderless_drawer_height_matches_the_exact_grid_pixels() {
+    fn top_border_is_reserved_once_without_changing_the_terminal_grid() {
         for scale in [1.0, 20.0 / 14.0] {
             let header = style::BAR * scale;
             let initial = height_for_rows(16, 20.0, header);
-            assert_eq!(initial, header + CONTENT_TOP + CONTENT_BOTTOM + 16.0 * 20.0);
+            assert_eq!(
+                initial,
+                header + PANEL_BORDER + CONTENT_TOP + CONTENT_BOTTOM + 16.0 * 20.0
+            );
             let pane_height = initial - PANEL_BORDER;
             let sizing =
                 Geometry::new(1100.0, pane_height, header, 7.8, 20.0).pane_sizing(pane_height, 2.0);

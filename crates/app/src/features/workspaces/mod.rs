@@ -1,4 +1,5 @@
 //! In-window dashboard panes, saved workspaces, and their compact switcher.
+pub(crate) mod groups;
 pub(crate) mod model;
 mod rename;
 mod store;
@@ -79,7 +80,8 @@ pub(crate) struct State {
     pub drag_target: Option<(u32, model::Drop)>,
     pub resizing_split: Option<u32>,
     pub(crate) split_resize_grab: Option<(u32, gpui::Pixels)>,
-    pub tab_reveal: Option<(Tab, u64)>,
+    pub tab_reveal: Option<(u32, Tab, u64)>,
+    pub(crate) group_picker: Option<groups::Picker>,
     pub name: Entity<TextField>,
     pub scroll: ScrollHandle,
     pub error: Option<String>,
@@ -129,6 +131,7 @@ impl State {
             resizing_split: None,
             split_resize_grab: None,
             tab_reveal: None,
+            group_picker: None,
             name: cx.new(|cx| TextField::new("", "Workspace name", 1, cx).compact()),
             scroll: ScrollHandle::new(),
             error: shared.error,
@@ -160,6 +163,7 @@ impl Crabdash {
         }
         self.workspaces.apply_runtime = true;
         self.cancel_quake_resize();
+        self.workspaces.group_picker = None;
         self.workspaces.drag_target = None;
         self.workspaces.resizing_split = None;
         self.workspaces.split_resize_grab = None;
@@ -279,84 +283,6 @@ impl Crabdash {
         cx.notify();
     }
 
-    pub(crate) fn select_workspace_tab(&mut self, tab: MainTab, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        // Selecting an already active tab should reveal it after manual scrolling.
-        let sequence = self
-            .workspaces
-            .tab_reveal
-            .map_or(1, |(_, sequence)| sequence.wrapping_add(1));
-        self.workspaces.tab_reveal = Some((tab.into(), sequence));
-        if self.workspaces.layout_mut().show_feature(tab.into()) {
-            self.active_tab = tab;
-            self.persist_workspace(cx);
-        } else {
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn select_pane_tab(&mut self, pane: u32, tab: MainTab, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        if self
-            .workspaces
-            .layout()
-            .root
-            .pane(pane)
-            .is_some_and(|(tabs, _)| tabs.contains(&tab.into()))
-        {
-            self.select_workspace_tab(tab, cx);
-        }
-    }
-
-    pub(crate) fn close_workspace_tab(&mut self, pane: u32, tab: MainTab, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        if !self
-            .workspaces
-            .layout()
-            .pane(pane)
-            .is_some_and(|(tabs, _)| tabs.contains(&tab.into()))
-        {
-            return;
-        }
-        self.workspaces.drag_target = None;
-        self.workspaces.resizing_split = None;
-        self.workspaces.split_resize_grab = None;
-        if self.workspaces.layout_mut().close_feature(tab.into()) {
-            self.active_tab = self.workspaces.layout().active().into();
-            self.workspaces.tab_reveal = None;
-            self.persist_workspace(cx);
-        }
-    }
-
-    pub(crate) fn focus_workspace_pane(&mut self, pane: u32, cx: &mut Context<Self>) {
-        self.sync_workspace_store(cx);
-        if self.workspaces.layout_mut().focus(pane) {
-            self.active_tab = self.workspaces.layout().active().into();
-            self.persist_workspace(cx);
-        }
-    }
-
-    pub(crate) fn drop_workspace_tab(
-        &mut self,
-        tab: MainTab,
-        target: u32,
-        placement: model::Drop,
-        cx: &mut Context<Self>,
-    ) {
-        self.sync_workspace_store(cx);
-        self.workspaces.drag_target = None;
-        self.workspaces.resizing_split = None;
-        self.workspaces.split_resize_grab = None;
-        if self
-            .workspaces
-            .layout_mut()
-            .drop_tab(tab.into(), target, placement)
-        {
-            self.active_tab = self.workspaces.layout().active().into();
-            self.persist_workspace(cx);
-        }
-    }
-
     pub(crate) fn restore_workspace(
         &mut self,
         id: Uuid,
@@ -374,6 +300,7 @@ impl Crabdash {
             return;
         }
         self.persist_workspace(cx);
+        self.workspaces.group_picker = None;
         self.workspaces.drag_target = None;
         self.workspaces.resizing_split = None;
         self.workspaces.split_resize_grab = None;

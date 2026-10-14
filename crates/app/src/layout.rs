@@ -32,6 +32,9 @@ pub(crate) enum Node<T> {
 pub(crate) struct Layout<T> {
     pub root: Node<T>,
     pub focused: u32,
+    // Retain the allocation cursor when empty groups collapse. A stale target
+    // must never identify a replacement group, including after saving/reloading.
+    next_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,13 +274,27 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
                 active,
             },
             focused: 1,
+            next_id: 2,
         }
     }
-    pub(crate) fn validate_members(&self, expected: &[T]) -> Result<()> {
+    pub(crate) fn from_tree(root: Node<T>, focused: u32, next_id: Option<u32>) -> Result<Self> {
+        let minimum = root.maximum_id().saturating_add(1);
+        let next_id = next_id.unwrap_or(minimum);
+        if next_id < minimum || next_id == 0 {
+            bail!("Workspace has an invalid pane allocation cursor.");
+        }
+        Ok(Self {
+            root,
+            focused,
+            next_id,
+        })
+    }
+    /// Pane IDs are identities; tab values need only be unique inside their group.
+    pub(crate) fn validate_groups(&self, expected: &[T]) -> Result<()> {
         fn visit<T: Copy + Eq + std::hash::Hash>(
             node: &Node<T>,
             ids: &mut HashSet<u32>,
-            tabs_seen: &mut HashSet<T>,
+            tabs_seen: &mut Vec<T>,
             depth: usize,
         ) -> Result<()> {
             if depth > 3 {
@@ -288,11 +305,13 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
                     if *id == 0 || !ids.insert(*id) || tabs.is_empty() || !tabs.contains(active) {
                         bail!("Workspace has an invalid pane.");
                     }
+                    let mut group = HashSet::new();
                     for tab in tabs {
-                        if !tabs_seen.insert(*tab) {
+                        if !group.insert(*tab) {
                             bail!("Workspace contains duplicate tabs.");
                         }
                     }
+                    tabs_seen.extend(tabs);
                 }
                 Node::Split {
                     id,
@@ -315,15 +334,25 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
             Ok(())
         }
         let mut ids = HashSet::new();
-        let mut tabs = HashSet::new();
+        let mut tabs = Vec::new();
         visit(&self.root, &mut ids, &mut tabs, 0)?;
         if tabs.len() != expected.len()
-            || expected.iter().any(|tab| !tabs.contains(tab))
+            || expected.iter().any(|tab| {
+                tabs.iter().filter(|item| *item == tab).count()
+                    != expected.iter().filter(|item| *item == tab).count()
+            })
             || self.pane(self.focused).is_none()
         {
             bail!("Workspace is missing features or its focused pane.");
         }
         Ok(())
+    }
+    /// Dynamic terminal session identities must also remain globally unique.
+    pub(crate) fn validate_members(&self, expected: &[T]) -> Result<()> {
+        if self.tabs().iter().collect::<HashSet<_>>().len() != self.tabs().len() {
+            bail!("Workspace contains duplicate tabs.");
+        }
+        self.validate_groups(expected)
     }
     pub(crate) fn pane(&self, target: u32) -> Option<(&[T], T)> {
         self.root.pane(target)
@@ -342,9 +371,15 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         let Some(pane) = self.root.containing(tab) else {
             return false;
         };
-        let Some((_, active)) = self.root.pane_mut(pane) else {
+        self.select_in(pane, tab)
+    }
+    pub(crate) fn select_in(&mut self, pane: u32, tab: T) -> bool {
+        let Some((tabs, active)) = self.root.pane_mut(pane) else {
             return false;
         };
+        if !tabs.contains(&tab) {
+            return false;
+        }
         let changed = self.focused != pane || *active != tab;
         *active = tab;
         self.focused = pane;
@@ -362,9 +397,30 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         let Some(source) = self.root.containing(tab) else {
             return false;
         };
+        self.drop_from(source, tab, target, drop)
+    }
+    /// Move this group's tab, even when another group contains the same value.
+    pub(crate) fn drop_from(&mut self, source: u32, tab: T, target: u32, drop: Drop) -> bool {
         let Some((target_tabs, _)) = self.pane(target) else {
             return false;
         };
+        if !self
+            .pane(source)
+            .is_some_and(|(tabs, _)| tabs.contains(&tab))
+        {
+            return false;
+        }
+        if matches!(drop, Drop::Tab(_)) && source != target && target_tabs.contains(&tab) {
+            // A group has one tab of each kind. Joining a matching kind selects
+            // its existing tab and removes only the explicitly dragged source.
+            let mut candidate = self.clone();
+            if !candidate.remove_from(source, tab) {
+                return false;
+            }
+            candidate.select_in(target, tab);
+            *self = candidate;
+            return true;
+        }
         if source == target && target_tabs.len() == 1 {
             return false;
         }
@@ -415,15 +471,20 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
                 candidate.focused = target;
             }
             edge => {
-                let Some(pane_id) = self.root.maximum_id().checked_add(1) else {
+                let Some(minimum) = self.root.maximum_id().checked_add(1) else {
                     return false;
                 };
+                let pane_id = self.next_id.max(minimum);
                 let Some(split_id) = pane_id.checked_add(1) else {
+                    return false;
+                };
+                let Some(next_id) = split_id.checked_add(1) else {
                     return false;
                 };
                 if !candidate.root.split(target, tab, edge, pane_id, split_id) {
                     return false;
                 }
+                candidate.next_id = next_id;
                 new_split = Some((
                     split_id,
                     if matches!(edge, Drop::Left | Drop::Right) {
@@ -450,7 +511,7 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         if let Some((split, axis)) = new_split {
             candidate.root.equalize_group_containing(split, axis);
         }
-        if candidate == *self || candidate.validate_members(&self.tabs()).is_err() {
+        if candidate == *self || candidate.validate_groups(&self.tabs()).is_err() {
             return false;
         }
         *self = candidate;
@@ -470,15 +531,23 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         collect(&self.root, &mut tabs);
         tabs
     }
+    #[cfg(test)]
     pub(crate) fn insert(&mut self, tab: T) -> bool {
         if self.root.containing(tab).is_some() {
             return false;
         }
-        let Some((tabs, active)) = self.root.pane_mut(self.focused) else {
+        self.insert_in(self.focused, tab)
+    }
+    pub(crate) fn insert_in(&mut self, pane: u32, tab: T) -> bool {
+        let Some((tabs, active)) = self.root.pane_mut(pane) else {
             return false;
         };
+        if tabs.contains(&tab) {
+            return false;
+        }
         tabs.push(tab);
         *active = tab;
+        self.focused = pane;
         true
     }
     /// The caller owns the empty-drawer policy; a layout always retains a pane.
@@ -486,6 +555,9 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
         let Some(source) = self.root.containing(tab) else {
             return false;
         };
+        self.remove_from(source, tab)
+    }
+    pub(crate) fn remove_from(&mut self, source: u32, tab: T) -> bool {
         let identities = self.tabs();
         if identities.len() == 1 {
             return false;
@@ -518,7 +590,7 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
             candidate.root.equalize_group_containing(anchor, axis);
         }
         if candidate.pane(candidate.focused).is_none() {
-            let Some(remaining) = identities.iter().copied().find(|item| *item != tab) else {
+            let Some(remaining) = candidate.tabs().first().copied() else {
                 return false;
             };
             let Some(pane) = candidate.root.containing(remaining) else {
@@ -526,8 +598,12 @@ impl<T: Copy + Eq + std::hash::Hash> Layout<T> {
             };
             candidate.focused = pane;
         }
-        let expected: Vec<T> = identities.into_iter().filter(|item| *item != tab).collect();
-        if candidate.validate_members(&expected).is_err() {
+        let mut expected = identities;
+        let Some(index) = expected.iter().position(|item| *item == tab) else {
+            return false;
+        };
+        expected.remove(index);
+        if candidate.validate_groups(&expected).is_err() {
             return false;
         }
         *self = candidate;
