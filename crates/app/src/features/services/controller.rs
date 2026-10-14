@@ -127,6 +127,7 @@ impl Crabdash {
         if this.logs_open_services.contains(&log_key) {
             this.logs_open_services.remove(&log_key);
             this.service_log_refresh.forget(&log_key);
+            this.expanded_service_logs.remove(&log_key);
             cx.notify();
             return;
         }
@@ -136,7 +137,7 @@ impl Crabdash {
             .machines
             .iter()
             .find(|m| m.uuid == log_key.0)
-            .cloned()
+            .map(machines::machine::Machine::command_snapshot)
         else {
             return;
         };

@@ -311,6 +311,7 @@ impl Crabdash {
         if this.logs_open_containers.contains(&log_key) {
             this.logs_open_containers.remove(&log_key);
             this.docker_log_refresh.forget(&log_key);
+            this.expanded_docker_logs.remove(&log_key);
             cx.notify();
             return;
         }
@@ -320,7 +321,7 @@ impl Crabdash {
             .machines
             .iter()
             .find(|machine| machine.uuid == log_key.0)
-            .cloned()
+            .map(machines::machine::Machine::command_snapshot)
         else {
             return;
         };

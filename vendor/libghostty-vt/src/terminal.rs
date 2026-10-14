@@ -1,6 +1,7 @@
 //! Types and functions around terminal state management.
 
 // Compatibility tags from the bundled Ghostty terminal.h.
+const GHOSTTY_OPT_SCROLLBACK_MAX_BYTES: ffi::TerminalOption::Type = 27;
 const GHOSTTY_OPT_SCROLLBACK_MAX_LINES: ffi::TerminalOption::Type = 28;
 const GHOSTTY_DATA_MODE: ffi::TerminalData::Type = 37;
 const GHOSTTY_OPT_MODE: ffi::TerminalOption::Type = 34;
@@ -246,7 +247,7 @@ pub struct Options {
     pub cols: u16,
     /// Terminal height in cells. Must be greater than zero.
     pub rows: u16,
-    /// Maximum number of lines to keep in scrollback history.
+    /// Maximum number of lines to keep in scrollback history. Zero disables history.
     pub max_scrollback: usize,
 }
 
@@ -308,11 +309,18 @@ impl<'alloc: 'cb, 'cb> Terminal<'alloc, 'cb> {
         }
         let result = unsafe { terminal_new(alloc, &raw mut raw, opts.cols, opts.rows) };
         from_result(result)?;
-        // Tip configures scrollback separately. Preserve Options' line limit.
+        // The native line limit alone does not disable history at zero: page
+        // allocation still retains rows. Its zero-byte option also switches
+        // scrolling to the no-history path. Positive values remain line limits.
+        let scrollback_option = if opts.max_scrollback == 0 {
+            GHOSTTY_OPT_SCROLLBACK_MAX_BYTES
+        } else {
+            GHOSTTY_OPT_SCROLLBACK_MAX_LINES
+        };
         let result = unsafe {
             ffi::ghostty_terminal_set(
                 raw,
-                GHOSTTY_OPT_SCROLLBACK_MAX_LINES,
+                scrollback_option,
                 std::ptr::from_ref(&opts.max_scrollback).cast(),
             )
         };
@@ -1817,6 +1825,47 @@ mod tests {
     use crate::render::CursorVisualStyle;
     use std::cell::{Cell, RefCell};
     use std::mem::ManuallyDrop;
+
+    #[test]
+    fn zero_scrollback_does_not_retain_output_history() {
+        let mut terminal = Terminal::new(Options {
+            cols: 30,
+            rows: 5,
+            max_scrollback: 0,
+        })
+        .expect("terminal should initialize");
+
+        for _ in 0..100 {
+            terminal.vt_write(b"log line\r\n");
+            assert_eq!(terminal.total_rows().unwrap(), 5);
+            assert_eq!(terminal.scrollback_rows().unwrap(), 0);
+        }
+        let scrollbar = terminal.scrollbar().unwrap();
+        assert_eq!(scrollbar.total, 5);
+        assert_eq!(scrollbar.offset, 0);
+        assert_eq!(scrollbar.len, 5);
+
+        terminal.resize(30, 3, 0, 0).unwrap();
+        terminal.vt_write(b"after resize\r\n");
+        assert_eq!(terminal.total_rows().unwrap(), 3);
+        assert_eq!(terminal.scrollback_rows().unwrap(), 0);
+    }
+
+    #[test]
+    fn positive_scrollback_retains_output_history() {
+        let mut terminal = Terminal::new(Options {
+            cols: 30,
+            rows: 5,
+            max_scrollback: 100,
+        })
+        .expect("terminal should initialize");
+
+        for _ in 0..20 {
+            terminal.vt_write(b"log line\r\n");
+        }
+        assert_eq!(terminal.total_rows().unwrap(), 21);
+        assert_eq!(terminal.scrollback_rows().unwrap(), 16);
+    }
 
     #[inline(never)]
     fn build_terminal<'cb>(callback_count: &'cb RefCell<usize>) -> Terminal<'static, 'cb> {

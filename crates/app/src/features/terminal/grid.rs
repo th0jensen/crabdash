@@ -219,6 +219,22 @@ fn glyph_x(index: usize, shaped: Pixels, ascii_grid: bool, cell_width: f32) -> P
     }
 }
 
+/// Preserve full scroll geometry, but only shape rows intersecting the viewport.
+fn visible_rows(
+    bounds: Bounds<Pixels>,
+    mask: Bounds<Pixels>,
+    line_height: f32,
+    count: usize,
+) -> Range<usize> {
+    let visible = bounds.intersect(&mask);
+    if visible.size.width <= px(0.0) || visible.size.height <= px(0.0) {
+        return 0..0;
+    }
+    let first = (f32::from(visible.top() - bounds.top()) / line_height).floor() as usize;
+    let end = (f32::from(visible.bottom() - bounds.top()) / line_height).ceil() as usize;
+    first.min(count)..end.min(count)
+}
+
 pub(super) fn render(
     logs: &[Vec<TerminalSpan>],
     cursor: Option<TerminalCursor>,
@@ -226,32 +242,13 @@ pub(super) fn render(
     settings: Preferences,
     cell_width: f32,
     line_height: f32,
-    cx: &App,
+    _cx: &App,
 ) -> Div {
-    let rows = logs
+    let columns = logs
         .iter()
-        .map(|row| {
-            row.iter()
-                .flat_map(|span| {
-                    let (foreground, background) = if span.selected {
-                        selection::colors(span.bg, &settings, cx)
-                    } else {
-                        (span.fg.unwrap_or(default_fg), span.bg)
-                    };
-                    span.clusters.iter().cloned().map(move |cluster| Cell {
-                        cluster,
-                        foreground,
-                        background,
-                        bold: span.bold,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let columns = rows
-        .iter()
-        .flat_map(|row| row.iter())
-        .map(|cell| cell.cluster.column.saturating_add(cell.cluster.columns))
+        .flatten()
+        .flat_map(|span| &span.clusters)
+        .map(|cluster| cluster.column.saturating_add(cluster.columns))
         .max()
         .unwrap_or(0)
         .max(
@@ -259,8 +256,9 @@ pub(super) fn render(
                 .map(|cursor| cursor.column.saturating_add(1))
                 .unwrap_or(0),
         );
-    let height = rows.len() as f32 * line_height;
+    let height = logs.len() as f32 * line_height;
     let width = f32::from(columns) * cell_width;
+    let rows = logs.to_vec();
     div()
         .w(px(width))
         .min_w(px(width))
@@ -268,23 +266,52 @@ pub(super) fn render(
         .flex_none()
         .child(
             canvas(
-                move |_, window, _| {
+                move |bounds, window, cx| {
                     // Use the primary shaped line's positive ascent/descent, as the
                     // stock painter does. Platform FontMetrics use different signs.
                     let primary = shape("M".into(), false, &settings, window);
                     let baseline =
                         (px(line_height) - primary.ascent - primary.descent) / 2.0 + primary.ascent;
+                    let visible = visible_rows(
+                        bounds,
+                        window.content_mask().bounds,
+                        line_height,
+                        rows.len(),
+                    );
                     let rows = rows
                         .into_iter()
-                        .map(|row| batches(row, &settings, cell_width, window))
+                        .enumerate()
+                        .skip(visible.start)
+                        .take(visible.len())
+                        .map(|(index, row)| {
+                            // Keep offscreen rows in their compact styled spans;
+                            // only expand cells and shape glyphs for visible rows.
+                            let cells = row
+                                .into_iter()
+                                .flat_map(|span| {
+                                    let (foreground, background) = if span.selected {
+                                        selection::colors(span.bg, &settings, cx)
+                                    } else {
+                                        (span.fg.unwrap_or(default_fg), span.bg)
+                                    };
+                                    span.clusters.into_iter().map(move |cluster| Cell {
+                                        cluster,
+                                        foreground,
+                                        background,
+                                        bold: span.bold,
+                                    })
+                                })
+                                .collect();
+                            (index, batches(cells, &settings, cell_width, window))
+                        })
                         .collect::<Vec<_>>();
                     (rows, baseline)
                 },
                 move |bounds, (rows, baseline), window, _| {
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                        for (row_index, batches) in rows.iter().enumerate() {
+                        for (row_index, batches) in &rows {
                             let row_origin =
-                                bounds.origin + point(px(0.0), px(row_index as f32 * line_height));
+                                bounds.origin + point(px(0.0), px(*row_index as f32 * line_height));
                             for batch in batches {
                                 for cell in &batch.cells {
                                     if let Some(background) = cell.background {

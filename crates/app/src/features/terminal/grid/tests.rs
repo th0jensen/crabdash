@@ -1,7 +1,9 @@
-use super::{Glyph, compatible_ascii, glyph_intervals, glyph_x, overlapping_glyphs, x};
+use super::{
+    Glyph, compatible_ascii, glyph_intervals, glyph_x, overlapping_glyphs, visible_rows, x,
+};
 use crate::features::terminal::TerminalState;
 use anyhow::Result;
-use gpui::px;
+use gpui::{Bounds, point, px, size};
 use libghostty_vt::{
     selection::Selection,
     terminal::{Point, PointCoordinate},
@@ -9,6 +11,24 @@ use libghostty_vt::{
 
 fn terminal() -> Result<TerminalState> {
     TerminalState::new_interactive(32, 4, 1000, 8, 18)
+}
+
+#[test]
+fn scrolling_shapes_only_intersecting_rows_including_partial_edge_rows() {
+    let bounds = Bounds::new(point(px(50.0), px(-200.0)), size(px(400.0), px(20000.0)));
+    let mask = Bounds::new(point(px(0.0), px(0.0)), size(px(600.0), px(300.0)));
+    assert_eq!(visible_rows(bounds, mask, 20.0, 1000), 10..25);
+    let partial = Bounds::new(point(px(0.0), px(0.5)), size(px(600.0), px(300.0)));
+    assert_eq!(visible_rows(bounds, partial, 20.0, 1000), 10..26);
+    assert_eq!(visible_rows(bounds, mask, 20.0, 12), 10..12);
+    assert_eq!(visible_rows(bounds, mask, 20.0, 0), 0..0);
+    for mask in [
+        Bounds::new(point(px(500.0), px(0.0)), size(px(100.0), px(300.0))),
+        Bounds::new(point(px(0.0), px(-500.0)), size(px(600.0), px(300.0))),
+        Bounds::new(point(px(0.0), px(19800.0)), size(px(600.0), px(300.0))),
+    ] {
+        assert_eq!(visible_rows(bounds, mask, 20.0, 1000), 0..0);
+    }
 }
 
 fn metadata(state: &TerminalState) -> Vec<Vec<(u16, u16, String)>> {

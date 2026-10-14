@@ -61,7 +61,9 @@ pub struct TerminalState {
 
 impl TerminalState {
     pub fn new_log(columns: u16, rows: u16) -> anyhow::Result<Self> {
-        let mut state = Self::new(columns, rows, 5000)?;
+        // These are finite snapshots: the GPUI log surface scrolls the rendered
+        // rows itself. Native scrollback and terminal replies have no consumer.
+        let mut state = Self::new(columns, rows, 0, false)?;
         // Log commands commonly emit bare line feeds rather than terminal CRLF.
         state.terminal.vt_write(b"\x1b[20h");
         Ok(state)
@@ -74,7 +76,7 @@ impl TerminalState {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> anyhow::Result<Self> {
-        let mut state = Self::new(columns, rows, scrollback)?;
+        let mut state = Self::new(columns, rows, scrollback, true)?;
         // Set metrics before the first PTY output can query cell dimensions.
         state
             .terminal
@@ -82,17 +84,24 @@ impl TerminalState {
         Ok(state)
     }
 
-    fn new(columns: u16, rows: u16, scrollback: u32) -> anyhow::Result<Self> {
+    fn new(
+        columns: u16,
+        rows: u16,
+        scrollback: u32,
+        collect_replies: bool,
+    ) -> anyhow::Result<Self> {
         let pending_pty_writes = Rc::new(RefCell::new(Vec::new()));
         let mut terminal = Terminal::new(TerminalOptions {
             cols: columns,
             rows,
             max_scrollback: scrollback as usize,
         })?;
-        terminal.on_pty_write({
-            let pending_pty_writes = pending_pty_writes.clone();
-            move |_terminal, data| pending_pty_writes.borrow_mut().push(data.to_vec())
-        })?;
+        if collect_replies {
+            terminal.on_pty_write({
+                let pending_pty_writes = pending_pty_writes.clone();
+                move |_terminal, data| pending_pty_writes.borrow_mut().push(data.to_vec())
+            })?;
+        }
         terminal.on_size(|terminal| {
             let columns = terminal.cols().ok()?;
             let rows = terminal.rows().ok()?;
@@ -600,6 +609,46 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn log_snapshots_keep_recent_ansi_output_without_unused_replies_or_history()
+    -> anyhow::Result<()> {
+        let mut state = TerminalState::new_log(30, 5)?;
+        for index in 0..100 {
+            // Device queries can occur in captured program output. A read-only
+            // snapshot must not retain the responses it cannot deliver.
+            state.feed(format!("line-{index}\n\x1b[6n"));
+        }
+        state.feed("\x1b[38;2;9;8;7mlatest");
+        assert!(text(&state).contains("line-99"));
+        assert!(text(&state).ends_with("latest"));
+        assert!(state.take_pty_writes().is_empty());
+        assert!(state.rendered.iter().flatten().any(|span| {
+            span.text.contains("latest") && span.fg == Some(super::rgb_to_rgba(9, 8, 7))
+        }));
+        let scrollbar = state.terminal.scrollbar()?;
+        assert_eq!(scrollbar.total, scrollbar.len);
+        assert_eq!(scrollbar.offset, 0);
+        state.scroll(ScrollViewport::Top);
+        assert!(!text(&state).contains("line-0\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn interactive_terminals_keep_scrollback_and_drain_device_replies() -> anyhow::Result<()> {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20)?;
+        for index in 0..30 {
+            state.feed(format!("line-{index}\r\n\x1b[6n"));
+            let replies = state.take_pty_writes();
+            assert!(!replies.is_empty());
+            assert!(state.take_pty_writes().is_empty());
+        }
+        state.scroll(ScrollViewport::Top);
+        assert!(text(&state).starts_with("line-0\n"));
+        state.scroll(ScrollViewport::Bottom);
+        assert!(text(&state).contains("line-29"));
+        Ok(())
     }
 
     #[test]
