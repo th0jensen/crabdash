@@ -115,19 +115,30 @@ jobs:
           if (-not $shaderCompiler) { throw 'Windows SDK fxc.exe is required.' }
           "GPUI_FXC_PATH=$shaderCompiler" >> $env:GITHUB_ENV
           'RUSTFLAGS=-C target-feature=+crt-static' >> $env:GITHUB_ENV
-          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/crabdash-target" >> $env:GITHUB_ENV
+          $targetDirectory = Join-Path $env:RUNNER_TEMP 'crabdash-target'
+          "CARGO_TARGET_DIR=$targetDirectory" >> $env:GITHUB_ENV
+          $cacheTarget = [IO.Path]::GetRelativePath($env:GITHUB_WORKSPACE, $targetDirectory).Replace('\', '/')
+          "CRABDASH_CACHE_TARGET=$cacheTarget" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           shared-key: release-${{ matrix.target }}-rust-1.95-zig-0.16-${{ steps.ghostty.outputs.revision }}
-          workspaces: ${{ runner.os == 'Windows' && format('. -> {0}/crabdash-target', runner.temp) || '. -> target' }}
+          workspaces: . -> ${{ env.CRABDASH_CACHE_TARGET || 'target' }}
       - name: Check formatting and release version
         run: |
           cargo fmt --all -- --check
           python script/release/check-version.py "${GITHUB_REF_NAME}"
       - name: Test release tooling and native source staging
+        if: runner.os != 'Windows'
         run: |
           python -m unittest discover -s script/release -p 'test_*.py'
+          python script/release/test-native.py
+      - name: Test Windows release tooling and native source staging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m unittest discover -s script/release -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python script/release/test-native.py
       - name: Build executable with embedded shaders
         if: runner.os != 'Windows'
