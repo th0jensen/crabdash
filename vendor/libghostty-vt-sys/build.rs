@@ -4,9 +4,11 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Pinned ghostty commit. Update this to pull a newer version.
 const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
-const GHOSTTY_COMMIT: &str = "a887df42c56f6de86c0fe6da9c4eeca37931e083";
+// Temporary, user-approved tip override shared with Bless. The bindings at
+// 483ea3d pin 108cacb upstream; this revision has identical public VT headers
+// and src/terminal/c except version.h (1.0.2), validated before advancing.
+const GHOSTTY_COMMIT: &str = "5ebe501a63425b13d9952e8c54682c046386e5af";
 
 /// File name of the static archive on Windows. Ghostty installs it under this
 /// name for every Windows ABI so it does not collide with `ghostty-vt.lib`,
@@ -86,6 +88,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_OPTIMIZE");
     println!("cargo:rerun-if-env-changed=GHOSTTY_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=GHOSTTY_ZIG_SYSTEM_DIR");
+    println!("cargo:rerun-if-env-changed=ZIG");
     println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=HOST");
     println!("cargo:rerun-if-env-changed=DEBUG");
@@ -154,6 +157,10 @@ fn build_vendored(link_mode: LinkMode, target: &str) {
 
     // Build libghostty-vt via zig.
     let install_prefix = out_dir.join("ghostty-install");
+    println!(
+        "cargo:rustc-env=LIBGHOSTTY_VT_SYS_INCLUDE_DIR={}",
+        install_prefix.join("include").display()
+    );
     let zig_cache_dir = out_dir.join("zig-cache");
     let zig_global_cache_dir = out_dir.join("zig-global-cache");
 
@@ -164,7 +171,8 @@ fn build_vendored(link_mode: LinkMode, target: &str) {
         "LIBGHOSTTY_VT_SYS_CPU must not be empty when set"
     );
 
-    let mut build = Command::new("zig");
+    let zig = env::var_os("ZIG").unwrap_or_else(|| "zig".into());
+    let mut build = Command::new(zig);
     build
         .arg("build")
         .arg("-Demit-lib-vt=true")
@@ -203,8 +211,16 @@ fn build_vendored(link_mode: LinkMode, target: &str) {
         build
             .arg("--system")
             .arg(&zig_system_dir)
-            .arg("--global-cache-dir")
-            .arg(&zig_global_cache_dir);
+            // --pkg-dir (including ZIG_LOCAL_PKG_DIR) takes precedence over
+            // --system in Zig 0.17. Point both at the immutable store.
+            .arg("--pkg-dir")
+            .arg(&zig_system_dir)
+            // Zig 0.17 redirects its global cache through the environment.
+            .env("ZIG_GLOBAL_CACHE_DIR", &zig_global_cache_dir);
+    } else {
+        // Zig 0.17 otherwise creates zig-pkg inside the source snapshot,
+        // invalidating its fingerprint on the next Cargo build.
+        build.arg("--pkg-dir").arg(out_dir.join("zig-pkg"));
     }
 
     // Only pass -Dtarget when cross-compiling. For native builds, let zig

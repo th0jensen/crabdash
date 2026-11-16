@@ -5,6 +5,9 @@
 #![allow(rustdoc::all)]
 
 mod bindings;
+// Generated checks select the C ABI of the compilation target, not the host
+// that last regenerated the shared declarations.
+mod layouts;
 
 use std::ops::Deref;
 
@@ -57,5 +60,35 @@ impl bindings::String {
     pub unsafe fn to_str<'a>(self) -> &'a str {
         // SAFETY: To be upheld by caller
         unsafe { std::str::from_utf8_unchecked(self.to_bytes()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bindings;
+
+    #[test]
+    fn sized_macro_sets_the_size_field() {
+        let colors = crate::sized!(bindings::RenderStateColors);
+        assert_eq!(
+            colors.size,
+            std::mem::size_of::<bindings::RenderStateColors>()
+        );
+    }
+
+    #[test]
+    fn ffi_string_round_trips_static_str() {
+        let raw = bindings::String::from("ghostty");
+        assert_eq!(raw.len, "ghostty".len());
+        // SAFETY: The source string is `'static` and valid UTF-8.
+        assert_eq!(unsafe { raw.to_str() }, "ghostty");
+    }
+
+    #[test]
+    fn ffi_string_round_trips_borrowed_string() {
+        let owned = String::from("terminal");
+        let raw = bindings::String::from(owned.as_str());
+        // SAFETY: `owned` outlives the conversion and contains valid UTF-8.
+        assert_eq!(unsafe { raw.to_str() }, "terminal");
     }
 }

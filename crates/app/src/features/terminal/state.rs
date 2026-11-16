@@ -3,10 +3,11 @@ use super::{sizing::EmulatorSize, view::QuakeTerminalStatus};
 use crate::components::terminal_input::TerminalInput;
 use gpui::*;
 use libghostty_vt::{
-    RenderState, Terminal, TerminalOptions,
+    RenderState, Terminal,
     key::{Encoder, Event, Key},
+    mode::Mode,
     render::{CellIterator, RowIterator},
-    terminal::{Mode, ScrollViewport},
+    terminal::ScrollViewport,
 };
 use machines::terminal::{TerminalController, TerminalSize};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -91,11 +92,14 @@ impl TerminalState {
         collect_replies: bool,
     ) -> anyhow::Result<Self> {
         let pending_pty_writes = Rc::new(RefCell::new(Vec::new()));
-        let mut terminal = Terminal::new(TerminalOptions {
-            cols: columns,
-            rows,
-            max_scrollback: scrollback as usize,
-        })?;
+        let mut terminal = Terminal::new(columns, rows)?;
+        // A zero line limit alone may still retain page-backed history. The
+        // zero-byte limit selects Ghostty's no-history scrolling path for logs.
+        if scrollback == 0 {
+            terminal.set_scrollback_max_bytes(Some(0))?;
+        } else {
+            terminal.set_scrollback_max_lines(Some(scrollback as usize))?;
+        }
         if collect_replies {
             terminal.on_pty_write({
                 let pending_pty_writes = pending_pty_writes.clone();
@@ -107,7 +111,7 @@ impl TerminalState {
             let rows = terminal.rows().ok()?;
             let cell_width = terminal.width_px().ok()?.checked_div(u32::from(columns))?;
             let cell_height = terminal.height_px().ok()?.checked_div(u32::from(rows))?;
-            (cell_width > 0 && cell_height > 0).then_some(libghostty_vt::terminal::SizeReportSize {
+            (cell_width > 0 && cell_height > 0).then_some(libghostty_vt::report::SizeReportSize {
                 columns,
                 rows,
                 cell_width,
@@ -116,9 +120,9 @@ impl TerminalState {
         })?;
         terminal.on_color_scheme(|_| {
             Some(if crate::components::style::is_dark() {
-                libghostty_vt::terminal::ColorScheme::Dark
+                libghostty_vt::report::ColorScheme::Dark
             } else {
-                libghostty_vt::terminal::ColorScheme::Light
+                libghostty_vt::report::ColorScheme::Light
             })
         })?;
 
@@ -165,9 +169,7 @@ impl TerminalState {
     }
 
     pub(super) fn title(&self) -> String {
-        self.terminal
-            .title()
-            .unwrap_or_default()
+        String::from_utf8_lossy(self.terminal.title().unwrap_or_default())
             .chars()
             .filter(|character| !character.is_control())
             .take(256)
@@ -243,10 +245,10 @@ impl TerminalState {
     }
 
     fn apply_palette(&mut self, dark: bool) -> anyhow::Result<()> {
-        use libghostty_vt::style::{Palette, RgbColor};
+        use libghostty_vt::color::{Palette, Rgb};
         let color = |value| {
             let value = crate::components::style::color_for(value, dark);
-            RgbColor {
+            Rgb {
                 r: (value >> 16) as u8,
                 g: (value >> 8) as u8,
                 b: value as u8,
@@ -264,7 +266,7 @@ impl TerminalState {
                 .into_iter()
                 .enumerate()
             {
-                palette.0[index] = RgbColor {
+                palette.0[index] = Rgb {
                     r: (value >> 16) as u8,
                     g: (value >> 8) as u8,
                     b: value as u8,
@@ -549,14 +551,14 @@ mod tests {
     use super::TerminalState;
     #[test]
     fn changing_theme_preserves_program_colour_overrides_and_true_colour() -> anyhow::Result<()> {
-        use libghostty_vt::style::{PaletteIndex, RgbColor};
+        use libghostty_vt::color::{PaletteIndex, Rgb};
         let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20)?;
         state.terminal.vt_write(b"\x1b]10;rgb:12/34/56\x07\x1b]11;rgb:21/43/65\x07\x1b]4;1;rgb:11/22/33\x07\x1b[38;2;9;8;7mX");
         for dark in [false, true] {
             state.apply_palette(dark)?;
             assert_eq!(
                 state.terminal.fg_color()?,
-                Some(RgbColor {
+                Some(Rgb {
                     r: 0x12,
                     g: 0x34,
                     b: 0x56
@@ -564,7 +566,7 @@ mod tests {
             );
             assert_eq!(
                 state.terminal.bg_color()?,
-                Some(RgbColor {
+                Some(Rgb {
                     r: 0x21,
                     g: 0x43,
                     b: 0x65
@@ -572,7 +574,7 @@ mod tests {
             );
             assert_eq!(
                 state.terminal.color_palette()?.get(PaletteIndex::RED),
-                RgbColor {
+                Rgb {
                     r: 0x11,
                     g: 0x22,
                     b: 0x33
@@ -582,7 +584,7 @@ mod tests {
                 crate::components::style::color_for(crate::components::style::TEXT_PRIMARY, dark);
             assert_eq!(
                 state.terminal.default_fg_color()?,
-                Some(RgbColor {
+                Some(Rgb {
                     r: (foreground >> 16) as u8,
                     g: (foreground >> 8) as u8,
                     b: foreground as u8
@@ -724,6 +726,14 @@ mod tests {
                 .chars()
                 .all(|character| !character.is_control())
         );
+    }
+
+    #[test]
+    fn invalid_osc_title_preserves_the_last_valid_title() {
+        let mut state = TerminalState::new_interactive(30, 5, 200, 8, 20).unwrap();
+        state.feed(b"\x1b]2;build\x07");
+        state.feed(b"\x1b]2;build-\xff\x07");
+        assert_eq!(state.title(), "build");
     }
 
     #[test]

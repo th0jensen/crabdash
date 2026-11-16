@@ -4,11 +4,12 @@ use crate::features::terminal::TerminalState;
 use anyhow::{Context as _, Result};
 use gpui::{Bounds, point, px, size};
 use libghostty_vt::{
+    point::{Coordinate as PointCoordinate, Point},
     selection::{
         Selection,
         gesture::{Autoscroll, Geometry},
     },
-    terminal::{Point, PointCoordinate, ScrollViewport},
+    terminal::ScrollViewport,
 };
 
 fn terminal(columns: u16, rows: u16) -> Result<TerminalState> {

@@ -2,8 +2,8 @@
 use crate::app::Crabdash;
 use gpui::{prelude::*, *};
 use libghostty_vt::{
+    point::Coordinate as PointCoordinate,
     selection::gesture::{Autoscroll, Geometry},
-    terminal::PointCoordinate,
 };
 use std::time::Duration;
 use uuid::Uuid;

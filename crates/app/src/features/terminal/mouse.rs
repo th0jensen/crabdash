@@ -56,7 +56,7 @@ impl State {
         };
         encoder
             .set_options_from_terminal(terminal)
-            .set_size(size)
+            .set_size(size)?
             .set_any_button_pressed(pressed);
         let mut event = Event::new()?;
         event

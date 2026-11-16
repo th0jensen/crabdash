@@ -37,9 +37,27 @@ Open Preferences with **Ctrl+,** (**⌘,** on macOS) for appearance, fonts, term
 options and startup. Appearance defaults to the system. Liquid Glass is optional
 on macOS. The default terminal type is `xterm-256color`.
 
+## Terminal and Rex
+
+`crabdash-tui` is a smaller Crabdash for the terminal: Docker, disks, services and
+system activity of the machine it runs on.
+
+```sh
+cargo install --locked --path crates/tui
+crabdash-tui rex install
+```
+
+Build from this checkout for now: the embedded Bless pager's updated Ghostty
+dependencies must be published before this version can ship on crates.io.
+
+`rex install` puts **Crabdash: Open Dashboard** and one action per section in the
+[Rex](https://www.superlogical.com/rex) command palette of every app connected to that
+machine, including Rex for iOS. Each section opens as a Rex pane. See
+[its README](crates/tui/README.md).
+
 ## Build
 
-Install Rust and Zig **0.16.0**, then fetch the native dependencies:
+Install Rust **1.96+** and Zig **0.17.1**, then fetch the native dependencies:
 
 ```sh
 git submodule update --init --recursive
@@ -65,5 +83,9 @@ contains the platform build and packaging commands.
 cargo build --release --locked -p crabdash
 cargo test --locked --workspace --lib -- --test-threads=1
 ```
+
+The GUI and Bless share Rust bindings `483ea3d` and Ghostty `5ebe501a`, temporarily
+ahead of the bindings' upstream Ghostty pin. The root Cargo config overrides the
+native source; Bless's own Cargo config is not inherited by consumers.
 
 MIT licensed. See [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY-NOTICES.txt).

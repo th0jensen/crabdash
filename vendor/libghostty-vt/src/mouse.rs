@@ -58,8 +58,8 @@ impl<'alloc> Encoder<'alloc> {
         &mut self,
         option: ffi::MouseEncoderOption::Type,
         value: *const std::ffi::c_void,
-    ) {
-        unsafe { ffi::ghostty_mouse_encoder_setopt(self.0.as_raw(), option, value) }
+    ) -> ffi::Result::Type {
+        unsafe { ffi::ghostty_mouse_encoder_set(self.0.as_raw(), option, value) }
     }
 
     /// Encode a key event into a terminal escape sequence.
@@ -127,10 +127,7 @@ impl<'alloc> Encoder<'alloc> {
     /// It does not modify size or any-button state.
     pub fn set_options_from_terminal(&mut self, terminal: &Terminal<'_, '_>) -> &mut Self {
         unsafe {
-            ffi::ghostty_mouse_encoder_setopt_from_terminal(
-                self.0.as_raw(),
-                terminal.inner.as_raw(),
-            );
+            ffi::ghostty_mouse_encoder_set_from_terminal(self.0.as_raw(), terminal.inner.as_raw());
         }
         self
     }
@@ -149,12 +146,13 @@ impl<'alloc> Encoder<'alloc> {
         self
     }
     /// Set renderer size context.
-    pub fn set_size(&mut self, value: EncoderSize) -> &mut Self {
+    ///
+    /// Returns [`Error::InvalidValue`] if either cell dimension is zero.
+    /// On error, the encoder keeps its previous size.
+    pub fn set_size(&mut self, value: EncoderSize) -> Result<&mut Self> {
         let raw: ffi::MouseEncoderSize = value.into();
-        unsafe {
-            self.setopt(Opt::SIZE, std::ptr::from_ref(&raw).cast());
-        }
-        self
+        from_result(unsafe { self.setopt(Opt::SIZE, std::ptr::from_ref(&raw).cast()) })?;
+        Ok(self)
     }
     /// Set whether any mouse button is currently pressed.
     pub fn set_any_button_pressed(&mut self, value: bool) -> &mut Self {
@@ -175,7 +173,7 @@ impl<'alloc> Encoder<'alloc> {
     ///
     /// This clears motion deduplication state (last tracked cell).
     pub fn reset(&mut self) {
-        unsafe { ffi::ghostty_mouse_encoder_reset(self.0.as_raw()) }
+        unsafe { ffi::ghostty_mouse_encoder_reset(self.0.as_raw()) };
     }
 }
 
@@ -239,7 +237,7 @@ impl<'alloc> Event<'alloc> {
                 );
             }
         } else {
-            unsafe { ffi::ghostty_mouse_event_clear_button(self.0.as_raw()) }
+            unsafe { ffi::ghostty_mouse_event_clear_button(self.0.as_raw()) };
         }
         self
     }
@@ -250,7 +248,7 @@ impl<'alloc> Event<'alloc> {
         let mut button = ffi::MouseButton::UNKNOWN;
         let has_button =
             unsafe { ffi::ghostty_mouse_event_get_button(self.0.as_raw(), &raw mut button) };
-        if has_button {
+        if has_button == ffi::Result::SUCCESS {
             Some(button.try_into().unwrap_or(Button::Unknown))
         } else {
             None
@@ -259,7 +257,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set keyboard modifiers held during the event.
     pub fn set_mods(&mut self, mods: key::Mods) -> &mut Self {
-        unsafe { ffi::ghostty_mouse_event_set_mods(self.0.as_raw(), mods.bits()) }
+        unsafe { ffi::ghostty_mouse_event_set_mods(self.0.as_raw(), mods.bits()) };
         self
     }
 
@@ -271,7 +269,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set the event position in surface-space pixels.
     pub fn set_position(&mut self, pos: Position) -> &mut Self {
-        unsafe { ffi::ghostty_mouse_event_set_position(self.0.as_raw(), pos) }
+        unsafe { ffi::ghostty_mouse_event_set_position(self.0.as_raw(), pos) };
         self
     }
 
@@ -289,7 +287,7 @@ impl Drop for Event<'_> {
 }
 
 /// Mouse tracking mode.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 pub enum TrackingMode {
@@ -306,7 +304,7 @@ pub enum TrackingMode {
 }
 
 /// Mouse output format.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 #[expect(missing_docs, reason = "missing upstream docs")]
@@ -359,7 +357,7 @@ impl From<EncoderSize> for ffi::MouseEncoderSize {
 }
 
 /// Mouse event action type.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 pub enum Action {
@@ -372,7 +370,7 @@ pub enum Action {
 }
 
 /// Mouse event action identity.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 #[expect(missing_docs, reason = "self-explanatory")]
@@ -389,4 +387,97 @@ pub enum Button {
     Nine = ffi::MouseButton::NINE,
     Ten = ffi::MouseButton::TEN,
     Eleven = ffi::MouseButton::ELEVEN,
+}
+
+/// Mouse pointer shapes based on the W3C cursor names.
+///
+/// Hosts map these values to their native pointer shapes; not every platform
+/// supports every shape. These are pointer shapes, not terminal text cursors.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
+#[non_exhaustive]
+#[expect(missing_docs, reason = "missing upstream docs")]
+pub enum Shape {
+    Default = ffi::MouseShape::DEFAULT,
+    ContextMenu = ffi::MouseShape::CONTEXT_MENU,
+    Help = ffi::MouseShape::HELP,
+    Pointer = ffi::MouseShape::POINTER,
+    Progress = ffi::MouseShape::PROGRESS,
+    Wait = ffi::MouseShape::WAIT,
+    Cell = ffi::MouseShape::CELL,
+    Crosshair = ffi::MouseShape::CROSSHAIR,
+    Text = ffi::MouseShape::TEXT,
+    VerticalText = ffi::MouseShape::VERTICAL_TEXT,
+    Alias = ffi::MouseShape::ALIAS,
+    Copy = ffi::MouseShape::COPY,
+    Move = ffi::MouseShape::MOVE,
+    NoDrop = ffi::MouseShape::NO_DROP,
+    NotAllowed = ffi::MouseShape::NOT_ALLOWED,
+    Grab = ffi::MouseShape::GRAB,
+    Grabbing = ffi::MouseShape::GRABBING,
+    AllScroll = ffi::MouseShape::ALL_SCROLL,
+    ColResize = ffi::MouseShape::COL_RESIZE,
+    RowResize = ffi::MouseShape::ROW_RESIZE,
+    NResize = ffi::MouseShape::N_RESIZE,
+    EResize = ffi::MouseShape::E_RESIZE,
+    SResize = ffi::MouseShape::S_RESIZE,
+    WResize = ffi::MouseShape::W_RESIZE,
+    NeResize = ffi::MouseShape::NE_RESIZE,
+    NwResize = ffi::MouseShape::NW_RESIZE,
+    SeResize = ffi::MouseShape::SE_RESIZE,
+    SwResize = ffi::MouseShape::SW_RESIZE,
+    EwResize = ffi::MouseShape::EW_RESIZE,
+    NsResize = ffi::MouseShape::NS_RESIZE,
+    NeswResize = ffi::MouseShape::NESW_RESIZE,
+    NwseResize = ffi::MouseShape::NWSE_RESIZE,
+    ZoomIn = ffi::MouseShape::ZOOM_IN,
+    ZoomOut = ffi::MouseShape::ZOOM_OUT,
+}
+
+#[cfg(all(test, not(miri)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_cell_dimensions_preserve_encoder_geometry() {
+        let mut encoder = Encoder::new().unwrap();
+        let size = EncoderSize {
+            screen_width: 100,
+            screen_height: 120,
+            cell_width: 10,
+            cell_height: 20,
+            padding_top: 0,
+            padding_bottom: 0,
+            padding_right: 0,
+            padding_left: 0,
+        };
+        encoder
+            .set_size(size)
+            .unwrap()
+            .set_tracking_mode(TrackingMode::Normal)
+            .set_format(Format::Sgr);
+        let mut event = Event::new().unwrap();
+        event
+            .set_action(Action::Press)
+            .set_button(Some(Button::Left))
+            .set_position(Position { x: 21.0, y: 61.0 });
+        for invalid in [
+            EncoderSize {
+                cell_width: 0,
+                ..size
+            },
+            EncoderSize {
+                cell_height: 0,
+                ..size
+            },
+        ] {
+            assert!(matches!(
+                encoder.set_size(invalid),
+                Err(Error::InvalidValue)
+            ));
+            let mut buf = [0; 32];
+            let len = encoder.encode(&event, &mut buf).unwrap();
+            assert_eq!(&buf[..len], b"\x1b[<0;3;4M");
+        }
+    }
 }

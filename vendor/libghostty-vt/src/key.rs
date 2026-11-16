@@ -1,17 +1,12 @@
-//! Encoding key events into terminal escape sequences,
+//! Encode key events with the legacy encoding or the Kitty keyboard protocol.
 //!
-//! Supports both legacy encoding as well as Kitty Keyboard Protocol.
+//! Encode key events into terminal escape sequences, with the legacy encoding
+//! or the Kitty Keyboard Protocol.
 //!
-//! # Basic Usage
-//!
-//!  1. Create an encoder instance with [`Encoder::new`].
-//!  2. Configure encoder options with the various `Encoder::set_*` methods
-//!     or [`Encoder::set_options_from_terminal`] if you have a [`Terminal`].
-//!  3. For each key event:
-//!     *  Create a key event with [`Event::new`] (or reuse an existing one)
-//!     *  Set event properties (action, key, modifiers, etc.)
-//!     *  Encode with [`Encoder::encode_to_vec`] (with a growable `Vec` buffer)
-//!        or [`Encoder::encode`] (with a fixed byte buffer).
+//! An encoder has to follow the terminal's modes. If you have a terminal, call
+//! [`Encoder::set_options_from_terminal`] before you encode. You don't need
+//! a terminal to use this, but then you set the options yourself.
+// FIXME: link to transcluded example & guide
 use std::mem::MaybeUninit;
 
 use crate::{
@@ -54,7 +49,7 @@ impl<'alloc> Encoder<'alloc> {
         option: ffi::KeyEncoderOption::Type,
         value: *const std::ffi::c_void,
     ) {
-        unsafe { ffi::ghostty_key_encoder_setopt(self.0.as_raw(), option, value) }
+        unsafe { ffi::ghostty_key_encoder_set(self.0.as_raw(), option, value) };
     }
 
     /// Encode a key event into a terminal escape sequence.
@@ -135,7 +130,7 @@ impl<'alloc> Encoder<'alloc> {
     /// Use [`Encoder::set_macos_option_as_alt`] to set it afterward if needed.
     pub fn set_options_from_terminal(&mut self, terminal: &Terminal<'_, '_>) -> &mut Self {
         unsafe {
-            ffi::ghostty_key_encoder_setopt_from_terminal(self.0.as_raw(), terminal.inner.as_raw());
+            ffi::ghostty_key_encoder_set_from_terminal(self.0.as_raw(), terminal.inner.as_raw());
         }
         self
     }
@@ -258,7 +253,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set the key action (press, release, repeat).
     pub fn set_action(&mut self, action: Action) -> &mut Self {
-        unsafe { ffi::ghostty_key_event_set_action(self.inner.as_raw(), action.into()) }
+        unsafe { ffi::ghostty_key_event_set_action(self.inner.as_raw(), action.into()) };
         self
     }
 
@@ -271,7 +266,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set the physical key code.
     pub fn set_key(&mut self, key: Key) -> &mut Self {
-        unsafe { ffi::ghostty_key_event_set_key(self.inner.as_raw(), key.into()) }
+        unsafe { ffi::ghostty_key_event_set_key(self.inner.as_raw(), key.into()) };
         self
     }
 
@@ -284,7 +279,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set the modifier keys bitmask.
     pub fn set_mods(&mut self, mods: Mods) -> &mut Self {
-        unsafe { ffi::ghostty_key_event_set_mods(self.inner.as_raw(), mods.bits()) }
+        unsafe { ffi::ghostty_key_event_set_mods(self.inner.as_raw(), mods.bits()) };
         self
     }
 
@@ -296,7 +291,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set the consumed modifiers bitmask.
     pub fn set_consumed_mods(&mut self, mods: Mods) -> &mut Self {
-        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.inner.as_raw(), mods.bits()) }
+        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.inner.as_raw(), mods.bits()) };
         self
     }
 
@@ -310,7 +305,7 @@ impl<'alloc> Event<'alloc> {
 
     /// Set whether the key event is part of a composition sequence.
     pub fn set_composing(&mut self, composing: bool) -> &mut Self {
-        unsafe { ffi::ghostty_key_event_set_composing(self.inner.as_raw(), composing) }
+        unsafe { ffi::ghostty_key_event_set_composing(self.inner.as_raw(), composing) };
         self
     }
 
@@ -337,12 +332,11 @@ impl<'alloc> Event<'alloc> {
             Some(text) => unsafe {
                 ffi::ghostty_key_event_set_utf8(
                     self.inner.as_raw(),
-                    text.as_ptr().cast(),
-                    text.len(),
+                    ffi::String::from(text.as_str()),
                 );
             },
             None => unsafe {
-                ffi::ghostty_key_event_set_utf8(self.inner.as_raw(), std::ptr::null(), 0);
+                ffi::ghostty_key_event_set_utf8(self.inner.as_raw(), ffi::String::default());
             },
         }
         self
@@ -380,7 +374,7 @@ impl Drop for Event<'_> {
     }
 }
 
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 #[expect(missing_docs, reason = "self-explanatory")]
@@ -564,7 +558,7 @@ pub enum Key {
 }
 
 /// Key event action type.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 #[non_exhaustive]
 pub enum Action {
@@ -580,7 +574,7 @@ pub enum Action {
 ///
 /// Determines whether the "option" key on macOS is treated as "alt" or not.
 /// See the Ghostty `macos-option-as-alt` configuration option for more details.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, int_enum::IntEnum)]
 pub enum OptionAsAlt {
     /// Option key is not treated as alt.

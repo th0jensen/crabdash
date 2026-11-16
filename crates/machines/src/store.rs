@@ -161,6 +161,8 @@ impl MachineStore {
             !docker_path.is_empty() && !docker_path.contains('\0'),
             "The Docker executable path must be nonempty and contain no null character"
         );
+        // Unsaved machines, such as crabdash-tui's local one, must not create a store.
+        ensure!(fs::metadata(path).await.is_ok(), "No saved machines");
         Self::mutate(path, move |store| {
             let existing = store
                 .machines
@@ -427,6 +429,19 @@ mod tests {
             assert_eq!(current.machines[0].docker_path.as_deref(), Some(cli_path));
             assert_eq!(current.machines[0].id, store.machines[0].id);
             Ok(())
+        })
+    }
+
+    #[test]
+    fn caching_docker_for_an_unsaved_machine_creates_no_store() {
+        smol::block_on(async {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            let cached =
+                MachineStore::cache_docker_path_at(&path, Uuid::new_v4(), "/usr/bin/docker".into())
+                    .await;
+            assert!(cached.is_err());
+            assert!(!path.exists());
         })
     }
 
