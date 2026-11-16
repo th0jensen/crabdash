@@ -155,6 +155,11 @@ jobs:
         shell: pwsh
         run: cargo test --locked --release --workspace --lib --target "${{ matrix.target }}" -- --test-threads=1
       - name: Test the terminal dashboard
+        if: runner.os != 'Windows'
+        run: cargo test --locked --release -p crabdash-tui --target "${{ matrix.target }}"
+      - name: Test the Windows terminal dashboard
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: cargo test --locked --release -p crabdash-tui --target "${{ matrix.target }}"
       - name: Check Windows PTY setup failure cleanup
         if: runner.os == 'Windows'
