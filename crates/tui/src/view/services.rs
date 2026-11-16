@@ -24,7 +24,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         })
     });
     let empty = if app.active_services {
-        "No active services. Press a to show all."
+        "No active services. Tap the count or press a to show all."
     } else {
         "No services."
     };

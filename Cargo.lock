@@ -1375,6 +1375,7 @@ dependencies = [
  "crabdash-services",
  "crabdash-utils",
  "dirs 6.0.0",
+ "libc",
  "ratatui",
  "smol",
 ]

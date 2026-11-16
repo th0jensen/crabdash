@@ -18,10 +18,12 @@ On Linux, building needs OpenSSL headers (`libssl-dev` or `openssl-devel`) and `
 crabdash-tui [docker|disks|services|system]
 ```
 
-**Tab** or **1**–**4** switches sections; **j**/**k** select. In Docker and Services,
-**s** starts or stops, **r** restarts and **l** shows logs; **p** pauses a container and
-**a** shows only active services. **q** quits. Tabs, rows and key hints also take
-taps, so it works from touch clients.
+The frame fills the pane and is built for touch, like ramp: tap a section to switch,
+tap a container or service for a sheet of its actions (start or stop, restart, pause,
+logs), tap **×** to close it, and swipe to scroll. In Services, tapping the count shows
+only active services. Keys do the same: **Tab** or **1**–**4** switch sections, **j**/**k**
+select, **Enter** opens actions, **s**/**r**/**p**/**l** act on the selection, **a** shows
+only active services, and **Esc** closes or quits.
 
 ## Rex
 

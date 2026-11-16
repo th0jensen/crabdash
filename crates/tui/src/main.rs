@@ -1,8 +1,10 @@
 //! crabdash-tui: Crabdash's dashboard for the terminal and for Rex panes.
 mod app;
+mod palette;
 mod poll;
 mod rex;
 mod section;
+mod touch;
 mod view;
 
 use anyhow::{Result, bail};
@@ -15,8 +17,8 @@ Usage:
   crabdash-tui [docker|disks|services|system]   open the dashboard at a section
   crabdash-tui rex install | uninstall          add Crabdash to Rex's command palette
 
-Keys: tab or 1-4 switch sections, j/k select, s start/stop, r restart,
-p pause, l logs, a active only, q quit. Taps and scrolling work too.";
+Keys: tab or 1-4 switch sections, j/k select, enter actions, s start/stop, r restart,
+p pause, l logs, a active only, esc close, q quit. Tap rows for actions; swipe to scroll.";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

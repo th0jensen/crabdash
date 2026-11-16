@@ -22,7 +22,10 @@ smol.workspace = true
 utils.workspace = true
 
 dirs = "6.0.0"
-ratatui = "0.30.2"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
 
 [lints]
 workspace = true
