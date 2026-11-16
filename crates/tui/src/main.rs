@@ -2,6 +2,7 @@
 mod app;
 mod palette;
 mod poll;
+mod report;
 mod rex;
 mod section;
 mod touch;

@@ -42,3 +42,8 @@ Rex carries the connection, so each pane reads the machine its session runs on. 
 pane for a session on another host runs that host's `crabdash-tui`, installing it with
 `cargo install` first when it is missing. Upgrading `crabdash-tui` updates the plugin
 the next time it runs.
+
+Each pane titles itself "Crabdash · *Section*" and reports its status with the
+[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
+(OSC 7501, `app=crabdash`), so Rex shows a working indicator and message on the tab
+while a container or service action runs.

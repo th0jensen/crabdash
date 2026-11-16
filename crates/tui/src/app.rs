@@ -2,6 +2,7 @@
 use crate::{
     palette::Palette,
     poll::{self, Action, Request, Update},
+    report::{Report, Reporter},
     section::Section,
     touch::{Hits, Pointer},
     view,
@@ -58,6 +59,9 @@ pub struct App {
     pub sheet: bool,
     pub logs: Option<Logs>,
     pub status: Option<Result<String, String>>,
+    /// An action or log request is running.
+    acting: bool,
+    reporter: Reporter,
     pub palette: Palette,
     pub hits: Hits,
     pointer: Pointer,
@@ -73,8 +77,10 @@ pub fn run(section: Section) -> Result<()> {
         ..App::default()
     };
     let result = execute!(stdout(), EnableMouseCapture)
+        .and_then(|()| Reporter::start(&mut stdout()))
         .map_err(anyhow::Error::from)
         .and_then(|()| app.event_loop(&mut terminal, &requests, &updates));
+    let _ = Reporter::finish(&mut stdout());
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
@@ -91,6 +97,7 @@ impl App {
             while let Ok(update) = updates.try_recv() {
                 self.apply(update);
             }
+            self.reporter.send(&mut stdout(), self.report())?;
             terminal.draw(|frame| view::draw(frame, self))?;
             if event::poll(Duration::from_millis(200))? {
                 let previous = self.section;
@@ -125,6 +132,7 @@ impl App {
             Update::Disks(disks) => self.disks = Some(disks),
             Update::Services(services) => self.services = Some(services),
             Update::Logs { title, text } => {
+                self.acting = false;
                 self.status = None;
                 self.logs = Some(Logs {
                     title,
@@ -134,9 +142,27 @@ impl App {
                     max: 0,
                 })
             }
-            Update::Done(result) => self.status = Some(result),
+            Update::Done(result) => {
+                self.acting = false;
+                self.status = Some(result);
+            }
         }
         self.clamp_selection();
+    }
+
+    /// The title and status Rex shows for this pane: working with the
+    /// running action, then at rest with any failure.
+    fn report(&self) -> Report {
+        let msg = match &self.status {
+            Some(Ok(label)) if self.acting => Some(label.clone()),
+            Some(Err(error)) => Some(error.clone()),
+            _ => None,
+        };
+        Report {
+            title: format!("Crabdash · {}", self.section.title()),
+            working: self.acting,
+            msg,
+        }
     }
 
     /// Services the table shows by name, like the desktop app, optionally active only.
@@ -335,6 +361,7 @@ impl App {
                 if let Some((action, label)) = self.action(code) {
                     self.sheet = false;
                     self.status = Some(Ok(label));
+                    self.acting = true;
                     let _ = requests.send(Request::Act(action));
                 }
             }

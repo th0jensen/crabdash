@@ -21,6 +21,7 @@ services.workspace = true
 smol.workspace = true
 utils.workspace = true
 
+base64 = "0.22.1"
 dirs = "6.0.0"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 
