@@ -61,7 +61,7 @@ jobs:
         run: echo "revision=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.100.0
           targets: ${{ matrix.target }}
           components: rustfmt
       - uses: actions/setup-python@v5
@@ -69,7 +69,7 @@ jobs:
           python-version: "3.12"
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.1
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -122,7 +122,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          shared-key: release-${{ matrix.target }}-rust-1.95-zig-0.16-${{ steps.ghostty.outputs.revision }}
+          shared-key: release-${{ matrix.target }}-rust-1.100-zig-0.17.1-${{ steps.ghostty.outputs.revision }}
           workspaces: . -> ${{ env.CRABDASH_CACHE_TARGET || 'target' }}
       - name: Check formatting and release version
         run: |
@@ -228,7 +228,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.100.0
+      - name: Require registry-compatible dependencies before publishing any crate
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > "$RUNNER_TEMP/crabdash-publish-metadata.json"
+          python3 - "$RUNNER_TEMP/crabdash-publish-metadata.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              metadata = json.load(source)
+          members = set(metadata["workspace_members"])
+          git_dependencies = [
+              f'{package["name"]} -> {dependency["name"]}'
+              for package in metadata["packages"]
+              if package["id"] in members and package["publish"] != []
+              for dependency in package["dependencies"]
+              if (dependency.get("source") or "").startswith("git+")
+          ]
+          if git_dependencies:
+              sys.exit(
+                  "Cannot publish any workspace crates: Git-only dependencies remain:\n  "
+                  + "\n  ".join(sorted(git_dependencies))
+                  + "\nPublish crates.io-compatible Bless/Ghostty registry releases first "
+                  "(bless-pager and libghostty-vt/libghostty-vt-sys), switch dependencies "
+                  "to those registry versions, and regenerate Cargo.lock before tagging."
+              )
+          PY
       - name: Publish crates in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

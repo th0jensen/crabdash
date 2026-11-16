@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/ksni", "vendor/gpui", "vendor/portable-pty"]
+exclude = ["vendor/ksni", "vendor/gpui", "vendor/portable-pty", "vendor/libghostty-vt", "vendor/libghostty-vt-sys"]
 members = [
     "crates/app",
     "crates/crabdash",
@@ -13,7 +13,7 @@ default-members = ["crates/crabdash"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.5"
+version = "0.1.6"
 license = "MIT"
 authors = ["Thomas Jensen"]
 description = "Crabdash desktop app built with Rust and GPUI"
@@ -22,9 +22,9 @@ repository = "https://github.com/th0jensen/crabdash"
 [workspace.dependencies]
 app = { path = "crates/app" }
 # Published as crabdash-* for crabdash-tui; code keeps the short crate names.
-machines = { package = "crabdash-machines", path = "crates/machines", version = "=0.1.5" }
-services = { package = "crabdash-services", path = "crates/services", version = "=0.1.5" }
-utils = { package = "crabdash-utils", path = "crates/utils", version = "=0.1.5" }
+machines = { package = "crabdash-machines", path = "crates/machines", version = "=0.1.6" }
+services = { package = "crabdash-services", path = "crates/services", version = "=0.1.6" }
+utils = { package = "crabdash-utils", path = "crates/utils", version = "=0.1.6" }
 
 anyhow = { version = "1.0.102", features = ["std", "backtrace"] }
 gpui = { version = "=0.2.2" }
@@ -55,3 +55,9 @@ gpui = { path = "vendor/gpui" }
 libghostty-vt = { path = "vendor/libghostty-vt" }
 libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }
 portable-pty = { path = "vendor/portable-pty" }
+
+# Bless and the GUI must use one matched native library, including our resize
+# and mouse fixes; Cargo cannot link two independent ghostty-vt sys crates.
+[patch."https://github.com/uzaaft/libghostty-rs"]
+libghostty-vt = { path = "vendor/libghostty-vt" }
+libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }

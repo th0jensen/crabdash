@@ -1,18 +1,17 @@
-Based on libghostty-vt 0.2.2 from https://github.com/uzaaft/libghostty-rs,
-under its MIT OR Apache-2.0 license.
+Based on libghostty-vt 0.2.1 at uzaaft/libghostty-rs revision
+483ea3d5247b214060da58ef6037a95f30ae89fb, under its MIT OR Apache-2.0 license.
+The upstream version is 0.2.1 even though the previous local copy was 0.2.2.
+The temporary native-source override is Ghostty
+5ebe501a63425b13d9952e8c54682c046386e5af, shared with Bless, using Zig 0.17.1.
+The bindings pin 108cacb17ed8990840cd14abfce43d8ed8503ca1 upstream; the public
+VT headers and src/terminal/c differ only in version.h at this override.
+Revalidate the interface and native tests before advancing either revision.
 
-Crabdash builds the bundled Ghostty tip source through GHOSTTY_SOURCE_DIR.
-Its C API differs from the crates.io wrapper at terminal creation and mode
-queries. This local patch uses the dimension arguments of terminal_new,
-sets the scrollback line limit through terminal_set, and accesses modes
-through the ModeConfig terminal_get/terminal_set queries. Other wrapper code
-is unchanged apart from safe getters for the existing grid pixel dimensions.
-The selection wrapper also exposes a safe borrowed snapshot getter for the
-existing active-screen selection query. This lets terminal Copy availability
-recognize selected whitespace and offscreen content without formatting or
-retaining untracked refs. Keep these definitions aligned with vendor/ghostty/include.
-Terminal regressions in crates/app/src/features/terminal/state.rs exercise the ABI,
-scrollback, resize, mode queries, and rendering.
+The safe crate uses its adjacent sys crate by path, including when Bless's
+Git-source dependency is overridden by this copy. Upstream now supplies the
+constructor, scrollback/mode queries, pixel dimensions, and borrowed selection
+getter that previously required Crabdash compatibility patches. Its sources
+and tests are otherwise retained unchanged.
 
 The opt-in `Terminal::resize_bottom` wrapper calls the bundled
 `ghostty_terminal_resize_bottom` extension. Its primary-screen resize reveals
@@ -20,3 +19,6 @@ history above existing content and prepends blank rows when history is exhausted
 Alternate-screen behavior and the original resize API remain unchanged. The
 flag is threaded through Terminal/Screen/PageList; tracked content pins remain
 attached to their rows, and reflow preserves the cursor’s trailing blank cells.
+
+Terminal regressions in crates/app/src/features/terminal exercise the ABI,
+scrollback, resize, mouse tracking, selection, and rendering.

@@ -7,9 +7,6 @@ use ratatui::{
     layout::{Position, Rect},
 };
 
-/// Below this width the dashboard uses its phone layout, as ramp does.
-pub const DESKTOP_WIDTH: u16 = 80;
-
 #[derive(Default)]
 pub struct Pointer {
     down: Option<(Position, bool)>,
@@ -38,10 +35,17 @@ pub struct Hits {
     pub tabs: Vec<(Rect, Section)>,
     /// Buttons, pills and key hints, each standing for the key it presses.
     pub keys: Vec<(Rect, KeyCode)>,
-    /// The table body and the index of its first visible row.
-    pub rows: Option<(Rect, usize)>,
+    /// Each visible table row's first line and index. An expanded row's
+    /// details take the lines below, which are not part of its target.
+    pub rows: Vec<(Rect, usize)>,
+    /// The table body, below its header.
+    pub body: Option<Rect>,
     /// An overlay that covers the rows beneath it.
     pub overlay: Option<Rect>,
+    /// The search field.
+    pub search: Option<Rect>,
+    /// Filter or sort chips, by index.
+    pub chips: Vec<(Rect, usize)>,
 }
 
 impl Hits {
@@ -59,20 +63,27 @@ impl Hits {
             .map(|(_, section)| *section)
     }
 
+    pub fn chip(&self, at: Position) -> Option<usize> {
+        self.chips
+            .iter()
+            .find(|(area, _)| area.contains(at))
+            .map(|(_, chip)| *chip)
+    }
+
     /// The table row under `at`, unless an overlay covers it.
     pub fn row(&self, at: Position) -> Option<usize> {
         if self.overlay.is_some_and(|overlay| overlay.contains(at)) {
             return None;
         }
-        let (body, offset) = self.rows?;
-        body.contains(at)
-            .then(|| offset + usize::from(at.y - body.y))
+        self.rows
+            .iter()
+            .find(|(area, _)| area.contains(at))
+            .map(|(_, index)| *index)
     }
 
     /// Rows the table body shows at once.
     pub fn visible_rows(&self) -> usize {
-        self.rows
-            .map_or(1, |(body, _)| usize::from(body.height).max(1))
+        self.body.map_or(1, |body| usize::from(body.height).max(1))
     }
 }
 
@@ -97,7 +108,9 @@ mod tests {
     #[test]
     fn an_overlay_hides_the_rows_beneath_it() {
         let hits = Hits {
-            rows: Some((Rect::new(0, 5, 20, 10), 7)),
+            rows: (0..10)
+                .map(|i| (Rect::new(0, 5 + i, 20, 1), 7 + usize::from(i)))
+                .collect(),
             overlay: Some(Rect::new(0, 12, 20, 3)),
             ..Hits::default()
         };

@@ -26,6 +26,7 @@ dirs = "6.0.0"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 
 [target.'cfg(unix)'.dependencies]
+bless = { package = "bless-pager", git = "https://github.com/th0jensen/bless", rev = "8ef280023d257af3cca5e325cf5b431f3e5369c6" }
 libc = "=0.2.189"
 
 [lints]

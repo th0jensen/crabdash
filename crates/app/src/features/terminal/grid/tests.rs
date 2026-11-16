@@ -5,8 +5,8 @@ use crate::features::terminal::TerminalState;
 use anyhow::Result;
 use gpui::{Bounds, point, px, size};
 use libghostty_vt::{
+    point::{Coordinate as PointCoordinate, Point},
     selection::Selection,
-    terminal::{Point, PointCoordinate},
 };
 
 fn terminal() -> Result<TerminalState> {

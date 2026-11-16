@@ -11,14 +11,14 @@
 
 [package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.96"
 name = "libghostty-vt"
-version = "0.2.2"
+version = "0.2.1"
 build = false
 autolib = false
 autobins = false
 autoexamples = false
-autotests = false
+autotests = true
 autobenches = false
 description = "Safe Rust API for libghostty-vt, the Ghostty terminal emulation library"
 readme = "README.md"
@@ -30,10 +30,11 @@ resolver = "2"
 all-features = true
 
 [features]
-allocator_api = ["dep:allocator-api2"]
+allocator_api = ["dep:rustversion"]
 default = ["kitty-graphics"]
 kitty-graphics = ["libghostty-vt-sys/kitty-graphics"]
 link-dynamic = ["libghostty-vt-sys/link-dynamic"]
+pkg-config = ["libghostty-vt-sys/pkg-config"]
 log = ["dep:log"]
 png = ["dep:png"]
 tracing = ["dep:tracing"]
@@ -42,8 +43,8 @@ tracing = ["dep:tracing"]
 name = "libghostty_vt"
 path = "src/lib.rs"
 
-[dependencies.allocator-api2]
-version = "0.4.0"
+[dependencies.rustversion]
+version = "1.0"
 optional = true
 
 [dependencies.bitflags]
@@ -53,7 +54,8 @@ version = "2.11.0"
 version = "1.2.0"
 
 [dependencies.libghostty-vt-sys]
-version = "0.2.2"
+version = "0.2.1"
+path = "../libghostty-vt-sys"
 
 [dependencies.log]
 version = "0.4.29"
@@ -68,4 +70,5 @@ version = "0.1.44"
 optional = true
 
 [dev-dependencies.libghostty-vt-sys]
-version = "0.2.2"
+version = "0.2.1"
+path = "../libghostty-vt-sys"

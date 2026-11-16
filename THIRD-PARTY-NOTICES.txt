@@ -9085,12 +9085,41 @@ SOFTWARE.
 ======================================================================
 MIT License (MIT)
 Used by:
-  app 0.1.5
-  crabdash 0.1.5
-  machines 0.1.5
-  services 0.1.5
-  utils 0.1.5
-  libghostty-vt 0.2.2 https://github.com/uzaaft/libghostty-rs
+  bless-pager 0.1.0 https://github.com/th0jensen/bless
+
+MIT License
+
+Copyright (c) 2026 th0jensen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+======================================================================
+MIT License (MIT)
+Used by:
+  app 0.1.6
+  crabdash 0.1.6
+  crabdash-machines 0.1.6
+  crabdash-services 0.1.6
+  crabdash-tui 0.1.6
+  crabdash-utils 0.1.6
+  libghostty-vt 0.2.1 https://github.com/uzaaft/libghostty-rs
   blade-graphics 0.7.1 https://github.com/kvark/blade
   blade-macros 0.3.0 https://github.com/kvark/blade
   blade-util 0.3.0 https://github.com/kvark/blade
@@ -9104,7 +9133,7 @@ Used by:
   gpu-alloc 0.6.2 https://github.com/zakarumych/gpu-alloc
   leak 0.1.2 https://github.com/jmesmon/leak.git
   leaky-cow 0.1.1 https://github.com/notriddle/rust-leaky-cow
-  libghostty-vt-sys 0.2.2 https://github.com/uzaaft/libghostty-rs
+  libghostty-vt-sys 0.2.1 https://github.com/uzaaft/libghostty-rs
   libm 0.2.16 https://github.com/rust-lang/compiler-builtins
   lucide-icons 0.575.0 https://github.com/WhySoBad/lucide-icons-rs
   lyon 1.0.19 https://github.com/nical/lyon

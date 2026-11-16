@@ -12,12 +12,16 @@ use windows as platform;
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// How far the pill surface moves from the background toward the foreground.
-const SURFACE: f32 = 0.14;
+/// How far a pill moves from the background toward the foreground.
+const PILL: f32 = 0.14;
+/// How far the search field and sheets move, a step quieter than pills.
+const SURFACE: f32 = 0.06;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub pill: Style,
+    /// The search field's and action sheet's background.
+    pub surface: Style,
 }
 
 impl Default for Palette {
@@ -25,6 +29,7 @@ impl Default for Palette {
     fn default() -> Self {
         Self {
             pill: Style::new().add_modifier(Modifier::REVERSED),
+            surface: Style::new(),
         }
     }
 }
@@ -40,15 +45,16 @@ impl Palette {
     fn from_reply(reply: &str) -> Option<Self> {
         let foreground = color_after(reply, "]10;")?;
         let background = color_after(reply, "]11;")?;
-        let mix =
-            |b: u8, f: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * SURFACE).round() as u8;
-        let surface = Color::Rgb(
-            mix(background[0], foreground[0]),
-            mix(background[1], foreground[1]),
-            mix(background[2], foreground[2]),
-        );
+        let mix = |amount: f32| {
+            let channel = |i: usize| {
+                let (b, f) = (f32::from(background[i]), f32::from(foreground[i]));
+                (b + (f - b) * amount).round() as u8
+            };
+            Style::new().bg(Color::Rgb(channel(0), channel(1), channel(2)))
+        };
         Some(Self {
-            pill: Style::new().bg(surface),
+            pill: mix(PILL),
+            surface: mix(SURFACE),
         })
     }
 }
@@ -84,6 +90,11 @@ mod tests {
         assert_eq!(
             palette.map(|p| p.pill),
             Some(Style::new().bg(Color::Rgb(36, 63, 91)))
+        );
+        // 255 * 0.06 = 15.3, 0x20 + 223 * 0.06 = 45.4, 0x40 + 191 * 0.06 = 75.46.
+        assert_eq!(
+            palette.map(|p| p.surface),
+            Some(Style::new().bg(Color::Rgb(15, 45, 75)))
         );
         assert_eq!(Palette::from_reply("\x1b[?62;22c"), None);
         assert_eq!(color_after("]11;rgb:f/8/0", "]11;"), Some([255, 136, 0]));

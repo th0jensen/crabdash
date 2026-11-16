@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.96"
 name = "libghostty-vt-sys"
-version = "0.2.2"
+version = "0.2.1"
 build = "build.rs"
 links = "ghostty-vt"
 autolib = false
@@ -32,6 +32,8 @@ bindgen-tool = [
     "dep:bindgen",
     "dep:libc",
     "dep:heck",
+    "dep:syn",
+    "dep:quote",
 ]
 default = ["vendored"]
 kitty-graphics = []
@@ -59,6 +61,15 @@ optional = true
 
 [dependencies.libc]
 version = "0.2"
+optional = true
+
+[dependencies.syn]
+version = "2"
+features = ["full"]
+optional = true
+
+[dependencies.quote]
+version = "1"
 optional = true
 
 [build-dependencies.pkg-config]

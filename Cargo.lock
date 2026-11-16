@@ -83,7 +83,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -709,6 +709,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bless-pager"
+version = "0.1.0"
+source = "git+https://github.com/th0jensen/bless?rev=8ef280023d257af3cca5e325cf5b431f3e5369c6#8ef280023d257af3cca5e325cf5b431f3e5369c6"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "libc",
+ "libghostty-vt",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1325,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "crabdash"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "app",
  "embed-resource",
@@ -1336,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "crabdash-machines"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-ssh2-lite",
@@ -1358,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "crabdash-services"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "crabdash-utils",
@@ -1368,10 +1379,11 @@ dependencies = [
 
 [[package]]
 name = "crabdash-tui"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "base64",
+ "bless-pager",
  "crabdash-machines",
  "crabdash-services",
  "crabdash-utils",
@@ -1383,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "crabdash-utils"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "plist",
@@ -3382,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "libghostty-vt"
-version = "0.2.2"
+version = "0.2.1"
 dependencies = [
  "bitflags 2.13.1",
  "int-enum",
@@ -3391,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "libghostty-vt-sys"
-version = "0.2.2"
+version = "0.2.1"
 
 [[package]]
 name = "libloading"

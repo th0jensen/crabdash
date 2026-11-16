@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use utils::{
-    container::Container,
+    container::{Container, details::ContainerDetails},
     disks::{Disk, Disks},
     services::ServiceItem,
 };
@@ -25,6 +25,8 @@ const LOG_LINES: u32 = 200;
 pub enum Request {
     Show(Section),
     Act(Action),
+    /// A container's ID, for the details its expanded row shows.
+    Inspect(String),
 }
 
 pub enum Action {
@@ -36,10 +38,6 @@ pub enum Action {
 }
 
 pub enum Update {
-    Host {
-        name: String,
-        platform: String,
-    },
     Failed(String),
     Usage(Result<ResourceUsage, String>),
     Docker(Result<Vec<Container>, String>),
@@ -50,6 +48,7 @@ pub enum Update {
         text: Result<String, String>,
     },
     Done(Result<String, String>),
+    Details(String, Result<ContainerDetails, String>),
 }
 
 pub fn spawn(section: Section) -> (Sender<Request>, Receiver<Update>) {
@@ -75,10 +74,6 @@ fn run(mut section: Section, inbox: &Receiver<Request>, outbox: &Sender<Update>)
             return;
         }
     };
-    let _ = outbox.send(Update::Host {
-        name: machine.display_name().to_owned(),
-        platform: machine.system_info.platform_label().to_owned(),
-    });
     let mut monitor = ResourceMonitor::default();
     loop {
         let update = smol::block_on(collect(&mut machine, &mut monitor, section));
@@ -91,6 +86,12 @@ fn run(mut section: Section, inbox: &Receiver<Request>, outbox: &Sender<Update>)
                 // The refresh right after shows what the action changed.
                 let update = smol::block_on(perform(&mut machine, action));
                 if outbox.send(update).is_err() {
+                    return;
+                }
+            }
+            Ok(Request::Inspect(id)) => {
+                let details = smol::block_on(machine.inspect_container(&id)).map_err(message);
+                if outbox.send(Update::Details(id, details)).is_err() {
                     return;
                 }
             }

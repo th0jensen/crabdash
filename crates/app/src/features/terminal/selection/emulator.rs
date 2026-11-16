@@ -2,16 +2,13 @@
 use crate::features::terminal::TerminalState;
 use libghostty_vt::{
     Terminal,
-    fmt::Format,
+    fmt::{Format, Formatter},
+    point::{Coordinate as PointCoordinate, Point},
     screen::Screen,
-    selection::{
-        FormatOptions,
-        gesture::{
-            Autoscroll, AutoscrollTickEvent, Behavior, Behaviors, DragEvent, Gesture, PressEvent,
-            ReleaseEvent,
-        },
+    selection::gesture::{
+        Autoscroll, AutoscrollTickEvent, Behavior, Behaviors, DragEvent, Gesture, PressEvent,
+        ReleaseEvent,
     },
-    terminal::{Point, PointCoordinate},
 };
 
 pub(super) struct Stream {
@@ -182,16 +179,15 @@ impl TerminalState {
     }
 
     pub(in crate::features::terminal) fn selected_text(&self) -> anyhow::Result<Option<String>> {
-        let bytes = self.terminal.format_selection_alloc(
-            None,
-            FormatOptions::new()
-                .with_emit_format(Format::Plain)
-                .with_unwrap(true)
-                .with_trim(true),
-        )?;
-        bytes
-            .map(|bytes| String::from_utf8(bytes.to_vec()).map_err(Into::into))
-            .transpose()
+        let Some(mut formatter) = Formatter::new_selection(&self.terminal)? else {
+            return Ok(None);
+        };
+        formatter
+            .set_format(Format::Plain)?
+            .set_unwrap(true)?
+            .set_trim(true)?;
+        let bytes = formatter.format_alloc(None)?;
+        Ok(Some(String::from_utf8(bytes.to_vec())?))
     }
 }
 
