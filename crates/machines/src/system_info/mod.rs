@@ -8,6 +8,14 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 impl Machine {
+    /// Detects this computer without reading or writing the saved machines.
+    pub async fn local() -> Result<Self> {
+        let mut machine = Self::default();
+        machine.system_info = machine.get_system_info().await?;
+        machine.kind = MachineKind::get_kind(&machine);
+        Ok(machine)
+    }
+
     /// Refreshes system information from the machine and updates internal state
     /// if it has changed.
     ///
