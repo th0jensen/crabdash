@@ -37,6 +37,21 @@ Open Preferences with **Ctrl+,** (**⌘,** on macOS) for appearance, fonts, term
 options and startup. Appearance defaults to the system. Liquid Glass is optional
 on macOS. The default terminal type is `xterm-256color`.
 
+## Terminal and Rex
+
+`crabdash-tui` is a smaller Crabdash for the terminal: Docker, disks, services and
+system activity of the machine it runs on.
+
+```sh
+cargo install --locked crabdash-tui
+crabdash-tui rex install
+```
+
+`rex install` puts **Crabdash: Open Dashboard** and one action per section in the
+[Rex](https://www.superlogical.com/rex) command palette of every app connected to that
+machine, including Rex for iOS. Each section opens as a Rex pane. See
+[its README](crates/tui/README.md).
+
 ## Build
 
 Install Rust and Zig **0.16.0**, then fetch the native dependencies:

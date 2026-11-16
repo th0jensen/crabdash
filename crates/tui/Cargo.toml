@@ -1,0 +1,28 @@
+[package]
+name = "crabdash-tui"
+description = "Terminal Crabdash: Docker, disks, services and system activity, with a Rex plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["dashboard", "docker", "tui", "rex", "homelab"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "crabdash-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+machines.workspace = true
+services.workspace = true
+smol.workspace = true
+utils.workspace = true
+
+dirs = "6.0.0"
+ratatui = "0.30.2"
+
+[lints]
+workspace = true

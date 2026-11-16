@@ -6,6 +6,7 @@ members = [
     "crates/crabdash",
     "crates/machines",
     "crates/services",
+    "crates/tui",
     "crates/utils",
 ]
 default-members = ["crates/crabdash"]
