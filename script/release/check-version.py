@@ -9,9 +9,16 @@ root = Path(__file__).resolve().parents[2]
 version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 lock = tomllib.loads((root / "Cargo.lock").read_text())
 for package in lock["package"]:
-    if package["name"] in {"app", "crabdash", "machines", "services", "utils"}:
+    if package["name"] in {
+        "app", "crabdash", "crabdash-machines", "crabdash-services", "crabdash-tui", "crabdash-utils"
+    }:
         if package["version"] != version:
             raise SystemExit(f"{package['name']} lockfile version differs from {version}")
+# Published crates pin each other exactly, so the requirement moves with the version.
+dependencies = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["dependencies"]
+for name in ("machines", "services", "utils"):
+    if dependencies[name]["version"] != f"={version}":
+        raise SystemExit(f"workspace dependency {name} must require ={version}")
 if len(sys.argv) > 1 and sys.argv[1].startswith("v"):
     tag = sys.argv[1]
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", tag) or tag != f"v{version}":

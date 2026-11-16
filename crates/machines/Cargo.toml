@@ -1,9 +1,11 @@
 [package]
-name = "machines"
+name = "crabdash-machines"
+description = "Local and SSH machine operations and resource sampling for Crabdash"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

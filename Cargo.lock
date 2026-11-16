@@ -83,13 +83,15 @@ dependencies = [
  "ashpd 0.11.1",
  "block2",
  "capitalize",
+ "crabdash-machines",
+ "crabdash-services",
+ "crabdash-utils",
  "gpui",
  "image",
  "ksni",
  "libc",
  "libghostty-vt",
  "lucide-icons",
- "machines",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -97,12 +99,10 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
- "services",
  "shell-words",
  "smol",
  "tracing",
  "unicode-segmentation",
- "utils",
  "uuid",
  "wayland-backend",
  "wayland-client",
@@ -1255,6 +1255,48 @@ dependencies = [
  "gpui",
  "smol",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "crabdash-machines"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "async-ssh2-lite",
+ "base64",
+ "crabdash-services",
+ "crabdash-utils",
+ "dirs 6.0.0",
+ "indoc",
+ "libc",
+ "plist",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "smol",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "crabdash-services"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "crabdash-utils",
+ "lucide-icons",
+ "serde",
+]
+
+[[package]]
+name = "crabdash-utils"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "plist",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3244,28 +3286,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
-name = "machines"
-version = "0.1.5"
-dependencies = [
- "anyhow",
- "async-ssh2-lite",
- "base64",
- "dirs 6.0.0",
- "indoc",
- "libc",
- "plist",
- "portable-pty",
- "serde",
- "serde_json",
- "services",
- "smol",
- "tokio",
- "tracing",
- "utils",
- "uuid",
-]
-
-[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5233,16 +5253,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "services"
-version = "0.1.5"
-dependencies = [
- "anyhow",
- "lucide-icons",
- "serde",
- "utils",
-]
-
-[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6423,16 +6433,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utils"
-version = "0.1.5"
-dependencies = [
- "anyhow",
- "plist",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "uuid"
