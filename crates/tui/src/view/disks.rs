@@ -1,10 +1,10 @@
 //! Disks with their partitions and mounts, flattened into indented rows.
-use super::{MUTED, state_color, table};
+use super::{MUTED, state_style, table};
 use crate::app::App;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Style, Stylize},
+    style::Stylize,
     widgets::{Cell, Row},
 };
 use utils::disks::{Disk, DiskNode};
@@ -49,7 +49,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let (name, detail) = if depth == 0 {
                         (
                             Cell::from(name.to_owned()).bold(),
-                            Cell::from(detail.clone()).style(Style::new().fg(state_color(&detail))),
+                            Cell::from(detail.clone()).style(state_style(&detail)),
                         )
                     } else {
                         (

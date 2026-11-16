@@ -1,5 +1,5 @@
 //! CPU, memory and I/O activity with the busiest processes.
-use super::{ACCENT, MUTED, message, table};
+use super::{HIGHLIGHT, MUTED, message, table};
 use crate::app::App;
 use machines::resources::ResourceUsage;
 use ratatui::{
@@ -71,7 +71,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         Sparkline::default()
             .data(&history_data[start..])
             .max(100)
-            .style(Style::new().fg(ACCENT)),
+            .style(Style::new().fg(HIGHLIGHT)),
         history,
     );
     frame.render_widget(activity(&usage), io);
@@ -91,7 +91,7 @@ fn gauge(frame: &mut Frame, area: Rect, label: &str, ratio: Option<f64>, detail:
     let color = match ratio {
         r if r >= 0.9 => Color::Red,
         r if r >= 0.7 => Color::Yellow,
-        _ => ACCENT,
+        _ => Color::Green,
     };
     let [bar, text] = Layout::horizontal([
         Constraint::Fill(1),
@@ -124,18 +124,18 @@ fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     })
 }
 
-/// Load, uptime, network and disk throughput, and the first GPU.
+/// Load, the first GPU, and network and disk throughput.
 fn activity(usage: &ResourceUsage) -> ratatui::text::Text<'static> {
-    let mut first = vec![
-        Span::styled("Up ", MUTED),
-        Span::from(uptime(usage.uptime_seconds)),
-    ];
+    let mut first = Vec::new();
     if let Some([one, five, fifteen]) = usage.load_average {
-        first.push(Span::styled("  Load ", MUTED));
+        first.push(Span::styled("Load ", MUTED));
         first.push(Span::from(format!("{one:.2} {five:.2} {fifteen:.2}")));
     }
     if let Some(gpu) = usage.gpus.as_ref().and_then(|gpus| gpus.first()) {
-        first.push(Span::styled("  GPU ", MUTED));
+        first.push(Span::styled(
+            if first.is_empty() { "GPU " } else { "  GPU " },
+            MUTED,
+        ));
         first.push(Span::from(
             gpu.busy_percent
                 .map_or_else(|| gpu.name.clone(), |busy| format!("{busy:.0}%")),
@@ -165,7 +165,7 @@ fn activity(usage: &ResourceUsage) -> ratatui::text::Text<'static> {
     .into()
 }
 
-fn uptime(seconds: f64) -> String {
+pub fn uptime(seconds: f64) -> String {
     let minutes = (seconds / 60.0) as u64;
     let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
     match days {
@@ -196,16 +196,12 @@ fn process_table(frame: &mut Frame, app: &mut App, area: Rect, usage: &ResourceU
             ])
         })
         .collect();
-    let title = usage.process_count.map_or_else(
-        || "Process".to_owned(),
-        |count| format!("Process ({count})"),
-    );
     table(
         frame,
         app,
         area,
         Some(Ok(rows)),
-        Row::new([title, "CPU".into(), "Memory".into(), "PID".into()]),
+        Row::new(["Process", "CPU", "Memory", "PID"]),
         &[
             Constraint::Fill(1),
             Constraint::Length(6),

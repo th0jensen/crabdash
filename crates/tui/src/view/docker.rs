@@ -1,10 +1,9 @@
 //! Containers with their state; actions apply to the selected row.
-use super::{state_color, table};
+use super::{state_style, table};
 use crate::{app::App, poll::short_id};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::Style,
     widgets::{Cell, Row},
 };
 
@@ -16,8 +15,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 .map(|container| {
                     Row::new([
                         Cell::from(container.name.clone()),
-                        Cell::from(container.status.clone())
-                            .style(Style::new().fg(state_color(&container.status))),
+                        Cell::from(container.status.clone()).style(state_style(&container.status)),
                         Cell::from(short_id(&container.id).to_owned()),
                     ])
                 })

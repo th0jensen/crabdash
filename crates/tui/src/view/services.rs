@@ -1,10 +1,9 @@
 //! System services by name; actions apply to the selected row.
-use super::{MUTED, state_color, table};
+use super::{MUTED, state_style, table};
 use crate::app::App;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::Style,
     widgets::{Cell, Row},
 };
 
@@ -17,7 +16,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let state = service.status_label();
                     Row::new([
                         Cell::from(service.name.trim_end_matches(".service").to_owned()),
-                        Cell::from(state).style(Style::new().fg(state_color(state))),
+                        Cell::from(state).style(state_style(state)),
                         Cell::from(service.description.clone().unwrap_or_default()).style(MUTED),
                     ])
                 })
@@ -39,7 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Fill(2),
             Constraint::Length(9),
             // Phone-width panes give names the room instead.
-            if area.width >= 60 {
+            if area.width >= 50 {
                 Constraint::Fill(3)
             } else {
                 Constraint::Length(0)
